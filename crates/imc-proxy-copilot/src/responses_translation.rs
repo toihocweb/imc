@@ -259,8 +259,15 @@ pub fn translate_message(message: &AnthropicInputMessage) -> Vec<ResponseInputIt
                                         r#type: "function_call".to_string(),
                                         call_id: id.clone(),
                                         name: name.clone(),
-                                        arguments: serde_json::to_string(input)
-                                            .unwrap_or_else(|_| "{}".to_string()),
+                                        // Python: `json.dumps(block.input)`.
+                                        arguments: crate::python_json::python_json_dumps(
+                                            &Value::Object(
+                                                input
+                                                    .iter()
+                                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                                    .collect(),
+                                            ),
+                                        ),
                                         status: Some("completed".to_string()),
                                         namespace: None,
                                     },

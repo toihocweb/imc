@@ -206,7 +206,9 @@ fn anthropic_request_translates_to_responses_payload() {
     assert_eq!(input[3]["call_id"], json!("toolu_02"));
     assert_eq!(input[3]["name"], json!("Bash"));
     assert_eq!(input[3]["status"], json!("completed"));
-    assert_eq!(input[3]["arguments"], json!(r#"{"command":"ls -la"}"#));
+    // Arguments are serialized with Python's `json.dumps` defaults: `", "` and
+    // `": "` separators.
+    assert_eq!(input[3]["arguments"], json!(r#"{"command": "ls -la"}"#));
 
     // Tools are flattened to the Responses top-level shape with strict: false.
     let tool = &body["tools"][0];

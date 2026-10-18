@@ -603,12 +603,22 @@ fn outline_kind(kind: &str) -> &'static str {
 ///
 /// Backed by `imc-parser`'s tree-sitter extraction (python/js/ts/tsx/rust/go).
 /// Returns an empty string for unsupported languages or empty files.
-pub fn outline_symbols(text: &str, path: &Path) -> String {
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OutlineEntry {
+    pub name: String,
+    pub kind: String,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+/// Structured outline — the data behind `imc read --symbols`, so `--json`
+/// emits parseable rows instead of the human table.
+pub fn outline_symbols_struct(text: &str, path: &Path) -> Vec<OutlineEntry> {
     let Some(parsed) = imc_parser::parse(&path.to_string_lossy(), text) else {
-        return String::new();
+        return Vec::new();
     };
     if parsed.symbols.is_empty() {
-        return String::new();
+        return Vec::new();
     }
 
     // Stable, source-ordered, deduped on (start_line, name) like the Python.
@@ -626,9 +636,26 @@ pub fn outline_symbols(text: &str, path: &Path) -> String {
             deduped.push((s.line, s.end_line, outline_kind(s.kind.as_str()), s.name.clone()));
         }
     }
+    deduped
+        .into_iter()
+        .map(|(sl, el, kind, name)| OutlineEntry {
+            name,
+            kind: kind.to_string(),
+            start_line: sl,
+            end_line: el,
+        })
+        .collect()
+}
+
+pub fn outline_symbols(text: &str, path: &Path) -> String {
+    let deduped = outline_symbols_struct(text, path);
     if deduped.is_empty() {
         return String::new();
     }
+    let deduped: Vec<(usize, usize, String, String)> = deduped
+        .into_iter()
+        .map(|e| (e.start_line, e.end_line, e.kind, e.name))
+        .collect();
 
     let width = deduped.last().unwrap().0.to_string().len();
     let lines: Vec<String> = deduped

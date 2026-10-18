@@ -475,12 +475,16 @@ pub fn handle_assistant_message(message: &AnthropicAssistantMessage) -> Vec<Mess
             let ContentBlock::ToolUse { id, name, input } = tu else {
                 continue;
             };
+            // Python: `json.dumps(tu.input)`.
+            let arguments = crate::python_json::python_json_dumps(
+                &Value::Object(input.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+            );
             tool_calls.push(ToolCall {
                 id: id.clone(),
                 r#type: "function".to_string(),
                 function: ToolFunction {
                     name: name.clone(),
-                    arguments: serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string()),
+                    arguments,
                 },
             });
         }

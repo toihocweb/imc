@@ -381,7 +381,17 @@ pub fn search(
         // Chunk that IS the named symbol (query "deleteProject" -> its def).
         if let (Some(sym), Some(_)) = (chunk.sym_id.as_deref(), chunk.sym_id.as_deref()) {
             let short = sym.rsplit("::").next().unwrap_or("");
-            if query_tokens(query).iter().any(|t| t.eq_ignore_ascii_case(short)) {
+            // Token match covers snake_case (`spawn_engine`), but a camelCase
+            // query tokenizes into pieces (`taxOn` -> tax, on) and can never
+            // equal the symbol name, so also compare the collapsed query.
+            let collapsed: String = query
+                .chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect::<String>()
+                .to_lowercase();
+            if query_tokens(query).iter().any(|t| t.eq_ignore_ascii_case(short))
+                || (!collapsed.is_empty() && collapsed == short.to_lowercase())
+            {
                 s += 0.040;
             }
         }

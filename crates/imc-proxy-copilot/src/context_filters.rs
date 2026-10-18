@@ -687,10 +687,14 @@ pub fn keep_markdown_sections(text: &str, headings: &[String]) -> String {
         parts.push(&text[end..body_end]);
     }
 
+    // Python builds `out` as: the intro (when non-blank), then one entry per
+    // matching section holding `header_line + body`. Keeping it a single list
+    // of finished sections is what makes the "\n\n".join below correct even
+    // when the intro was dropped.
     let intro = parts[0];
-    let mut out: Vec<&str> = Vec::new();
+    let mut out: Vec<String> = Vec::new();
     if !intro.trim().is_empty() {
-        out.push(intro);
+        out.push(intro.to_string());
     }
 
     let mut i = 1;
@@ -706,30 +710,15 @@ pub fn keep_markdown_sections(text: &str, headings: &[String]) -> String {
             .iter()
             .any(|h| header_title.contains(h.as_str()))
         {
-            out.push(header_line);
-            out.push(body);
+            let mut section = String::with_capacity(header_line.len() + body.len());
+            section.push_str(header_line);
+            section.push_str(body);
+            out.push(section);
         }
         i += 2;
     }
 
-    // `out` holds alternating header/body slices; rejoin within each section
-    // and separate sections with a blank line, exactly like Python appends
-    // `header_line + body` and joins on "\n\n".
-    let mut section_slices: Vec<String> = Vec::new();
-    if !out.is_empty() {
-        section_slices.push(out[0].to_string());
-    }
-    let mut j = 1;
-    while j < out.len() {
-        let mut section = String::new();
-        section.push_str(out[j]);
-        if j + 1 < out.len() {
-            section.push_str(out[j + 1]);
-        }
-        section_slices.push(section);
-        j += 2;
-    }
-    section_slices.join("\n\n").trim().to_string()
+    out.join("\n\n").trim().to_string()
 }
 
 /// A line that begins a markdown heading (1-6 hashes then non-space text).

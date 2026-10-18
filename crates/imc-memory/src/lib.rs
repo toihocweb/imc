@@ -3,6 +3,7 @@
 //! `main/memory/{store,retrieval,extractor}.py` modules.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use rusqlite::{params, OptionalExtension};
@@ -11,10 +12,47 @@ use serde::{Deserialize, Serialize};
 use imc_core::store::Store;
 use imc_embed::tokenize;
 
+/// Python `MemoryType` — the five work-memory categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryType {
+    WorkFact,
+    WorkTask,
+    WorkMethod,
+    WorkArtifact,
+    BusinessRule,
+}
+
+impl MemoryType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MemoryType::WorkFact => "work_fact",
+            MemoryType::WorkTask => "work_task",
+            MemoryType::WorkMethod => "work_method",
+            MemoryType::WorkArtifact => "work_artifact",
+            MemoryType::BusinessRule => "business_rule",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "work_task" => MemoryType::WorkTask,
+            "work_method" => MemoryType::WorkMethod,
+            "work_artifact" => MemoryType::WorkArtifact,
+            "business_rule" => MemoryType::BusinessRule,
+            _ => MemoryType::WorkFact,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memory {
     pub id: i64,
     pub content: String,
+    /// Python `type` — one of the five work-memory kinds.
+    pub mem_type: MemoryType,
+    /// Python `scene_name` — the working scene this memory came from.
+    pub scene: String,
     pub category: String,
     pub paths: Vec<String>,
     pub tags: Vec<String>,
@@ -40,6 +78,8 @@ CREATE TABLE IF NOT EXISTS memories (
     content TEXT NOT NULL,
     content_norm TEXT NOT NULL,
     category TEXT NOT NULL DEFAULT 'note',
+    mem_type TEXT NOT NULL DEFAULT 'work_fact',
+    scene TEXT NOT NULL DEFAULT '',
     paths TEXT NOT NULL DEFAULT '[]',
     tags TEXT NOT NULL DEFAULT '[]',
     importance REAL NOT NULL DEFAULT 0.5,
@@ -87,6 +127,21 @@ pub fn ensure_schema(store: &Store) -> Result<()> {
             .conn
             .execute_batch("ALTER TABLE memories ADD COLUMN last_used INTEGER NOT NULL DEFAULT 0")?;
     }
+    for (name, ddl) in [
+        ("mem_type", "ALTER TABLE memories ADD COLUMN mem_type TEXT NOT NULL DEFAULT 'work_fact'"),
+        ("scene", "ALTER TABLE memories ADD COLUMN scene TEXT NOT NULL DEFAULT ''"),
+    ] {
+        let has: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name=?1",
+                params![name],
+                |r| r.get(0),
+            )?;
+        if has == 0 {
+            store.conn.execute_batch(ddl)?;
+        }
+    }
     Ok(())
 }
 
@@ -128,11 +183,14 @@ pub fn add(
         return Ok(None);
     }
     store.conn.execute(
-        "INSERT INTO memories(content, content_norm, category, paths, tags, importance, created_at, source)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        "INSERT INTO memories
+         (content, content_norm, mem_type, scene, category, paths, tags, importance, created_at, source)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             content,
             norm,
+            "work_fact",
+            "",
             category,
             serde_json::to_string(paths)?,
             serde_json::to_string(tags)?,
@@ -144,12 +202,83 @@ pub fn add(
     Ok(Some(store.conn.last_insert_rowid()))
 }
 
+/// Typed insert — Python's `ExtractMemory` shape (type + scene + priority).
+pub fn add_typed(
+    store: &Store,
+    content: &str,
+    mem_type: MemoryType,
+    scene: &str,
+    category: &str,
+    paths: &[String],
+    tags: &[String],
+    importance: f64,
+    source: &str,
+) -> Result<Option<i64>> {
+    let id = add(store, content, category, paths, tags, importance, source)?;
+    if let Some(id) = id {
+        store.conn.execute(
+            "UPDATE memories SET mem_type = ?1, scene = ?2 WHERE id = ?3",
+            params![mem_type.as_str(), scene, id],
+        )?;
+    }
+    Ok(id)
+}
+
+/// Port of `MemoryStore.prune_stale`: drop memories whose **explicitly tracked**
+/// paths are missing from disk.
+///
+/// Deliberate restraints (Python is explicit about these): content may mention
+/// historical or illustrative paths, so only tracked `paths` count; a path that
+/// resolves outside the project root is never grounds for deletion; and short
+/// tokens without a separator are ignored.
+pub fn prune_stale(store: &Store, root: &Path) -> Result<usize> {
+    ensure_schema(store)?;
+    let root = root
+        .canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf());
+
+    let all = list_all(store, 100_000)?;
+    if all.is_empty() {
+        return Ok(0);
+    }
+
+    let mut stale = Vec::new();
+    for m in &all {
+        for raw in &m.paths {
+            if raw.len() <= 4 || !raw.contains('/') {
+                continue;
+            }
+            let p = Path::new(raw);
+            let resolved = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                root.join(p)
+            };
+            let resolved = resolved.canonicalize().unwrap_or(resolved);
+            // Never prune a path outside this project.
+            if !resolved.starts_with(&root) {
+                continue;
+            }
+            if !resolved.exists() {
+                stale.push(m.id);
+                break;
+            }
+        }
+    }
+
+    let mut removed = 0usize;
+    for id in stale {
+        removed += delete(store, id)? as usize;
+    }
+    Ok(removed)
+}
+
 pub fn get(store: &Store, id: i64) -> Result<Option<Memory>> {
     ensure_schema(store)?;
     Ok(store
         .conn
         .query_row(
-            "SELECT id, content, category, paths, tags, importance, use_count, created_at, last_used, source
+            "SELECT id, content, mem_type, scene, category, paths, tags, importance, use_count, created_at, last_used, source
              FROM memories WHERE id=?1",
             params![id],
             row_to_memory,
@@ -158,26 +287,30 @@ pub fn get(store: &Store, id: i64) -> Result<Option<Memory>> {
 }
 
 fn row_to_memory(r: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
-    let paths: String = r.get(3)?;
-    let tags: String = r.get(4)?;
+    // SELECT order is: id, content, mem_type, scene, category, paths, tags, ...
+    let paths: String = r.get(5)?;
+    let tags: String = r.get(6)?;
+    let mem_type: String = r.get(2)?;
     Ok(Memory {
         id: r.get(0)?,
         content: r.get(1)?,
-        category: r.get(2)?,
+        mem_type: MemoryType::from_str(&mem_type),
+        scene: r.get(3)?,
+        category: r.get(4)?,
         paths: serde_json::from_str(&paths).unwrap_or_default(),
         tags: serde_json::from_str(&tags).unwrap_or_default(),
-        importance: r.get(5)?,
-        use_count: r.get(6)?,
-        created_at: r.get(7)?,
-        last_used: r.get(8)?,
-        source: r.get(9)?,
+        importance: r.get(7)?,
+        use_count: r.get(8)?,
+        created_at: r.get(9)?,
+        last_used: r.get(10)?,
+        source: r.get(11)?,
     })
 }
 
 pub fn list(store: &Store, limit: usize) -> Result<Vec<Memory>> {
     ensure_schema(store)?;
     let mut stmt = store.conn.prepare(
-        "SELECT id, content, category, paths, tags, importance, use_count, created_at, last_used, source
+        "SELECT id, content, mem_type, scene, category, paths, tags, importance, use_count, created_at, last_used, source
          FROM memories ORDER BY importance DESC, created_at DESC LIMIT ?1",
     )?;
     let rows = stmt.query_map(params![limit as i64], row_to_memory)?;
@@ -192,7 +325,7 @@ pub fn list(store: &Store, limit: usize) -> Result<Vec<Memory>> {
 pub fn list_all(store: &Store, cap: usize) -> Result<Vec<Memory>> {
     ensure_schema(store)?;
     let mut stmt = store.conn.prepare(
-        "SELECT id, content, category, paths, tags, importance, use_count, created_at, last_used, source
+        "SELECT id, content, mem_type, scene, category, paths, tags, importance, use_count, created_at, last_used, source
          FROM memories ORDER BY created_at DESC LIMIT ?1",
     )?;
     let rows = stmt.query_map(params![cap as i64], row_to_memory)?;

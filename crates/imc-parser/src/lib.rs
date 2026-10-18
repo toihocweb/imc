@@ -8,7 +8,7 @@ use imc_core::ingest::language_of;
 use imc_core::types::{Edge, EdgeKind, Symbol, SymbolKind};
 
 pub const SUPPORTED: &[&str] = &[
-    "python", "javascript", "typescript", "tsx", "rust", "go",
+    "python", "javascript", "typescript", "tsx", "rust", "go", "java",
 ];
 
 pub struct ParsedFile {
@@ -38,6 +38,7 @@ fn parser_for(lang: &str) -> Option<Parser> {
             .is_ok(),
         "rust" => p.set_language(&tree_sitter_rust::LANGUAGE.into()).is_ok(),
         "go" => p.set_language(&tree_sitter_go::LANGUAGE.into()).is_ok(),
+        "java" => p.set_language(&tree_sitter_java::LANGUAGE.into()).is_ok(),
         _ => false,
     };
     if ok {
@@ -95,7 +96,7 @@ fn walk(
             continue;
         }
 
-        if let Some(edge) = maybe_edge(n, bytes, text, lang, pid.as_deref()) {
+        if let Some(edge) = maybe_edge(n, bytes, text, lang, rel, pid.as_deref()) {
             out.edges.push(edge);
         }
 
@@ -237,6 +238,18 @@ fn maybe_symbol<'a>(
             let _ = parent_type;
             (name, kind)
         }
+        ("java", "class_declaration") | ("java", "record_declaration") => {
+            (field(n, "name", bytes)?, SymbolKind::Class)
+        }
+        ("java", "interface_declaration") | ("java", "annotation_type_declaration") => {
+            (field(n, "name", bytes)?, SymbolKind::Interface)
+        }
+        ("java", "enum_declaration") => (field(n, "name", bytes)?, SymbolKind::Enum),
+        ("java", "method_declaration") => (field(n, "name", bytes)?, SymbolKind::Method),
+        ("java", "constructor_declaration") => {
+            // `new OrderService(...)` should resolve to the constructor symbol.
+            (field(n, "name", bytes)?, SymbolKind::Method)
+        }
         ("javascript" | "typescript" | "tsx", "lexical_declaration") => {
             // `const Foo = () => {}` / `const Foo = function () {}` — components.
             let mut it = n.walk();
@@ -269,17 +282,53 @@ fn maybe_symbol<'a>(
 }
 
 /// Extract call/import edges from a node.
-fn maybe_edge(n: Node<'_>, bytes: &[u8], _text: &str, lang: &str, parent_id: Option<&str>) -> Option<Edge> {
-    let src = parent_id?;
+fn maybe_edge(
+    n: Node<'_>,
+    bytes: &[u8],
+    _text: &str,
+    lang: &str,
+    rel: &str,
+    parent_id: Option<&str>,
+) -> Option<Edge> {
     let start = n.start_position().row + 1;
-    let file_line_hint = src.split("::").next().unwrap_or("").to_string();
+    let file_line_hint = parent_id
+        .and_then(|p| p.split("::").next())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(rel)
+        .to_string();
+
+    // A call needs a caller, but an import does not: module-level imports are
+    // the common case and Python attributes them to the file scope, so record
+    // them against the file rather than dropping them.
+    let is_import = matches!(
+        n.kind(),
+        "import_statement" | "import_from_statement" | "use_declaration" | "import_declaration"
+    );
+    let src: String = match parent_id {
+        Some(p) => p.to_string(),
+        None if is_import => file_line_hint.clone(),
+        None => return None,
+    };
+    let src = src.as_str();
 
     match (lang, n.kind()) {
         (_, "call" | "call_expression") => {
             let callee = n.child_by_field_name("function")?;
+            // Callee forms per grammar:
+            //   python   `attribute`        self._validate(x)
+            //   go       `selector_expression` srv.Start()
+            //   rust     `field_expression` engine.throttle(x)
+            //   js/ts    `member_expression` / `property_access` api.client.fetch(x)
+            // Without the first two, the whole method-call layer disappears from
+            // the call graph (Python alone has thousands of such call sites).
             let name = match callee.kind() {
-                "identifier" | "field_expression" | "member_expression" | "property_access"
-                | "scoped_identifier" => {
+                "identifier"
+                | "field_expression"
+                | "member_expression"
+                | "property_access"
+                | "scoped_identifier"
+                | "attribute"
+                | "selector_expression" => {
                     let raw = node_text(callee, bytes);
                     // Keep the right-most segment: `foo.bar.baz()` → `baz`.
                     raw.rsplit(&['.', ':'][..]).next().unwrap_or(raw)
@@ -306,6 +355,42 @@ fn maybe_edge(n: Node<'_>, bytes: &[u8], _text: &str, lang: &str, parent_id: Opt
                 line: start,
             })
         }
+        ("java", "method_invocation") => {
+            // `parser.parse(x)` and `Calculator.add(1)` both carry the bare
+            // method name in the `name` field.
+            let name = field(n, "name", bytes)?;
+            if name.is_empty() {
+                return None;
+            }
+            Some(Edge {
+                src: src.to_string(),
+                dst: name.to_string(),
+                kind: EdgeKind::Call,
+                file: file_line_hint,
+                line: start,
+            })
+        }
+        ("java", "object_creation_expression") => {
+            let ty = field(n, "type", bytes)?;
+            let name = ty.rsplit('.').next().unwrap_or(ty);
+            if name.is_empty() {
+                return None;
+            }
+            Some(Edge {
+                src: src.to_string(),
+                dst: name.to_string(),
+                kind: EdgeKind::Call,
+                file: file_line_hint,
+                line: start,
+            })
+        }
+        ("java", "import_declaration") => Some(Edge {
+            src: src.to_string(),
+            dst: node_text(n, bytes).to_string(),
+            kind: EdgeKind::Import,
+            file: file_line_hint,
+            line: start,
+        }),
         ("rust", "use_declaration") | ("go", "import_declaration") => Some(Edge {
             src: src.to_string(),
             dst: node_text(n, bytes).to_string(),

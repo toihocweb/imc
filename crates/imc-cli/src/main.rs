@@ -68,7 +68,16 @@ enum Command {
         tag: Vec<String>,
         #[arg(long, default_value_t = 0.5)]
         importance: f64,
+        /// Work-memory type: work_fact|work_task|work_method|work_artifact|business_rule.
+        #[arg(long = "type", default_value = "work_fact")]
+        mem_type: String,
+        /// Working scene this memory belongs to.
+        #[arg(long, default_value = "")]
+        scene: String,
     },
+    /// Drop memories whose tracked files no longer exist on disk.
+    #[command(name = "memory-prune")]
+    MemoryPrune,
     /// Retrieve memories relevant to a query.
     #[command(name = "memory-search")]
     MemorySearch {
@@ -236,10 +245,28 @@ fn main() -> Result<()> {
                 None => root.clone(),
             };
             let stats = index::run(&cfg, &target, ignore, *force)?;
+
+            // Python's index.py prunes memories pointing at deleted files on
+            // every non-forced run; keep that behaviour (`imc index --force`
+            // already wipes the store via the caller).
+            let mut pruned = 0usize;
+            if !*force {
+                if let Ok(store) = store::open(&cfg.project_db(&target)) {
+                    pruned = imc_memory::prune_stale(&store, &target).unwrap_or(0);
+                }
+            }
+
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&stats)?);
+                let mut v = serde_json::to_value(&stats)?;
+                if let Some(o) = v.as_object_mut() {
+                    o.insert("memories_pruned".into(), serde_json::json!(pruned));
+                }
+                println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 index::report(&stats);
+                if pruned > 0 {
+                    println!("  memories pruned: {pruned}");
+                }
             }
             let meta = ProjectMeta {
                 id: md5_hex(target.to_string_lossy().as_bytes())[..16].to_string(),
@@ -368,11 +395,23 @@ fn main() -> Result<()> {
             path,
             tag,
             importance,
+            mem_type,
+            scene,
         } => {
             let db = cfg.project_db(&root);
             let store = store::open(&db)?;
             let embedder = imc_embed::build(&cfg.embedding);
-            match imc_memory::add(&store, &content, &category, &path, &tag, *importance, "manual")? {
+            match imc_memory::add_typed(
+                &store,
+                &content,
+                imc_memory::MemoryType::from_str(mem_type),
+                scene,
+                &category,
+                &path,
+                &tag,
+                *importance,
+                "manual",
+            )? {
                 Some(id) => {
                     imc_memory::embed_and_store(&store, embedder.as_deref(), id, &content)?;
                     if cli.json {
@@ -407,6 +446,12 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::MemoryPrune => {
+            let db = cfg.project_db(&root);
+            let store = store::open(&db)?;
+            let pruned = imc_memory::prune_stale(&store, &root)?;
+            println!("pruned {pruned} stale memories referencing deleted files");
+        }
         Command::MemoryList { limit } => {
             let db = cfg.project_db(&root);
             let store = store::open(&db)?;
@@ -415,7 +460,20 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&items)?);
             } else {
                 for m in items {
-                    println!("#{:<4} [{}] imp={:.2} uses={}  {}", m.id, m.category, m.importance, m.use_count, m.content.lines().next().unwrap_or(""));
+                    let scene = if m.scene.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" @{}", m.scene)
+                    };
+                    println!(
+                        "#{:<4} [{}] imp={:.2} uses={}{}  {}",
+                        m.id,
+                        m.mem_type.as_str(),
+                        m.importance,
+                        m.use_count,
+                        scene,
+                        m.content.lines().next().unwrap_or("")
+                    );
                 }
             }
         }
@@ -555,6 +613,17 @@ fn main() -> Result<()> {
                     .map(|m| &*Box::leak(m.to_string().into_boxed_str())),
                 symbols: *symbols,
             };
+            // `--json read` must stay machine-readable (the global --json flag
+            // promises JSON for every command).
+            if cli.json && *symbols && !*raw {
+                let path = std::path::Path::new(&file);
+                let text = std::fs::read_to_string(path)
+                    .map_err(|e| anyhow::anyhow!("[imc read] Failed to read {}: {e}", path.display()))?;
+                let outline = imc_find::find::outline_symbols_struct(&text, path);
+                println!("{}", serde_json::to_string_pretty(&outline)?);
+                return Ok(());
+            }
+
             let out = imc_find::find::run_find(&file.to_string_lossy(), opts)?;
             print!("{out}");
         }
