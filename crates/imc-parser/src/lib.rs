@@ -83,6 +83,30 @@ fn walk(
         vec![(node, parent_qualified.map(String::from), parent_id.map(String::from))];
 
     while let Some((n, pq, pid)) = stack.pop() {
+        // Rust `impl Pair { ... }`: Python indexes the type definition
+        // (`struct`/`enum`) and its methods, never the impl block. Emitting a
+        // symbol here is actively harmful — its qualname is the type name, so its
+        // id (`file::Pair`) *collides* with the struct's and wins the primary
+        // key, hiding the real definition (`imc trace Pair` landed on the impl
+        // span). Push the methods with the type name as their qualname prefix.
+        if lang == "rust" && n.kind() == "impl_item" {
+            let own = n
+                .child_by_field_name("type")
+                .map(|t| node_text(t, bytes))
+                .unwrap_or("");
+            let prefix = match pq.as_deref() {
+                Some(p) if !p.is_empty() && !own.is_empty() => format!("{p}::{own}"),
+                _ => own.to_string(),
+            };
+            let nested = (!prefix.is_empty()).then_some(prefix);
+            for i in (0..n.child_count()).rev() {
+                if let Some(c) = n.child(i) {
+                    stack.push((c, nested.clone(), pid.clone()));
+                }
+            }
+            continue;
+        }
+
         if let Some(sym) = maybe_symbol(n, rel, bytes, text, lang, pq.as_deref()) {
             out.chunks.push(chunk_of(&sym, bytes, text));
             let qual = sym.qualname.clone();
@@ -251,7 +275,16 @@ fn maybe_symbol<'a>(
             (field(n, "name", bytes)?, SymbolKind::Method)
         }
         ("javascript" | "typescript" | "tsx", "lexical_declaration") => {
-            // `const Foo = () => {}` / `const Foo = function () {}` — components.
+            // `const Foo = () => {}` / `const Foo = function () {}` — React
+            // components, hooks and plain helpers. Python indexes them at top
+            // level whatever the case (`topHelper`, `useThing`) but not those
+            // nested inside another symbol (`inner` inside `outer`), so the
+            // parent check is what keeps the two models equal: gating on an
+            // uppercase initial (the old rule) lost every lowercase helper and
+            // hook in a JS/TS repo.
+            if parent_qualified.is_some() {
+                return None;
+            }
             let mut it = n.walk();
             for child in n.children(&mut it) {
                 if child.kind() != "variable_declarator" {
@@ -263,10 +296,15 @@ fn maybe_symbol<'a>(
                     value.kind(),
                     "arrow_function" | "function_expression" | "function_declaration"
                 );
-                let upper = name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
-                if is_fn && upper {
+                if is_fn {
+                    let upper = name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+                    let kind = if upper {
+                        SymbolKind::Component
+                    } else {
+                        SymbolKind::Function
+                    };
                     let qual = qualified(rel, name);
-                    return Some(make_symbol(child, name, SymbolKind::Component, &qual, rel, None));
+                    return Some(make_symbol(child, name, kind, &qual, rel, None));
                 }
             }
             return None;

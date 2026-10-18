@@ -3,7 +3,7 @@
 //! Regression guard for a bug where `maybe_edge` only matched `identifier` for
 //! Python: an attribute call (`self._validate(x)`, `obj.helper(y)`) never
 //! produced an edge, so the method layer of the call graph silently vanished —
-//! `trace <method> -d callers` returned an empty tree while everything else
+//! `trace <method> --callers` returned an empty tree while everything else
 //! looked healthy.
 
 use imc_parser::parse;
