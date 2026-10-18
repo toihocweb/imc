@@ -191,9 +191,12 @@ const SKIP_DIRS: &[&str] = &[
 ];
 
 /// Universal bridge correlating frontend API calls with backend route handlers.
-pub struct EndpointBridge {
+///
+/// The store is borrowed, not owned: the tracer and the CLI both hold a
+/// `&Store` for the same index, and `Connection` is neither `Clone` nor `Sync`.
+pub struct EndpointBridge<'a> {
     root_dir: std::path::PathBuf,
-    store: Option<Store>,
+    store: Option<&'a Store>,
     routes_by_path: HashMap<String, Vec<RouteDefinition>>,
     routes_by_handler: HashMap<String, Vec<RouteDefinition>>,
     calls_by_caller: HashMap<String, Vec<ClientApiCall>>,
@@ -202,8 +205,8 @@ pub struct EndpointBridge {
     scanned: bool,
 }
 
-impl EndpointBridge {
-    pub fn new(root_dir: &Path, store: Option<Store>) -> Self {
+impl<'a> EndpointBridge<'a> {
+    pub fn new(root_dir: &Path, store: Option<&'a Store>) -> Self {
         Self {
             root_dir: root_dir.to_path_buf(),
             store,
@@ -250,6 +253,16 @@ impl EndpointBridge {
     fn register_route(&mut self, mut route: RouteDefinition) {
         route.handler_node_id =
             self.symbol_node_id(&route.handler_name, &route.file, route.line, false);
+        // Idempotent: `routes_in_file` scans a single file and a later full
+        // `scan()` would otherwise register the same route twice.
+        if let Some(existing) = self.routes_by_path.get(&route.normalized_path) {
+            if existing
+                .iter()
+                .any(|r| r.method == route.method && r.file == route.file && r.line == route.line)
+            {
+                return;
+            }
+        }
         self.routes_by_path
             .entry(route.normalized_path.clone())
             .or_default()
@@ -490,6 +503,43 @@ impl EndpointBridge {
         }
         results
     }
+
+    /// Routes defined inside one backend file, with module/class prefixes
+    /// applied, in source order. Scans only that file — no project-wide walk —
+    /// so `imc context` on one file does not pay for a full traversal.
+    pub fn routes_in_file(&mut self, full_path: &Path) -> Vec<RouteDefinition> {
+        let Ok(rel) = full_path.strip_prefix(&self.root_dir) else {
+            return Vec::new();
+        };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        let ext = full_path
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
+            .unwrap_or_default();
+        if !BACKEND_EXTENSIONS.contains(&ext.as_str()) {
+            return Vec::new();
+        }
+        self.scan_backend_file(full_path, &rel, &ext);
+        let mut routes: Vec<RouteDefinition> = self
+            .routes_by_path
+            .values()
+            .flatten()
+            .filter(|r| r.file == rel)
+            .cloned()
+            .collect();
+        routes.sort_by_key(|r| r.line);
+        routes
+    }
+
+    /// `calls_by_caller` — client call sites for one frontend symbol name,
+    /// scanning the project on first use (Python calls `bridge.scan()` here).
+    pub fn client_calls(&mut self, caller_name: &str) -> Vec<ClientApiCall> {
+        self.scan();
+        self.calls_by_caller
+            .get(caller_name)
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 fn split_parts(path: &str) -> Vec<&str> {
@@ -536,7 +586,7 @@ re!(
     r#"\b(?:public|protected|private)\s+[\w<>\[\],\s]+\s+(\w+)\s*\("#
 );
 
-impl EndpointBridge {
+impl<'a> EndpointBridge<'a> {
     /// Scan a file for backend route definitions.
     fn scan_backend_file(&mut self, full_path: &Path, rel_path: &str, ext: &str) {
         let Ok(content) = std::fs::read_to_string(full_path) else { return };
@@ -582,10 +632,12 @@ impl EndpointBridge {
                 "ALL".to_string()
             };
 
-            // Find method name in following lines.
+            // Find the method name in the lines that follow. Python walks
+            // `range(i, min(i + 6, len(lines)))`: skipping `i` lines first is
+            // what makes the search start *at the annotation*, not at line 1.
             let mut handler_name: Option<String> = None;
             let mut handler_index = i;
-            for (hi, next_line) in lines.iter().enumerate().take(std::cmp::min(i + 6, lines.len())) {
+            for (hi, next_line) in lines.iter().enumerate().skip(i).take(6) {
                 let Some(mm) = re_java_fn().captures(next_line) else { continue };
                 let name = mm.get(1).unwrap().as_str().to_string();
                 if !["public", "protected", "private", "return", "if", "for", "while"].contains(&name.as_str()) {
@@ -646,7 +698,7 @@ impl EndpointBridge {
 
             let mut handler_name: Option<String> = None;
             let mut handler_index = i;
-            for (hi, next_line) in lines.iter().enumerate().take(std::cmp::min(i + 5, lines.len())) {
+            for (hi, next_line) in lines.iter().enumerate().skip(i).take(5) {
                 if let Some(fm) = re_py_def().captures(next_line) {
                     handler_name = Some(fm.get(1).unwrap().as_str().to_string());
                     handler_index = hi;
@@ -718,7 +770,7 @@ impl EndpointBridge {
 
                 let mut handler_name: Option<String> = None;
                 let mut handler_index = i;
-                for (hi, next_line) in lines.iter().enumerate().take(std::cmp::min(i + 4, lines.len())) {
+                for (hi, next_line) in lines.iter().enumerate().skip(i).take(4) {
                     if let Some(fm) = re_ts_fn().captures(next_line) {
                         let name = fm.get(1).unwrap().as_str().to_string();
                         if !["constructor", "if", "for", "while"].contains(&name.as_str()) {
@@ -783,7 +835,7 @@ impl EndpointBridge {
 
                 let mut handler_name: Option<String> = None;
                 let mut handler_index = i;
-                for (hi, next_line) in lines.iter().enumerate().take(std::cmp::min(i + 5, lines.len())) {
+                for (hi, next_line) in lines.iter().enumerate().skip(i).take(5) {
                     if let Some(fm) = re_dotnet_fn().captures(next_line) {
                         handler_name = Some(fm.get(1).unwrap().as_str().to_string());
                         handler_index = hi;

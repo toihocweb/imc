@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 imc-core = { path = "../imc-core" }
 imc-search = { path = "../imc-search" }
+imc-support = { path = "../imc-support" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

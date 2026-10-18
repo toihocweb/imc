@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use imc_core::store::Store;
+use imc_support::endpoints::EndpointBridge;
 use regex::Regex;
 use serde_json::Value;
 use walkdir::WalkDir;
@@ -274,13 +275,16 @@ pub fn build_backend_dossier(
             }
         }
     } else if ext == ".py" {
-        let ep_re = Regex::new(r#"@(?:app|router)\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#).unwrap();
-        for (i, line) in lines.iter().enumerate() {
-            if let Some(cap) = ep_re.captures(line) {
-                let verb = cap.get(1).map(|m| m.as_str()).unwrap_or("").to_uppercase();
-                let route_path = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-                endpoints.push(format!("`{verb} {route_path}` [line {}]", i + 1));
-            }
+        // Route discovery goes through EndpointBridge — the same scanner
+        // `imc trace` and frontend->backend linking use — so module prefixes
+        // apply: `APIRouter(prefix="/api/git")` + `@router.get("/status")`
+        // serves `/api/git/status`, not `/status`. Python's copy of this
+        // (main/cli/commands/context.py:488) reads only `@app.` / `@router.`
+        // and drops the prefix; that is a bug, not behaviour to match.
+        let mut bridge = EndpointBridge::new(root_dir, None);
+        for route in bridge.routes_in_file(source_file) {
+            let line = decorator_line(&lines, &route.method, &route.path).unwrap_or(route.line);
+            endpoints.push(format!("`{} {}` [line {line}]", route.method, route.path));
         }
     }
 
@@ -366,6 +370,31 @@ pub fn build_backend_dossier(
     }
 
     output.join("\n")
+}
+
+/// The dossier reports the *decorator's* line while the bridge reports the
+/// handler's `def` line, so re-locate the decorator to keep `[line N]`
+/// identical to the Python output. Prefixes are file-wide, so a matching verb
+/// plus path suffix identifies the decorator uniquely within one file.
+fn decorator_line(lines: &[&str], method: &str, path: &str) -> Option<usize> {
+    let re = Regex::new(r#"@\w+\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#).ok()?;
+    for (i, line) in lines.iter().enumerate() {
+        let Some(cap) = re.captures(line) else { continue };
+        if !cap[1].eq_ignore_ascii_case(method) {
+            continue;
+        }
+        let lit = cap[2].trim().trim_start_matches('/');
+        if lit.is_empty() {
+            if path == "/" {
+                return Some(i + 1);
+            }
+            continue;
+        }
+        if path == lit || path.ends_with(&format!("/{lit}")) {
+            return Some(i + 1);
+        }
+    }
+    None
 }
 
 // ─── UI / frontend dossier ───────────────────────────────────────────────────
@@ -729,6 +758,12 @@ fn search_json_keys(d: &Value, keys: &BTreeSet<String>, resolved: &mut BTreeMap<
                 Value::Number(n) => {
                     resolved.insert(jk.clone(), n.to_string());
                 }
+                // Python stores whatever JSON value it found and later prints
+                // `str(value)`, so a boolean resolves as "True"/"False" rather
+                // than showing as [missing].
+                Value::Bool(b) => {
+                    resolved.insert(jk.clone(), if *b { "True" } else { "False" }.to_string());
+                }
                 _ => {}
             }
         }
@@ -738,10 +773,12 @@ fn search_json_keys(d: &Value, keys: &BTreeSet<String>, resolved: &mut BTreeMap<
 
 // ─── Related tests ───────────────────────────────────────────────────────────
 
-const TEST_SUFFIXES: [&str; 16] = [
+/// Same 15 entries as Python's `valid_suffixes`
+/// (main/cli/commands/context.py) — Rust used to carry a 16th, `.cy.js`.
+const TEST_SUFFIXES: [&str; 15] = [
     ".cy.tsx", ".cy.ts", ".test.tsx", ".test.ts", ".spec.tsx", ".spec.ts", ".pom.ts",
     "Test.java", "Tests.java", "TestCase.java", "_test.go", "_test.py", "test_*.py",
-    "Test.cs", "Tests.cs", ".cy.js",
+    "Test.cs", "Tests.cs",
 ];
 
 /// Port of `find_related_tests` — sibling/mirrored test files (max 5).
@@ -794,9 +831,12 @@ pub fn find_related_tests(root_dir: &Path, source_file: &Path) -> Vec<String> {
                     tests.push(r);
                 }
             }
-            if tests.len() >= 5 {
-                break 'outer;
-            }
+        }
+        // Python finishes walking one directory and only then stops, so the
+        // five files it reports are the sorted-first five of that directory —
+        // stopping mid-walk picks a different set.
+        if tests.len() >= 5 {
+            break 'outer;
         }
     }
 
@@ -823,7 +863,8 @@ pub fn locate_target_file(target: &str, root_dir: &Path) -> Option<PathBuf> {
         return Some(direct_path);
     }
     let expanded = {
-        let p = PathBuf::from(target_clean);
+        // Python: `Path(target_clean).expanduser().resolve()`.
+        let p = expand_tilde(target_clean);
         if p.is_absolute() {
             p
         } else {
@@ -994,6 +1035,20 @@ pub fn locate_target_file(target: &str, root_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// `Path.expanduser()` for the leading `~` / `~/` form.
+fn expand_tilde(target: &str) -> PathBuf {
+    if target == "~" {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home);
+        }
+    } else if let Some(rest) = target.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(target)
+}
+
 /// Walk a project directory, skipping ignored and dot-directories.
 fn walk_project(root_dir: &Path, ignored: &[&str]) -> Vec<PathBuf> {
     let mut files = Vec::new();
@@ -1138,6 +1193,32 @@ mod tests {
         assert_eq!(resolved.get("farewell").map(|s| s.as_str()), Some("Bye"));
         assert_eq!(resolved.get("title").map(|s| s.as_str()), Some("Title"));
         assert!(!resolved.contains_key("missing"));
+    }
+
+    #[test]
+    fn resolve_i18n_keys_resolves_json_booleans() {
+        // Python stores the JSON value and prints str(value), so a boolean key
+        // resolves as "True"/"False" instead of showing as [missing].
+        let root = tmp_dir("i18n-bool");
+        let f = write(&root, "src/i18n/en.json", "{\"flag\":true,\"off\":false}");
+        let keys: BTreeSet<String> = ["flag", "off"].iter().map(|s| s.to_string()).collect();
+        let resolved = resolve_i18n_keys(&keys, &[f]);
+        assert_eq!(resolved.get("flag").map(|s| s.as_str()), Some("True"));
+        assert_eq!(resolved.get("off").map(|s| s.as_str()), Some("False"));
+    }
+
+    #[test]
+    fn expand_tilde_uses_home() {
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", "/tmp/imc-home-probe");
+        assert_eq!(expand_tilde("~/src/a.py"), PathBuf::from("/tmp/imc-home-probe/src/a.py"));
+        assert_eq!(expand_tilde("~"), PathBuf::from("/tmp/imc-home-probe"));
+        assert_eq!(expand_tilde("src/a.py"), PathBuf::from("src/a.py"));
+        assert_eq!(expand_tilde("/abs/a.py"), PathBuf::from("/abs/a.py"));
+        match prev {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
     }
 
     #[test]
