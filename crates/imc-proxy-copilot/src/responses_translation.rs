@@ -9,22 +9,22 @@ use std::collections::BTreeMap;
 
 use imc_proxy_types::types::anthropic::{
     AnthropicInputMessage, AnthropicMessagesPayload, AnthropicMetadata, AnthropicTextBlock,
-    AnthropicToolChoice, AnthropicToolEntry, AnthropicToolResultContentBlock, StringOrBlocks,
+    AnthropicToolChoice, AnthropicToolEntry, StringOrBlocks,
 };
 use imc_proxy_types::types::responses::{
     FunctionTool, Reasoning, ResponseFunctionCallOutputItem, ResponseFunctionToolCallItem,
-    ResponseInputContent, ResponseInputImage, ResponseInputMessage, ResponseInputText, ToolChoice,
-    ToolChoiceFunction, ResponsesPayload,
+    ResponseInputContent, ResponseInputImage, ResponseInputItem, ResponseInputMessage,
+    ResponseInputText, ResponsesPayload, ToolChoice, ToolChoiceFunction,
 };
 use serde_json::{json, Value};
 
 use crate::non_stream_translation::{
-    assistant_content_block_view, handle_system_prompt, tool_result_block_text,
-    user_content_block_view, ContentBlock,
+    assistant_content_block_view, tool_result_block_text, user_content_block_view, ContentBlock,
 };
 
 /// Floor Copilot enforces on `max_output_tokens` for Responses requests.
 const MIN_MAX_OUTPUT_TOKENS: i64 = 12800;
+
 
 /// Port of `create_text_content`.
 pub fn create_text_content(text: &str) -> ResponseInputText {
@@ -115,7 +115,7 @@ pub fn translate_system_prompt(
 /// `phase` is only set on assistant messages; user messages never carry one.
 pub fn flush_pending_content(
     pending: &mut Vec<ResponseInputContent>,
-    target: &mut Vec<Value>,
+    target: &mut Vec<ResponseInputItem>,
     role: &str,
     phase: Option<&str>,
 ) {
@@ -123,30 +123,26 @@ pub fn flush_pending_content(
         return;
     }
 
-    let msg = ResponseInputMessage {
+    target.push(ResponseInputItem::Message(ResponseInputMessage {
         r#type: "message".to_string(),
         role: role.to_string(),
-        content: Some(StringOrBlocks::Blocks(pending.clone())),
+        content: Some(StringOrBlocks::Blocks(std::mem::take(pending))),
         status: None,
         phase: if role == "assistant" {
             phase.map(|p| p.to_string())
         } else {
             None
         },
-    };
-
-    target.push(to_json(&msg));
-    pending.clear();
+    }));
 }
 
 /// Port of `translate_message` — one Anthropic input message to Responses
 /// input items.
 ///
-/// Returning JSON values keeps the output item union (`message` /
-/// `function_call` / `function_call_output`) faithful to the Python's
-/// `List[Dict]` construction without pre-committing to one struct variant.
-pub fn translate_message(message: &AnthropicInputMessage) -> Vec<Value> {
-    let mut items: Vec<Value> = Vec::new();
+/// The item union (`message` / `function_call` / `function_call_output`)
+/// mirrors Python's `List[ResponseInputItem]`.
+pub fn translate_message(message: &AnthropicInputMessage) -> Vec<ResponseInputItem> {
+    let mut items: Vec<ResponseInputItem> = Vec::new();
 
     match message {
         // Python checks `message.role == "system"` before dispatching, so a
@@ -154,7 +150,7 @@ pub fn translate_message(message: &AnthropicInputMessage) -> Vec<Value> {
         AnthropicInputMessage::System(m) if m.role == "system" => {
             match &m.content {
                 StringOrBlocks::Text(s) => {
-                    items.push(to_json(&ResponseInputMessage {
+                    items.push(ResponseInputItem::Message(ResponseInputMessage {
                         r#type: "message".to_string(),
                         role: "developer".to_string(),
                         content: Some(StringOrBlocks::Text(s.clone())),
@@ -169,7 +165,7 @@ pub fn translate_message(message: &AnthropicInputMessage) -> Vec<Value> {
                         .map(|b| ResponseInputContent::Text(create_text_content(&b.text)))
                         .collect();
                     if !blocks.is_empty() {
-                        items.push(to_json(&ResponseInputMessage {
+                        items.push(ResponseInputItem::Message(ResponseInputMessage {
                             r#type: "message".to_string(),
                             role: "developer".to_string(),
                             content: Some(StringOrBlocks::Blocks(blocks)),
@@ -184,7 +180,7 @@ pub fn translate_message(message: &AnthropicInputMessage) -> Vec<Value> {
         AnthropicInputMessage::User(m) if m.role == "user" => {
             match &m.content {
                 StringOrBlocks::Text(s) => {
-                    items.push(to_json(&ResponseInputMessage {
+                    items.push(ResponseInputItem::Message(ResponseInputMessage {
                         r#type: "message".to_string(),
                         role: "user".to_string(),
                         content: Some(StringOrBlocks::Text(s.clone())),
@@ -209,16 +205,18 @@ pub fn translate_message(message: &AnthropicInputMessage) -> Vec<Value> {
                             };
                             let output = tool_result_block_text(content);
 
-                            items.push(to_json(&ResponseFunctionCallOutputItem {
-                                r#type: "function_call_output".to_string(),
-                                call_id,
-                                output: StringOrBlocks::Text(output),
-                                status: Some(if is_error.unwrap_or(false) {
-                                    "incomplete".to_string()
-                                } else {
-                                    "completed".to_string()
-                                }),
-                            }));
+                            items.push(ResponseInputItem::FunctionCallOutput(
+                                ResponseFunctionCallOutputItem {
+                                    r#type: "function_call_output".to_string(),
+                                    call_id,
+                                    output: StringOrBlocks::Text(output),
+                                    status: Some(if is_error.unwrap_or(false) {
+                                        "incomplete".to_string()
+                                    } else {
+                                        "completed".to_string()
+                                    }),
+                                },
+                            ));
                         } else {
                             pending.extend(translate_user_content_block(&view));
                         }
@@ -231,7 +229,7 @@ pub fn translate_message(message: &AnthropicInputMessage) -> Vec<Value> {
         AnthropicInputMessage::Assistant(m) if m.role == "assistant" => {
             match &m.content {
                 StringOrBlocks::Text(s) => {
-                    items.push(to_json(&ResponseInputMessage {
+                    items.push(ResponseInputItem::Message(ResponseInputMessage {
                         r#type: "message".to_string(),
                         role: "assistant".to_string(),
                         content: Some(StringOrBlocks::Text(s.clone())),
@@ -256,15 +254,17 @@ pub fn translate_message(message: &AnthropicInputMessage) -> Vec<Value> {
                             ContentBlock::ToolUse { id, name, input } => {
                                 flush_pending_content(&mut pending, &mut items, "assistant", Some(phase));
 
-                                items.push(to_json(&ResponseFunctionToolCallItem {
-                                    r#type: "function_call".to_string(),
-                                    call_id: id.clone(),
-                                    name: name.clone(),
-                                    arguments: serde_json::to_string(input)
-                                        .unwrap_or_else(|_| "{}".to_string()),
-                                    status: Some("completed".to_string()),
-                                    namespace: None,
-                                }));
+                                items.push(ResponseInputItem::FunctionCall(
+                                    ResponseFunctionToolCallItem {
+                                        r#type: "function_call".to_string(),
+                                        call_id: id.clone(),
+                                        name: name.clone(),
+                                        arguments: serde_json::to_string(input)
+                                            .unwrap_or_else(|_| "{}".to_string()),
+                                        status: Some("completed".to_string()),
+                                        namespace: None,
+                                    },
+                                ));
                             }
                             // "ignore for now in translation as it's not well
                             // supported in inputs"
@@ -315,7 +315,7 @@ pub fn responses_tool_fields(entry: &AnthropicToolEntry) -> ResponsesToolFields 
             input_schema: v
                 .get("input_schema")
                 .and_then(Value::as_object)
-                .map(|o| o.into_iter().collect::<BTreeMap<String, Value>>()),
+                .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
         },
     }
 }
@@ -390,7 +390,7 @@ pub fn translate_metadata(metadata: Option<&AnthropicMetadata>) -> Option<BTreeM
 /// Port of `translate_to_responses` — an Anthropic Messages request translated
 /// into a Responses request body.
 pub fn translate_to_responses(payload: &AnthropicMessagesPayload) -> ResponsesPayload {
-    let mut input_items: Vec<Value> = Vec::new();
+    let mut input_items: Vec<ResponseInputItem> = Vec::new();
 
     for msg in &payload.messages {
         input_items.extend(translate_message(msg));

@@ -3,9 +3,12 @@
 //! Scope: `imc trace` (AST call-hierarchy tracer), ported from
 //! `main/cli/commands/trace.py` (89 lines) into `src/trace_cmd.rs`.
 //!
-//! The tracer itself (`main/core/tracer.py` → `imc-trace` crate) is still a
-//! stub, so `trace_cmd` expresses the needed surface as a `Tracer` trait; the
-//! orchestration logic (candidate resolution, callee/caller selection, JSON and
-//! ASCII-tree output shaping, error messages/exit codes) is ported 1:1.
+//! `trace_cmd` is the faithful port of Python's `main/cli/commands/trace.py`
+//! (candidate resolution, callee/caller selection, `--both` ordering, JSON and
+//! ASCII-tree output shaping, stderr messages + exit codes).
+//!
+//! `adapter` implements `trace_cmd::Tracer` over the real `imc-trace` engine,
+//! so the ported orchestration drives the ported tracer.
 
+pub mod adapter;
 pub mod trace_cmd;

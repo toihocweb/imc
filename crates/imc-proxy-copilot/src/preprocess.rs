@@ -13,9 +13,7 @@ use imc_proxy_types::types::anthropic::{
     AnthropicMessagesPayload, AnthropicTextBlock, AnthropicUserContentBlock, StringOrBlocks,
 };
 
-use crate::non_stream_translation::{
-    assistant_content_block_view, user_content_block_view, ContentBlock,
-};
+use crate::non_stream_translation::{assistant_content_block_view, user_content_block_view};
 
 /// The only cache-control value this proxy writes.
 fn ephemeral() -> AnthropicCacheControl {
@@ -108,22 +106,26 @@ pub fn apply_last_message_cache_control(payload: &mut AnthropicMessagesPayload) 
         // TextBlock.
         AnthropicInputMessage::User(m) => {
             if let StringOrBlocks::Text(s) = &m.content {
-                m.content = StringOrBlocks::Blocks(vec![AnthropicTextBlock {
-                    r#type: "text".to_string(),
-                    text: s.clone(),
-                    cache_control: Some(ephemeral()),
-                }]);
+                m.content = StringOrBlocks::Blocks(vec![AnthropicUserContentBlock::Text(
+                    AnthropicTextBlock {
+                        r#type: "text".to_string(),
+                        text: s.clone(),
+                        cache_control: Some(ephemeral()),
+                    },
+                )]);
                 return;
             }
             mark_last_user_block(&mut m.content);
         }
         AnthropicInputMessage::Assistant(m) => {
             if let StringOrBlocks::Text(s) = &m.content {
-                m.content = StringOrBlocks::Blocks(vec![AnthropicTextBlock {
-                    r#type: "text".to_string(),
-                    text: s.clone(),
-                    cache_control: Some(ephemeral()),
-                }]);
+                m.content = StringOrBlocks::Blocks(vec![AnthropicAssistantContentBlock::Text(
+                    AnthropicTextBlock {
+                        r#type: "text".to_string(),
+                        text: s.clone(),
+                        cache_control: Some(ephemeral()),
+                    },
+                )]);
                 return;
             }
             mark_last_assistant_block(&mut m.content);

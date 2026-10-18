@@ -5,4 +5,6 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+imc-core = { path = "../imc-core" }
+imc-trace = { path = "../imc-trace" }
 serde_json.workspace = true

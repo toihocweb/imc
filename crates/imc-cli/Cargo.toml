@@ -18,6 +18,7 @@ imc-search = { path = "../imc-search" }
 imc-find = { path = "../imc-find" }
 imc-trace = { path = "../imc-trace" }
 imc-support = { path = "../imc-support" }
+imc-cli-extra = { path = "../imc-cli-extra" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

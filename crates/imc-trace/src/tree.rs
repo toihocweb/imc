@@ -822,11 +822,27 @@ impl<'a> Tracer<'a> {
             ..Default::default()
         };
 
-        if depth >= opts.max_depth || defs.len() != 1 {
+        // Ambiguous names are not a selected identity (Python returns early);
+        // an *undefined* target (external/stdlib callee) still has reverse edges
+        // in Python's graph, so it must fall through and be expanded instead of
+        // returning an empty tree.
+        let undefined_target = defs.is_empty();
+        if defs.len() > 1 {
             return tree;
         }
-        let raw_name = primary.name.clone();
-        let def_file = primary.file.clone();
+        if !undefined_target && depth >= opts.max_depth {
+            return tree;
+        }
+        let raw_name = if undefined_target {
+            target_name.to_string()
+        } else {
+            primary.name.clone()
+        };
+        let def_file = if undefined_target {
+            target_file.unwrap_or_default().to_string()
+        } else {
+            primary.file.clone()
+        };
         let def_id = primary.id.clone();
         let mut path = visited.to_vec();
         path.push(tree.id.clone());
@@ -838,12 +854,16 @@ impl<'a> Tracer<'a> {
             v
         } {
             let caller = self.node_info(&caller_id);
-            // A legacy/name-only edge only contributes when its conservative
-            // forward resolution identifies this exact definition.
-            if self
-                .resolve_callee(&raw_name, &caller.file)
-                .map(|d| d.id.as_str())
-                != Some(def_id.as_str())
+            // A name-only edge only contributes when its conservative forward
+            // resolution identifies this exact definition. When the target has
+            // no definition at all (an external / stdlib callee), Python still
+            // had a graph node for it and reported its predecessors, so we must
+            // not filter those edges out.
+            if !undefined_target
+                && self
+                    .resolve_callee(&raw_name, &caller.file)
+                    .map(|d| d.id.as_str())
+                    != Some(def_id.as_str())
             {
                 continue;
             }
@@ -1031,13 +1051,14 @@ fn walk_callers(node: &CallerNode, prefix: &str, lines: &mut Vec<String>) {
 // Tests
 // ---------------------------------------------------------------------------
 
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use imc_core::types::{Edge, EdgeKind, Symbol};
+    use imc_core::types::{Edge, EdgeKind, Symbol, SymbolKind};
 
     use super::*;
 
@@ -1953,5 +1974,58 @@ mod tests {
         assert!(!o.show_all);
         assert_eq!(o.with_depth(5).with_show_all(true).max_depth, 5);
         assert!(o.with_depth(5).with_show_all(true).show_all);
+    }
+
+    /// Regression: a callee with no definition (external / stdlib) still has a
+    /// Python graph node, so its callers must be reported. Before the fix the
+    /// conservative-resolution filter dropped every reverse edge and the blast
+    /// radius came back empty.
+    #[test]
+    fn callers_of_an_undefined_name_still_resolve() {
+        let dir = std::env::temp_dir().join(format!("imc-trace-ext-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("index.db");
+        let _ = std::fs::remove_file(&db);
+        let mut store = imc_core::store::open(&db).unwrap();
+        store.upsert_file("a.py", "h1", Some("python"), 100).unwrap();
+        store
+            .insert_symbols(
+                "a.py",
+                &[Symbol {
+                    id: Symbol::make_id("a.py", "alpha"),
+                    name: "alpha".into(),
+                    qualname: "alpha".into(),
+                    kind: SymbolKind::Function,
+                    file: "a.py".into(),
+                    line: 1,
+                    end_line: 3,
+                    start_byte: 0,
+                    end_byte: 40,
+                    parent: None,
+                }],
+            )
+            .unwrap();
+        store
+            .insert_edges(
+                "a.py",
+                &[Edge {
+                    src: Symbol::make_id("a.py", "alpha"),
+                    dst: "print".into(),
+                    kind: EdgeKind::Call,
+                    file: "a.py".into(),
+                    line: 2,
+                }],
+            )
+            .unwrap();
+
+        let tracer = Tracer::new(&store);
+        let tree = tracer.trace_callers("print", None, &TraceOptions::new());
+        let names: Vec<&str> = tree.callers.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names.contains(&"alpha"),
+            "callers of an undefined name must include alpha, got {names:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

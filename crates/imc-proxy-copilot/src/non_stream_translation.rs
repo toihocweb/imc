@@ -49,7 +49,7 @@ type AnyMap = BTreeMap<String, Value>;
 /// Python only ever asks for a block's `type` discriminator and then the
 /// fields of the block that discriminator names, so this enum carries exactly
 /// that much.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum ContentBlock {
     Text(String),
     Image {
@@ -200,6 +200,17 @@ pub fn tool_result_content_block_view(block: &AnthropicToolResultContentBlock) -
         AnthropicToolResultContentBlock::ToolReference(b) => {
             ContentBlock::ToolReference(b.tool_name.clone())
         }
+        // The other arms carry guards, so Rust cannot prove exhaustiveness.
+        other => ContentBlock::Unknown(raw_tool_result_type(other)),
+    }
+}
+
+fn raw_tool_result_type(block: &AnthropicToolResultContentBlock) -> String {
+    match block {
+        AnthropicToolResultContentBlock::Text(b) => b.r#type.clone(),
+        AnthropicToolResultContentBlock::Image(b) => b.r#type.clone(),
+        AnthropicToolResultContentBlock::Document(b) => b.r#type.clone(),
+        AnthropicToolResultContentBlock::ToolReference(b) => b.r#type.clone(),
     }
 }
 
@@ -329,11 +340,11 @@ pub fn tool_result_block_text(content: &StringOrBlocks<AnthropicToolResultConten
     match content {
         StringOrBlocks::Text(s) => s.clone(),
         StringOrBlocks::Blocks(blocks) => {
-            let parts: Vec<&str> = blocks
+            let parts: Vec<String> = blocks
                 .iter()
                 .map(tool_result_content_block_view)
                 .filter(|b| b.type_str() == "text")
-                .filter_map(|b| b.text())
+                .filter_map(|b| b.text().map(|t| t.to_string()))
                 .filter(|t| !t.is_empty())
                 .collect();
             parts.join("\n")
@@ -562,7 +573,7 @@ fn tool_entry_fields(entry: &AnthropicToolEntry) -> ToolFields {
             input_schema: v
                 .get("input_schema")
                 .and_then(Value::as_object)
-                .map(|o| o.into_iter().collect::<AnyMap>()),
+                .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
         },
     }
 }

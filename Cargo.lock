@@ -981,6 +981,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "imc-cli-extra",
  "imc-core",
  "imc-embed",
  "imc-find",
@@ -1002,6 +1003,8 @@ dependencies = [
 name = "imc-cli-extra"
 version = "0.1.0"
 dependencies = [
+ "imc-core",
+ "imc-trace",
  "serde_json",
 ]
 

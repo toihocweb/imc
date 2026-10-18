@@ -429,45 +429,38 @@ fn main() -> Result<()> {
             file,
         } => {
             let db = cfg.project_db(&root);
-            if !db.exists() {
-                bail!("project {} is not indexed. Run `imc index {}` first", root.display(), root.display());
+            let indexed = db.exists();
+            let store = if indexed { store::open(&db)? } else { store::open(&cfg.data_dir.join("empty.db"))? };
+            let tracer = imc_cli_extra::adapter::ImcTracer::new(&store, &root, indexed);
+
+            let mut opts = imc_cli_extra::trace_cmd::TraceOptions::new(symbol.clone());
+            opts.depth = *depth;
+            opts.show_all = *all;
+            opts.json_output = cli.json;
+            opts.file_filter = file.clone();
+            match direction.as_str() {
+                "callers" | "caller" | "up" => opts.callers = true,
+                "both" => opts.both = true,
+                _ => {}
             }
-            let store = store::open(&db)?;
-            let tracer = imc_trace::tree::Tracer::new(&store);
-            let node_ids = resolve_symbol_ids(&store, symbol, file.as_deref())?;
-            let opts = imc_trace::tree::TraceOptions::new()
-                .with_depth(*depth)
-                .with_show_all(*all);
-            let want_callers = matches!(direction.as_str(), "callers" | "caller" | "up");
-            if cli.json {
-                let trees: Vec<serde_json::Value> = node_ids
-                    .iter()
-                    .map(|id| {
-                        if want_callers {
-                            serde_json::to_value(tracer.trace_callers_at(id, &opts))
-                        } else {
-                            serde_json::to_value(tracer.trace_callees(id, &opts))
-                        }
-                    })
-                    .collect::<serde_json::Result<_>>()?;
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({"resolved": node_ids, "trees": trees}))?
-                );
-            } else {
-                for (i, id) in node_ids.iter().enumerate() {
-                    let text = if want_callers {
-                        imc_trace::tree::format_caller_tree(&tracer.trace_callers_at(id, &opts))
+
+            match imc_cli_extra::trace_cmd::run_trace(&tracer, &opts) {
+                Ok(out) => {
+                    if let Some(js) = out.json {
+                        println!("{js}");
                     } else {
-                        imc_trace::tree::format_callee_tree(&tracer.trace_callees(id, &opts))
-                    };
-                    if node_ids.len() > 1 {
-                        println!("── {id}");
+                        let text = &out.text;
+                        print!("{text}");
+                        if !out.text.is_empty() && !out.text.ends_with('\n') {
+                            println!();
+                        }
                     }
-                    print!("{text}");
-                    if !text.ends_with('\n') {
-                        println!();
+                }
+                Err(e) => {
+                    for m in e.messages() {
+                        eprintln!("{m}");
                     }
+                    std::process::exit(e.exit_code());
                 }
             }
         }

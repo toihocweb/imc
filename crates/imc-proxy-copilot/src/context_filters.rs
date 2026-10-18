@@ -27,14 +27,15 @@ use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
 use imc_proxy_types::types::anthropic::{
-    AnthropicInputMessage, AnthropicMessagesPayload, AnthropicToolResultContentBlock,
-    StringOrBlocks,
+    AnthropicAssistantContentBlock, AnthropicInputMessage, AnthropicMessagesPayload,
+    AnthropicToolResultContentBlock, AnthropicUserContentBlock, StringOrBlocks,
 };
 use regex::{Regex, RegexBuilder};
 use serde_json::Value;
 
 use crate::non_stream_translation::{
-    assistant_content_block_view, user_content_block_view, ContentBlock,
+    assistant_content_block_view, tool_result_content_block_view, user_content_block_view,
+    ContentBlock,
 };
 
 // ---------------------------------------------------------------------------
@@ -187,7 +188,9 @@ pub fn load_tool_result_filters_config() -> Vec<Value> {
         .lock()
         .ok()
         .and_then(|g| match (&g.0, &g.1) {
-            (Some(cached_mtime), Some(rules)) if *cached_mtime == mtime => Some(rules.clone()),
+            (Some(cached_mtime), Some(rules)) if Some(*cached_mtime) == mtime => {
+                Some(rules.clone())
+            }
             _ => None,
         });
     if let Some(rules) = cached {
@@ -242,7 +245,9 @@ pub fn is_context_filters_enabled() -> bool {
         .lock()
         .ok()
         .and_then(|g| match (&g.0, &g.1) {
-            (Some(cached_mtime), Some(enabled)) if *cached_mtime == mtime => Some(*enabled),
+            (Some(cached_mtime), Some(enabled)) if Some(*cached_mtime) == mtime => {
+                Some(*enabled)
+            }
             _ => None,
         });
     if let Some(enabled) = cached {
@@ -559,7 +564,7 @@ pub fn is_code_or_structured_content(text: &str) -> bool {
     }
 
     // Common code syntax indicators.
-    const CODE_INDICATORS: [&str; 36] = [
+    const CODE_INDICATORS: [&str; 38] = [
         "import ",
         "from ",
         "export ",
@@ -734,9 +739,18 @@ fn heading_start_re() -> &'static Regex {
 }
 
 /// The `keep_markdown_sections` split pattern `(?m)(^[ \t]*#{1,6}\s+[^\n]+)`.
+///
+/// Python's `(?m)` matters: it is what makes `^` anchor at every line start
+/// rather than only at offset 0, so this scans the whole document instead of
+/// finding nothing unless the text opens with a heading.
 fn heading_line_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[ \t]*#{1,6}\s+[^\n]+").expect("valid"))
+    RE.get_or_init(|| {
+        RegexBuilder::new(r"^[ \t]*#{1,6}\s+[^\n]+")
+            .multi_line(true)
+            .build()
+            .expect("valid")
+    })
 }
 
 /// A heading line whose title starts with `heading`.
@@ -1414,11 +1428,10 @@ fn filter_tool_result_blocks_user(
         return;
     };
     for block in blocks.iter_mut() {
-        if !matches!(block.r#type.as_str(), "tool_result") {
+        if user_content_block_view(block).type_str() != "tool_result" {
             continue;
         }
-        let imc_proxy_types::types::anthropic::AnthropicUserContentBlock::ToolResult(b) = block
-        else {
+        let AnthropicUserContentBlock::ToolResult(b) = block else {
             continue;
         };
         let (tool_name, command) = tool_uses
@@ -1480,20 +1493,23 @@ fn filter_tool_result_content_block(
             for b in blocks {
                 // Only text sub-blocks are filterable; anything else passes
                 // through untouched.
-                if b.r#type == "text" {
-                    let original = b.text.clone();
-                    if original.is_empty() {
-                        new_blocks.push(b.clone());
-                        continue;
+                let ContentBlock::Text(original) = tool_result_content_block_view(b) else {
+                    new_blocks.push(b.clone());
+                    continue;
+                };
+                if original.is_empty() {
+                    new_blocks.push(b.clone());
+                    continue;
+                }
+                let filtered = filter_tool_result_content(&original, command, tool_name);
+                if filtered != original {
+                    let mut clone = b.clone();
+                    if let AnthropicToolResultContentBlock::Text(t) = &mut clone {
+                        t.text = filtered;
                     }
-                    let filtered = filter_tool_result_content(&original, command, tool_name);
-                    if filtered != original {
-                        let mut clone = b.clone();
-                        clone.text = filtered;
-                        new_blocks.push(clone);
-                        any_changed = true;
-                        continue;
-                    }
+                    new_blocks.push(clone);
+                    any_changed = true;
+                    continue;
                 }
                 new_blocks.push(b.clone());
             }

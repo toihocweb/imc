@@ -38,7 +38,7 @@ cd imc-rs
 cargo build --release
 # binaries: target/release/imc  (CLI)  +  target/release/imc-proxyd (proxy daemon)
 
-cargo test --release      # 133 tests, 0 failures
+cargo test --release      # 136 tests, 0 failures
 ```
 
 Requires a C compiler — tree-sitter grammars and the bundled SQLite build from source.
@@ -170,8 +170,10 @@ Markdown/JSON/YAML/TOML and friends are indexed as text windows.
 | `imc-proxy-types`, `imc-proxy-copilot` | done (wire types + Anthropic⇄Responses⇄ChatCompletions) |
 | `imc-proxy` (routes, upstream providers, memory injection) | port in progress — `imc claude setup` wires the config, the daemon still needs this |
 
-Verified on the original `imc` Python repo: 133 tests pass, 183 files → 1 070 symbols /
-6 609 edges, full index ~2.0 s, re-index ~0.2 s.
+Verified on the original `imc` Python repo: 136 tests pass, 183 files → 1 070 symbols /
+6 609 edges, full index ~2.0 s, re-index ~0.2 s. `imc trace` runs the ported
+`trace.py` orchestration over the ported tracer (adapter in `imc-cli-extra`);
+undefined callees keep their reverse edges, so blast radius works for externals too.
 
 ---
 
