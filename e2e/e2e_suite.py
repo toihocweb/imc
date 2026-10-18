@@ -206,11 +206,19 @@ def new_case(tag):
 def imc_env(data_dir, vectors):
     env = dict(os.environ)
     env["IMC_DATA_DIR"] = str(data_dir)
-    env["IMC_CONFIG"] = str(data_dir / "config.yaml")
+    cfg_path = data_dir / "config.yaml"
+    env["IMC_CONFIG"] = str(cfg_path)
     if not vectors:
         # Hermetic: never inherit a real embedding key from the user's config.
+        # An empty `config.yaml` has to EXIST: with IMC_CONFIG pointing at a
+        # missing file the loader falls back to ~/.indexer_config.yaml or
+        # ~/.imc_config.yaml, and a machine that has one gets real embedding
+        # calls during indexing (and a vector leg in every search).
         for k in ("IMC_EMBED_API_KEY", "OPENAI_API_KEY", "IMC_VECTOR"):
             env.pop(k, None)
+        if not cfg_path.exists():
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            cfg_path.write_text("# hermetic e2e config: no llm / embedding sections\n")
     return env
 
 
@@ -515,6 +523,21 @@ def suite_reader(root, data):
         return "typo suggests the real symbol, via a command that exists"
 
     check("D6 --method typo suggests the real symbol", method_typo_suggests_the_real_name)
+
+    def read_resolves_against_the_project_root():
+        # `-C` points the tool at another project while the cwd stays put, so a
+        # project-relative path must still resolve (the instruction block tells
+        # agents to pass `-C`).
+        env = imc_env(data, False)
+        p = subprocess.run(
+            [str(IMC), "-C", str(root), "read", "src/billing.py", "--symbols"],
+            cwd=tempfile.gettempdir(), env=env, capture_output=True, text=True, timeout=120,
+        )
+        assert p.returncode == 0, (p.stdout + p.stderr)[:300]
+        assert "calculate_tax" in p.stdout, p.stdout[:300]
+        return "resolved against -C root from an unrelated cwd"
+
+    check("D7 read resolves a project-relative path under -C", read_resolves_against_the_project_root)
 
 
 # -- E. memory -----------------------------------------------------------------

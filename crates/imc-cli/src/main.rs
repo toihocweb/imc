@@ -62,9 +62,11 @@ enum Command {
     },
     /// Show definitions/callees/callers for a symbol.
     Graph { symbol: String },
-    /// Print index statistics.
+    /// Print index statistics (Python's `imc status`).
+    #[command(alias = "status")]
     Stats,
-    /// List registered projects.
+    /// List registered projects (Python's `imc list`).
+    #[command(alias = "list")]
     Projects,
     /// Store a durable project memory.
     #[command(name = "memory-add")]
@@ -123,7 +125,9 @@ enum Command {
         #[command(subcommand)]
         action: ProxyAction,
     },
-    /// Token-optimised file reader (Claude Code Read replacement).
+    /// Token-optimised file reader (Claude Code Read replacement). Python ships
+    /// the same reader as `imc find` / `imc-read`.
+    #[command(alias = "find")]
     Read {
         /// Path to the file to read.
         file: PathBuf,
@@ -768,6 +772,25 @@ fn main() -> Result<()> {
             }
         },
         Command::Read { file, symbols, method, offset, limit, raw } => {
+            // The reader opens the path as given, which is cwd-relative like
+            // Python (where the cwd is always inside the project). With an
+            // explicit `-C <root>` the cwd may be elsewhere, and the instruction
+            // block tells agents to pass `-C`, so fall back to the project root
+            // when the path does not exist relative to the cwd.
+            let resolved = {
+                let given = Path::new(file);
+                if given.exists() {
+                    given.to_path_buf()
+                } else {
+                    let under_root = root.join(given);
+                    if under_root.exists() {
+                        under_root
+                    } else {
+                        given.to_path_buf()
+                    }
+                }
+            };
+            let file = resolved.to_string_lossy().to_string();
             let opts = imc_find::find::FindOptions {
                 limit: *limit,
                 offset: *offset,
@@ -781,7 +804,7 @@ fn main() -> Result<()> {
             // `--json read` must stay machine-readable (the global --json flag
             // promises JSON for every command).
             if cli.json && *symbols && !*raw {
-                let path = std::path::Path::new(&file);
+                let path = Path::new(&file);
                 let text = std::fs::read_to_string(path)
                     .map_err(|e| anyhow::anyhow!("[imc read] Failed to read {}: {e}", path.display()))?;
                 let outline = imc_find::find::outline_symbols_struct(&text, path);
@@ -789,7 +812,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let out = imc_find::find::run_find(&file.to_string_lossy(), opts)?;
+            let out = imc_find::find::run_find(&file, opts)?;
             print!("{out}");
         }
         Command::Config { action } => {

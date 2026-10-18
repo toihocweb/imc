@@ -7,6 +7,11 @@
 #   key files cited   7.3 -> 8.3 of 13
 #   invalid citations 4.3 -> 0.0        (A: 1.7; zero across all three runs)
 #
+# Re-measured after the "Next command" flag rename in this prompt block
+# (`imc trace <symbol> -d callers` -> `--callers`, because -d is depth here):
+# same frozen context, 3 runs -- grounded 8.0 of 8, key files 9 of 13,
+# invalid citations 0. The rename did not move the numbers.
+#
 # Against main/prompts/imc_search.md, the prompt it replaces:
 #   * grounding stated as an evidence rule, not a preference.
 #   * line numbers copied from the context, never computed -- the original
