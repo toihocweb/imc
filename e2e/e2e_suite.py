@@ -424,6 +424,35 @@ def suite_trace(root, data):
 
     check("C6 unknown symbol exits 1", unknown_symbol)
 
+    def unknown_symbol_reverse():
+        # Regression: reverse tracing skipped the not-found check entirely, so
+        # a typo printed nothing and exited 0 — an agent reads that as
+        # "no callers" rather than "no such symbol".
+        p = run_imc(["trace", "definitely_not_a_symbol", "-d", "callers"], root, data, expect_rc=1)
+        assert "not found" in (p.stdout + p.stderr).lower(), (p.stdout + p.stderr)[:200]
+        return "rc=1, not a silent empty tree"
+
+    check("C7 unknown symbol with -d callers still exits 1", unknown_symbol_reverse)
+
+    def unknown_symbol_every_flag():
+        for extra in (["-d", "callers", "--depth", "1"], ["-d", "calllees"],
+                      ["--depth", "2"], ["--json"], ["-d", "callers", "--json"]):
+            run_imc(["trace", "definitely_not_a_symbol", *extra], root, data, expect_rc=1)
+        return "5 flag combinations all exit 1"
+
+    check("C8 unknown symbol exits 1 under every flag combination", unknown_symbol_every_flag)
+
+    def external_name_still_traces():
+        # The opposite half: names that have no definition of their own but are
+        # called from the codebase must keep working. `sum` is a builtin and the
+        # fixture calls it in generate_invoice; `print` would prove nothing here
+        # because nothing in the fixture calls it.
+        p = run_imc(["trace", "sum", "-d", "callers", "--depth", "1"], root, data)
+        assert p.stdout.strip(), "external/builtin name lost its callers"
+        return f"{len([l for l in p.stdout.splitlines() if l.strip()])} lines of callers"
+
+    check("C9 builtin/external names still trace", external_name_still_traces)
+
 
 # -- D. reader -----------------------------------------------------------------
 def suite_reader(root, data):

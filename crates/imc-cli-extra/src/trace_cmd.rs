@@ -92,6 +92,16 @@ pub trait Tracer {
     fn trace_callers(&self, raw_target_name: &str, target_file: Option<&str>, max_depth: usize) -> Value;
     /// `tracer.format_ascii_tree(tree, direction=...)`.
     fn format_ascii_tree(&self, tree: &Value, direction: Direction) -> String;
+    /// Is `target` referenced anywhere in the graph?
+    ///
+    /// Reverse tracing (`-d callers`) legitimately accepts names that have no
+    /// definition of their own — builtins and imported helpers like `print` are
+    /// only ever a *call target*. That allowance must not extend to names that
+    /// appear nowhere at all, or a typo silently returns "no callers".
+    fn target_is_known(&self, target: &str) -> bool {
+        let _ = target;
+        true
+    }
 }
 
 /// Failure cases; each carries the stderr lines and process exit code of the Python version.
@@ -150,7 +160,10 @@ pub fn run_trace(tracer: &dyn Tracer, opts: &TraceOptions) -> Result<TraceOutput
     let candidates = tracer.resolve_target(&opts.target, opts.file_filter.as_deref());
     let is_reverse = opts.is_reverse();
 
-    if candidates.is_empty() && !is_reverse {
+    // No definition: fatal outright when walking forward, and fatal for reverse
+    // too unless the name is referenced somewhere as a call target. Before this
+    // guard, `imc trace typo -d callers` printed nothing and exited 0.
+    if candidates.is_empty() && (!is_reverse || !tracer.target_is_known(&opts.target)) {
         return Err(TraceError::SymbolNotFound { target: opts.target.clone(), project });
     }
 

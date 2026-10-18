@@ -66,6 +66,16 @@ impl Tracer for ImcTracer<'_> {
             .unwrap_or(Value::Null)
     }
 
+    /// Known == it has a definition, or it is called from somewhere. Builtins
+    /// (`print`) and imported helpers satisfy the second half; a typo satisfies
+    /// neither and correctly reports "symbol not found".
+    fn target_is_known(&self, target: &str) -> bool {
+        if !self.store.find_symbols_by_name(target, 1).is_empty() {
+            return true;
+        }
+        !self.store.callers(target).is_empty()
+    }
+
     fn format_ascii_tree(&self, tree: &Value, direction: Direction) -> String {
         match direction {
             Direction::Callees => serde_json::from_value::<CalleeNode>(tree.clone())
