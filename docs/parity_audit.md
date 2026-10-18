@@ -39,6 +39,7 @@ not redone. Dispositions:
 | context 5 | routes lost their `APIRouter(prefix=...)` | context uses `EndpointBridge` |
 | context 6 | strict UTF-8 read failed on a stray byte; Python uses `errors="ignore"` | `read_text_lossy` |
 | context 7 | related-test scan stopped differently mid-walk | stops after a directory, like Python |
+| context 13 | Java sub-route regex excluded spaces, so `@GetMapping("/list all")` lost its sub-path (Python's `[^"')]*` accepts spaces) | fixed, unit test |
 | context 8 | Rust-only `.cy.js` suffix | removed |
 | context 10 | i18n JSON booleans showed `[missing]`; Python prints `True`/`False` | resolved |
 | context 11 | nested i18n key could shadow its ancestor (sorted map) | `preserve_order` |
@@ -77,7 +78,7 @@ Python indexes them at top level whatever the case, and skips nested ones.
 | trace 9 | callers of an undefined name (builtin/stdlib) are reported; Python prints the bare name | measured on /root/imc and the e2e fixture — "nothing calls this" is a different claim from "this has no definition" |
 | trace 10 | binds any name unique in the file *or* the project; Python binds same-file lexical/bare calls only | richer graph, needed for Java/Go/TS method calls that Python drops |
 | context 4 | no semantic-index fallback in `locate_target_file` | needs an embedder + project handle; the filesystem scan and keyword scoring are ported |
-| context 14 | line numbers use Rust `lines()` (form-feed/NEL/LS are content), Python `splitlines()` splits on them | documented in the module; only affects files containing those separators |
+| context 14 | line numbers used Rust `lines()`; Python's `splitlines()` also breaks on `\r`, `\v`, `\f`, `\x1c-\x1e`, NEL, U+2028/9 | fixed: `py_splitlines` |
 | context 15 | `callers:` are bare short names from the store; Python prints `name [file:line]` | the store has no caller line for the ASTTracer path |
 
 ## Supersets (Python rejects, the port accepts)
@@ -102,11 +103,22 @@ are what the instruction block teaches, so agents see one spelling only.
 
 ## Cosmetic (no behaviour change)
 
-search 3, 7, 9, 10, 11; trace 14, 15, 16, 18, 19; context 13, 17, 18. Rich vs
+search 3, 7, 9, 10, 11; trace 14, 15, 16, 18, 19; context 17, 18. Rich vs
 plain result rendering, `no matches` vs `No results found.`, stdout vs stderr for
 the not-indexed error, Python's INFO/ERROR log lines interleaved on stdout,
 `--json` node-type/id spellings, help/usage wording, and candidate ordering when
 a name has several definitions.
+
+## A finding that did not survive checking
+
+The trace audit reported, ten times over, that the port is missing Python's
+"Skipping builtin call chain" diagnostic. It does not exist: `grep -rn "Skipping"
+/root/imc/main --include=*.py` matches only unrelated KB/memory/parser log lines,
+there is no `diagnostics.Skipping` call in `main/core/tracer.py`, and Python's
+`imc trace` prints no such line. Nothing was implemented for it. Audit output is
+a claim, not evidence — the same audit's other findings (the `-d` flag, route-node
+duplication, impl/struct collision) all reproduced when run by hand, and those
+were fixed.
 
 ## Open
 

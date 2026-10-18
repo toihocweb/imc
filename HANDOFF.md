@@ -14,7 +14,7 @@ running the tool, not read off the code.
 ## Verified state (end of session)
 
 ```
-unit tests   305 passed, 0 failed   (cargo test --release, whole workspace)
+unit tests   307 passed, 0 failed   (cargo test --release, whole workspace)
 e2e suite     64 passed             (python3 e2e/e2e_suite.py) — was 49
 build         0 errors
 ```
@@ -66,6 +66,7 @@ c1617b5 context: tolerate invalid UTF-8 like Python, and record the parity audit
 10650bc cli/e2e: Python command aliases, -C path resolution, and a hermetic test run
 93bb872 cli: name the offending path when -C does not resolve
 da4d76c endpoints: read Flask's @app.route, which neither implementation saw
+<NEXT> context: restore the Java sub-path Python keeps, and match splitlines
 ```
 
 The two items the last handoff listed as pending are both done: prefixed-router

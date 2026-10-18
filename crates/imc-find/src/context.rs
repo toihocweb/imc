@@ -134,7 +134,10 @@ pub fn build_backend_dossier(
     root_dir: &Path,
     store: Option<&Store>,
 ) -> String {
-    let lines: Vec<&str> = content.lines().collect();
+    // `content.splitlines()`, not Rust's `lines()`: Python also breaks on
+    // \r, \v, \f, \x1c-\x1e, \x85, U+2028/U+2029, so `[line N]` matched it
+    // exactly only for files that use plain newlines.
+    let lines: Vec<&str> = py_splitlines(content);
     let ext = ext_lower(source_file);
 
     // 1. Class / structure declaration & annotations.
@@ -238,8 +241,11 @@ pub fn build_backend_dossier(
             }
             base_route = base_route.trim_end_matches('/').to_string();
         }
+        // `[^"')]*`, not `[^"') ]*`: Python's capture accepts spaces, so
+        // `@GetMapping("/list all")` keeps its sub-path. Excluding the space
+        // made the whole optional group fail to match and silently dropped it.
         let route_re = Regex::new(
-            r#"@((?:Get|Post|Put|Delete|Patch)Mapping)\s*(?:\(\s*(?:value\s*=\s*)?["']?([^"'\) ]*)["']?\s*\))?"#,
+            r#"@((?:Get|Post|Put|Delete|Patch)Mapping)\s*(?:\(\s*(?:value\s*=\s*)?["']?([^"'\)]*)["']?\s*\))?"#,
         )
         .unwrap();
         let fn_re = Regex::new(
@@ -370,6 +376,53 @@ pub fn build_backend_dossier(
     }
 
     output.join("\n")
+}
+
+/// Python's `str.splitlines()` line boundaries: \n, \r, \r\n, \v (0x0b),
+/// \f (0x0c), \x1c, \x1d, \x1e, \x85, U+2028 and U+2029. Rust's `lines()`
+/// only breaks on \n, which shifted every `[line N]` in a file containing one
+/// of the others.
+fn py_splitlines(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        let sep_len = match b {
+            b'\n' | 0x0b | 0x0c | 0x1c | 0x1d | 0x1e => 1,
+            b'\r' => {
+                if bytes.get(i + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                }
+            }
+            // U+0085 NEL
+            0xc2 if bytes.get(i + 1) == Some(&0x85) => 2,
+            // U+2028 LS / U+2029 PS
+            0xe2 if bytes.get(i + 1) == Some(&0x80)
+                && matches!(bytes.get(i + 2), Some(&0xa8) | Some(&0xa9)) =>
+            {
+                3
+            }
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        if let Ok(part) = std::str::from_utf8(&bytes[start..i]) {
+            out.push(part);
+        }
+        i += sep_len;
+        start = i;
+    }
+    if start < bytes.len() {
+        if let Ok(part) = std::str::from_utf8(&bytes[start..]) {
+            out.push(part);
+        }
+    }
+    out
 }
 
 /// The dossier reports the *decorator's* line while the bridge reports the
@@ -1234,6 +1287,35 @@ mod tests {
         let resolved = resolve_i18n_keys(&keys, &[f]);
         assert_eq!(resolved.get("flag").map(|s| s.as_str()), Some("True"));
         assert_eq!(resolved.get("off").map(|s| s.as_str()), Some("False"));
+    }
+
+    #[test]
+    fn py_splitlines_matches_python_boundaries() {
+        assert_eq!(py_splitlines("a\nb"), vec!["a", "b"]);
+        assert_eq!(py_splitlines("a\n"), vec!["a"]);
+        assert_eq!(py_splitlines("a\n\n"), vec!["a", ""]);
+        assert_eq!(py_splitlines(""), Vec::<&str>::new());
+        // \r, \r\n and the exotic separators Python's splitlines knows.
+        assert_eq!(py_splitlines("a\rb"), vec!["a", "b"]);
+        assert_eq!(py_splitlines("a\r\nb"), vec!["a", "b"]);
+        assert_eq!(py_splitlines("a\x0cb"), vec!["a", "b"]);
+        assert_eq!(py_splitlines("a\u{85}b"), vec!["a", "b"]);
+        assert_eq!(py_splitlines("a\u{2028}b"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn java_sub_route_keeps_a_literal_with_spaces() {
+        // Python's capture class accepts spaces; excluding them made the whole
+        // optional group fail, so the sub-path vanished.
+        let root = tmp_dir("java-space");
+        let f = write(
+            &root,
+            "src/main/java/Ctrl.java",
+            "@RestController\n@RequestMapping(\"/api\")\npublic class Ctrl {\n    @GetMapping(\"/list all\")\n    public String spaced() { return \"\"; }\n}\n",
+        );
+        let content = std::fs::read_to_string(&f).unwrap();
+        let d = build_backend_dossier(&f, "Ctrl.java", &content, &root, None);
+        assert!(d.contains("GET /api/list all"), "{d}");
     }
 
     #[test]
