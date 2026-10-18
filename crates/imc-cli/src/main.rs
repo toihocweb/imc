@@ -229,6 +229,15 @@ fn resolve_root(cfg: &Config, project: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 fn main() -> Result<()> {
+    // Rust ignores SIGPIPE, so `imc search ... | head` prints a panic
+    // ("failed printing to stdout: Broken pipe") instead of exiting quietly.
+    // Restoring the default disposition makes the process die on SIGPIPE like
+    // any other Unix filter.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     let cli = Cli::parse();
     let cfg = Config::default();
     cfg.ensure_dirs()?;

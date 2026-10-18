@@ -991,6 +991,7 @@ dependencies = [
  "imc-search",
  "imc-support",
  "imc-trace",
+ "libc",
  "rayon",
  "serde",
  "serde_json",

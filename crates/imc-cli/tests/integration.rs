@@ -379,3 +379,62 @@ fn cosine_below_floor_is_rejected() {
     assert!(miss.is_empty(), "orthogonal query must not match: {miss:?}");
 }
 
+// ───────────────────── prompt claims must be real commands ─────────────────────
+
+/// The Python original's prompt recommended `imc callers` and `imc trace --both`;
+/// neither exists in this binary, so following it dead-ends. Every `imc <cmd>`
+/// the shipped block mentions must resolve to a real subcommand.
+#[test]
+fn instruction_block_only_references_real_subcommands() {
+    const REAL: &[&str] = &[
+        "index", "search", "graph", "stats", "projects", "memory-add", "memory-prune",
+        "memory-search", "memory-list", "memory-delete", "learn", "claude", "proxy",
+        "read", "trace", "context", "config",
+    ];
+
+    let block = imc_cli::claude::instruction_block();
+    assert!(block.contains(imc_cli::claude::BEGIN_MARKER), "marker missing");
+
+    let mut referenced: Vec<String> = Vec::new();
+    // Odd segments of a backtick split are the ones *inside* backticks — that is
+    // where the prompt writes its commands.
+    for (i, inside) in block.split('`').enumerate() {
+        if i % 2 == 0 {
+            continue;
+        }
+        let mut words = inside.split_whitespace();
+        if words.next() == Some("imc") {
+            if let Some(cmd) = words.next() {
+                if !cmd.starts_with('-') && !referenced.contains(&cmd.to_string()) {
+                    referenced.push(cmd.to_string());
+                }
+            }
+        }
+    }
+
+    assert!(!referenced.is_empty(), "no `imc <cmd>` references parsed");
+    let unknown: Vec<&String> = referenced
+        .iter()
+        .filter(|c| !REAL.contains(&c.as_str()))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "instruction block references commands that do not exist: {unknown:?} (real: {REAL:?})"
+    );
+}
+
+/// The Python prompt taught `imc trace --both`, which was never a flag here.
+#[test]
+fn instruction_block_does_not_recommend_nonexistent_flags() {
+    let block = imc_cli::claude::instruction_block();
+    for bad in ["--both", "imc callers", "imc-read"] {
+        assert!(
+            !block.contains(bad),
+            "prompt must not mention {bad:?}: it does not exist in this binary"
+        );
+    }
+    // The flags the block does teach must be the ones that work.
+    assert!(block.contains("-d callers"), "should teach `trace -d callers`");
+    assert!(block.contains("-d callees"), "should teach `trace -d callees`");
+}
+

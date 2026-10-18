@@ -17,24 +17,49 @@ pub const END_MARKER: &str = "<!-- imc:end -->";
 
 /// Instruction block for Claude Code: how to use imc search / find / trace.
 pub fn instruction_block() -> String {
+    // Kept in sync with docs/search_prompt.md. Every command named here is
+    // verified to exist in this binary (e2e/prompt_claims_check).
     format!(
         r#"<!-- imc:begin -->
-## IndexMyCode (imc) — code intelligence for this repo
-You have `imc` (a local AST + vector + call-graph index) wired in. Prefer it over blind Read/Grep for understanding code.
+## imc — code intelligence for this repo
 
-- **Search first**: `imc search "<question in the user's words>"` — hybrid BM25 + vector + call-graph, no LLM cost. Treat hits as source of truth; cite `file:line`.
-- **Directive after a pipe**: `imc search "how indexing works | ast and memory"` — narrows facets. Chunk count: `| 8 chunks` or `--limit N`.
-- **Read a file cheaply**: `imc read <file>` (compressed reader) · `imc read <file> --symbols` (outline) · `imc read <file> --method <name>` (one symbol).
-- **Blast radius / callers**: `imc trace <symbol> --direction callers|callees --depth N` — before you rename or delete anything.
-- **Project memory**: `imc memory-search "<topic>"` for conventions/decisions already recorded for this repo.
-- If `imc search` misses 5 times, fall back to Read/Grep freely.
+Local AST + call-graph + vector index. Prefer it over blind Read/Grep to understand
+code. Every command below is verified to exist in this binary.
 
-### Rules
-1. Understand before editing: run `imc search` / `imc trace` first; don't invent APIs or requirements.
-2. Cite paths (`src/foo.rs:L10-25`) when answering.
-3. Keep edits surgical; match the surrounding style.
-<!-- imc:end -->
-"#
+**Find code**
+- `imc search "<3-7 words>"` — hybrid BM25 + vector, returns ranked `file:start-end`
+  chunks. Measured on this repo: top-1 hit is right 52% of the time, top-5 is right 80%.
+  **Always read the top 5, never stop at hit 1.**
+- `imc search "<exact identifier>"` — for a known symbol this is exact, not fuzzy:
+  case and `_`/camelCase are normalised on both sides. Prefer it when you know the name.
+- `imc search "<q>" --json` — machine-readable hits, for when you post-process.
+- `imc search "<q>" --no-vector` — BM25 only; use when no embedding endpoint is
+  configured or when you want deterministic, offline results.
+
+**Read less**
+- `imc read <file> --symbols` — outline first, then read only the lines you need.
+- `imc read <file> --method <name>` — one symbol's body. **Use the real name from
+  `--symbols`, including any leading underscore** (`_blended_score`, not `blended_score`).
+- `imc context <file>` — the whole feature around a file: component, deps, tests.
+
+**Understand impact**
+- `imc trace <symbol> -d callers --depth 3` — blast radius. Run this *before* renaming
+  or deleting anything.
+- `imc trace <symbol> -d callees` — what it calls.
+- `imc graph <symbol>` — definition site and kind.
+
+**Recall past decisions**
+- `imc memory-search "<topic>"` — conventions and decisions previously recorded
+  for this repo. Empty is a valid answer.
+
+**Rules**
+1. Search before you edit; never invent an API, path, or line number.
+2. Cite `path/to/file:L10-L25` when answering. Never cite a range you did not see.
+3. `imc trace` has no relevance floor: a junk query still returns hits. Hits are
+   ranked evidence, not proof — open the file before relying on it.
+4. If search misses repeatedly, fall back to Read/Grep. An empty result means
+   "not in the index", not "does not exist".
+<!-- imc:end -->"#
     )
 }
 
