@@ -6,6 +6,15 @@ use imc_core::{config::Config, store};
 use imc_embed::HashingEmbedder;
 use imc_search::{self, SearchOptions};
 
+/// Hermetic config for tests: isolated data dir and **no** embedding endpoint,
+/// so a real key in ~/.imc_config.yaml can never make tests hit the network.
+fn test_cfg(root: &std::path::Path) -> Config {
+    let mut cfg = Config::default();
+    cfg.data_dir = root.join(".imc-data");
+    cfg.embedding.api_key = None;
+    cfg
+}
+
 fn temp_root(tag: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("imc-rs-test-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -48,8 +57,7 @@ def process_refund(order_id):
     )
     .unwrap();
 
-    let mut cfg = Config::default();
-    cfg.data_dir = root.join(".imc-data");
+    let cfg = test_cfg(&root);
     let stats = run_index(&cfg, &root, &[], true);
     assert!(stats.symbols >= 3, "expected symbols, got {}", stats.symbols);
     assert!(stats.edges >= 1, "expected call edges, got {}", stats.edges);
@@ -85,8 +93,7 @@ fn indexes_rust_and_javascript() {
     )
     .unwrap();
 
-    let mut cfg = Config::default();
-    cfg.data_dir = root.join(".imc-data");
+    let cfg = test_cfg(&root);
     let stats = run_index(&cfg, &root, &[], true);
     assert!(stats.symbols >= 2, "symbols: {}", stats.symbols);
 }
@@ -96,8 +103,7 @@ fn incremental_index_skips_unchanged_files() {
     let root = temp_root("incr");
     fs::write(root.join("src/a.py"), "def alpha():\n    return 1\n").unwrap();
 
-    let mut cfg = Config::default();
-    cfg.data_dir = root.join(".imc-data");
+    let cfg = test_cfg(&root);
     let first = run_index(&cfg, &root, &[], false);
     assert_eq!(first.new_files, 1);
 
@@ -117,8 +123,7 @@ fn deleted_files_are_dropped() {
     fs::write(root.join("src/keep.py"), "def keep():\n    return 1\n").unwrap();
     fs::write(root.join("src/gone.py"), "def gone():\n    return 1\n").unwrap();
 
-    let mut cfg = Config::default();
-    cfg.data_dir = root.join(".imc-data");
+    let cfg = test_cfg(&root);
     run_index(&cfg, &root, &[], false);
     fs::remove_file(root.join("src/gone.py")).unwrap();
     let stats = run_index(&cfg, &root, &[], false);
@@ -136,8 +141,7 @@ fn memory_crud_and_dedup() {
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(root.join("src/m.py"), "def f():\n    return 1\n").unwrap();
 
-    let mut cfg = Config::default();
-    cfg.data_dir = root.join(".imc-data");
+    let cfg = test_cfg(&root);
     run_index(&cfg, &root, &[], false);
     let store = store::open(&cfg.project_db(&root)).unwrap();
     let embedder = HashingEmbedder::new(384);
@@ -187,3 +191,191 @@ Some unrelated line of prose.
     assert!(cands.iter().any(|c| c.category == "rule"));
     assert!(cands.iter().any(|c| c.category == "decision"));
 }
+
+// ───────────────────────── memory retrieval regressions ─────────────────────────
+
+fn mem_root(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("imc-memfix-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/a.py"), "def f():\n    return 1\n").unwrap();
+    dir
+}
+
+/// Regression: the candidate query used to be `ORDER BY importance DESC LIMIT
+/// limit*6`, so a low-importance memory was never scored at all — an exact
+/// lexical hit lost to unrelated high-importance filler.
+#[test]
+fn low_importance_memory_is_still_retrievable() {
+    let root = mem_root("lowimp");
+    let cfg = test_cfg(&root);
+    run_index(&cfg, &root, &[], false);
+    let store = store::open(&cfg.project_db(&root)).unwrap();
+
+    for i in 0..12 {
+        imc_memory::add(
+            &store,
+            &format!("filler memory number {i} about unrelated topics"),
+            "note",
+            &[],
+            &[],
+            0.9,
+            "test",
+        )
+        .unwrap();
+    }
+    let id = imc_memory::add(
+        &store,
+        "zebra migration requires double flip confirmation",
+        "note",
+        &[],
+        &[],
+        0.01,
+        "test",
+    )
+    .unwrap()
+    .expect("inserted");
+
+    let hits = imc_memory::retrieve(&store, None, "zebra migration", &[], 5).unwrap();
+    assert!(
+        hits.first().map(|h| h.memory.id) == Some(id),
+        "exact match must rank first despite 0.01 importance: {:?}",
+        hits.iter().map(|h| (&h.memory.content, h.score)).collect::<Vec<_>>()
+    );
+}
+
+/// Regression: cosine is never exactly 0, so without a relevance floor a
+/// nonsense query returned the highest-importance filler.
+#[test]
+fn nonsense_query_returns_nothing() {
+    let root = mem_root("nonsense");
+    let cfg = test_cfg(&root);
+    run_index(&cfg, &root, &[], false);
+    let store = store::open(&cfg.project_db(&root)).unwrap();
+
+    for i in 0..5 {
+        imc_memory::add(
+            &store,
+            &format!("filler memory number {i} about unrelated topics"),
+            "note",
+            &[],
+            &[],
+            0.9,
+            "test",
+        )
+        .unwrap();
+    }
+    let hits = imc_memory::retrieve(&store, None, "quantum banana teleport protocol", &[], 5).unwrap();
+    assert!(hits.is_empty(), "unrelated query must not match: {hits:?}");
+}
+
+/// `recall` must reinforce, otherwise the usage/recency terms never move.
+#[test]
+fn recall_reinforces_returned_memories() {
+    let root = mem_root("reinforce");
+    let cfg = test_cfg(&root);
+    run_index(&cfg, &root, &[], false);
+    let store = store::open(&cfg.project_db(&root)).unwrap();
+    let id = imc_memory::add(&store, "deploy pipeline must run rustfmt before commit", "note", &[], &[], 0.6, "test")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(imc_memory::get(&store, id).unwrap().unwrap().use_count, 0);
+    imc_memory::recall(&store, None, "deploy pipeline rustfmt", &[], 5).unwrap();
+    let after = imc_memory::get(&store, id).unwrap().unwrap();
+    assert_eq!(after.use_count, 1, "recall must bump use_count");
+    assert!(after.last_used > 0, "recall must stamp last_used");
+}
+
+/// Overlap term: a memory tracking a context file must outrank an otherwise
+/// equal memory that does not.
+#[test]
+fn context_path_overlap_boosts() {
+    let root = mem_root("overlap");
+    let cfg = test_cfg(&root);
+    run_index(&cfg, &root, &[], false);
+    let store = store::open(&cfg.project_db(&root)).unwrap();
+
+    imc_memory::add(&store, "shared keyword alpha memory", "note", &[], &[], 0.5, "test").unwrap();
+    let tracked = imc_memory::add(
+        &store,
+        "shared keyword beta memory",
+        "note",
+        &["src/a.py".to_string()],
+        &[],
+        0.5,
+        "test",
+    )
+    .unwrap()
+    .unwrap();
+
+    let hits = imc_memory::retrieve(&store, None, "shared keyword", &["src/a.py".to_string()], 5).unwrap();
+    assert_eq!(hits.first().map(|h| h.memory.id), Some(tracked), "overlap must win: {hits:?}");
+    assert!(hits[0].matched_paths.contains(&"src/a.py".to_string()));
+}
+
+/// Pins the relevance floor itself: cosine below the measured 0.45 gap must be
+/// rejected even though it is strictly greater than zero (which is what let a
+/// nonsense query return filler when the real embedding endpoint was wired up).
+#[test]
+fn cosine_below_floor_is_rejected() {
+    struct FakeEmbedder;
+    impl imc_embed::Embedder for FakeEmbedder {
+        fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+            Ok(texts
+                .iter()
+                .map(|t| {
+                    // Same-topic texts share a direction; unrelated ones are
+                    // orthogonal, so cos is 1.0 or exactly 0.0.
+                    let mut v = vec![0f32; 4];
+                    if t.to_lowercase().contains("zebra") {
+                        v[0] = 1.0;
+                    } else if t.to_lowercase().contains("filler") {
+                        v[1] = 1.0;
+                    } else {
+                        v[2] = 1.0;
+                    }
+                    v
+                })
+                .collect())
+        }
+        fn name(&self) -> String {
+            "fake".into()
+        }
+        fn dim(&self) -> usize {
+            4
+        }
+    }
+
+    let root = mem_root("floor");
+    let cfg = test_cfg(&root);
+    run_index(&cfg, &root, &[], false);
+    let store = store::open(&cfg.project_db(&root)).unwrap();
+
+    let id = imc_memory::add(&store, "zebra migration needs care", "note", &[], &[], 0.5, "test")
+        .unwrap()
+        .unwrap();
+    imc_memory::embed_and_store(
+        &store,
+        Some(&FakeEmbedder),
+        id,
+        "zebra migration needs care",
+    )
+    .unwrap();
+
+    // Same topic -> cosine 1.0 -> accepted.
+    let hits = imc_memory::retrieve(&store, Some(&FakeEmbedder), "zebra migration", &[], 5).unwrap();
+    assert!(!hits.is_empty(), "same-topic must pass the floor");
+
+    // Unrelated topic -> cosine 0.0 -> rejected even though importance is 0.5.
+    let miss = imc_memory::retrieve(
+        &store,
+        Some(&FakeEmbedder),
+        "total gibberish query",
+        &[],
+        5,
+    )
+    .unwrap();
+    assert!(miss.is_empty(), "orthogonal query must not match: {miss:?}");
+}
+

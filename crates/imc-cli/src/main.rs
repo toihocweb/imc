@@ -75,6 +75,10 @@ enum Command {
         query: String,
         #[arg(long, short = 'l', default_value_t = 5)]
         limit: usize,
+        /// File paths in the caller's context — memories tracking them get the
+        /// 0.10 overlap boost from Python's `_blended_score`.
+        #[arg(long, short = 'p')]
+        path: Vec<String>,
     },
     /// List stored memories.
     #[command(name = "memory-list")]
@@ -386,11 +390,11 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Command::MemorySearch { query, limit } => {
+        Command::MemorySearch { query, limit, path } => {
             let db = cfg.project_db(&root);
             let store = store::open(&db)?;
             let embedder = imc_embed::build(&cfg.embedding);
-            let hits = imc_memory::retrieve(&store, embedder.as_deref(), query, &[], *limit)?;
+            let hits = imc_memory::recall(&store, embedder.as_deref(), query, path, *limit)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {

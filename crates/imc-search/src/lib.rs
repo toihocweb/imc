@@ -71,7 +71,7 @@ const STOPWORDS: &[&str] = &[
 /// Two-phase lexical retrieval: strict conjunction first, then relax to OR
 /// when it cannot fill the candidate pool. `query_tokens` is the stopword-
 /// filtered token list, reused for the path boost.
-fn bm25_scores(store: &Store, query: &str, want: usize) -> Result<HashMap<i64, f64>> {
+fn bm25_scores(store: &Store, query: &str) -> Result<HashMap<i64, f64>> {
     let tokens = query_tokens(query);
     if tokens.is_empty() {
         return Ok(HashMap::new());
@@ -334,7 +334,7 @@ pub fn search(
 ) -> Result<Vec<SearchHit>> {
     let mut lists: Vec<HashMap<i64, f64>> = Vec::new();
 
-    let bm = bm25_scores(store, query, opts.limit)?;
+    let bm = bm25_scores(store, query)?;
     if !bm.is_empty() {
         lists.push(bm);
     }

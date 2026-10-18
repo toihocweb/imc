@@ -97,7 +97,9 @@ pub fn run(cfg: &Config, root: &Path, extra_ignores: &[String], force: bool) -> 
             // (`parser.py`, `mcp/server.py`) must hit FTS directly.
             let text = format!("{}:{}-{}\n{}", rel, c.start_line, c.end_line, c.text);
             let cid = store.insert_chunk(&rel, c.start_line, c.end_line, &text, c.sym_id.as_deref())?;
-            if let Some(v) = vectors.get(i) {
+            // A failed input comes back as an empty vector — skip rather than
+            // persist a 0-dim row that cosine can never score.
+            if let Some(v) = vectors.get(i).filter(|v| !v.is_empty()) {
                 store.insert_embedding(cid, v.len(), v)?;
             }
         }

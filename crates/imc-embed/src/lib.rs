@@ -3,7 +3,7 @@
 //! deterministic local hashing embedder so indexing still works offline
 //! (keyword-quality retrieval instead of semantic).
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use rayon::prelude::*;
 use serde::Deserialize;
 
@@ -134,6 +134,106 @@ impl RemoteEmbedder {
     }
 }
 
+/// Max chars per input. OpenAI-compatible endpoints cap at ~8k tokens and many
+/// proxies hard-fail with a bare 400 above that; truncating keeps a long code
+/// chunk embeddable instead of killing the whole index run.
+const MAX_INPUT_CHARS: usize = 6_000;
+
+/// Inputs sent per request.
+const BATCH: usize = 64;
+
+/// ureq 3 maps non-2xx to `Error::StatusCode(u16)` and throws the body away,
+/// which is exactly the information needed to debug a 400. Build an Agent that
+/// returns responses instead of errors so we can read the server's message.
+fn agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .new_agent()
+}
+
+/// Trim + cap an input. OpenAI-compatible endpoints cap at ~8k tokens and many
+/// proxies hard-fail above that; truncating keeps a long chunk embeddable
+/// instead of killing the whole index run. Empty input is rejected by the API.
+fn sanitize(text: &str) -> String {
+    let t = text.trim();
+    if t.is_empty() {
+        return " ".to_string();
+    }
+    if t.chars().count() > MAX_INPUT_CHARS {
+        let cut: String = t.chars().take(MAX_INPUT_CHARS).collect();
+        return format!("{cut}\n[truncated]");
+    }
+    t.to_string()
+}
+
+/// One request; `Err` carries a human-readable reason including the body.
+fn post_batch(
+    agent: &ureq::Agent,
+    url: &str,
+    key: &str,
+    model: &str,
+    batch: &[String],
+) -> std::result::Result<Vec<Vec<f32>>, String> {
+    let payload = serde_json::json!({ "model": model, "input": batch });
+    let mut resp = agent
+        .post(url)
+        .header("Authorization", format!("Bearer {key}"))
+        .header("Content-Type", "application/json")
+        .send_json(payload)
+        .map_err(|e| e.to_string())?;
+
+    let status = resp.status().as_u16();
+    if !(200..300).contains(&status) {
+        let body = resp.body_mut().read_to_string().unwrap_or_default();
+        let body: String = body.chars().take(300).collect();
+        return Err(if body.trim().is_empty() {
+            format!("HTTP {status} (empty body)")
+        } else {
+            format!("HTTP {status}: {body}")
+        });
+    }
+
+    let parsed: EmbeddingResponse = resp
+        .body_mut()
+        .read_json::<EmbeddingResponse>()
+        .map_err(|e| format!("decode embeddings response: {e}"))?;
+    // `index` is authoritative; some gateways return items out of order.
+    let mut out: Vec<Option<Vec<f32>>> = vec![None; batch.len()];
+    for item in parsed.data {
+        if item.index < out.len() {
+            out[item.index] = Some(item.embedding);
+        }
+    }
+    Ok(out.into_iter().map(|v| v.unwrap_or_default()).collect())
+}
+
+/// Embed with bisecting retry: a rejected batch splits and retries down to
+/// single inputs, so one pathological chunk cannot abort indexing the rest.
+/// Failed inputs come back as empty vectors (the caller skips those).
+fn embed_with_retry(
+    agent: &ureq::Agent,
+    url: &str,
+    key: &str,
+    model: &str,
+    batch: &[String],
+) -> Result<Vec<Vec<f32>>> {
+    match post_batch(agent, url, key, model, batch) {
+        Ok(v) => Ok(v),
+        Err(_) if batch.len() > 1 => {
+            let mid = batch.len() / 2;
+            let (a, b) = batch.split_at(mid);
+            let mut left = embed_with_retry(agent, url, key, model, a)?;
+            left.append(&mut embed_with_retry(agent, url, key, model, b)?);
+            Ok(left)
+        }
+        Err(e) => {
+            eprintln!("[imc-embed] skipping 1 input: {e}");
+            Ok(vec![Vec::new()])
+        }
+    }
+}
+
 impl Embedder for RemoteEmbedder {
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
@@ -145,26 +245,23 @@ impl Embedder for RemoteEmbedder {
             .as_deref()
             .ok_or_else(|| anyhow!("missing embedding API key"))?;
         let url = format!("{}/embeddings", self.cfg.base_url.trim_end_matches('/'));
-        let mut out: Vec<(usize, Vec<f32>)> = Vec::with_capacity(texts.len());
+        let agent = agent();
 
-        // Keep request bodies modest (OpenAI caps at 2048 inputs).
-        for batch in texts.chunks(128) {
-            let payload = serde_json::json!({ "model": self.cfg.model, "input": batch });
-            let resp = ureq::post(&url)
-                .header("Authorization", format!("Bearer {key}"))
-                .header("Content-Type", "application/json")
-                .send_json(payload)
-                .with_context(|| format!("POST {url}"))?;
-            let parsed: EmbeddingResponse = resp
-                .into_body()
-                .read_json::<EmbeddingResponse>()
-                .context("decode embeddings response")?;
-            for item in parsed.data {
-                out.push((item.index + out.len(), item.embedding));
-            }
+        let clean: Vec<String> = texts.iter().map(|t| sanitize(t)).collect();
+
+        // Batches run concurrently — a shared endpoint that serialises them
+        // costs nothing but wall-clock time.
+        let batches: Vec<&[String]> = clean.chunks(BATCH).collect();
+        let results: Vec<Result<Vec<Vec<f32>>>> = batches
+            .par_iter()
+            .map(|b| embed_with_retry(&agent, &url, key, &self.cfg.model, b))
+            .collect();
+
+        let mut out = Vec::with_capacity(clean.len());
+        for r in results {
+            out.extend(r?);
         }
-        out.sort_by_key(|(i, _)| *i);
-        Ok(out.into_iter().map(|(_, v)| v).collect())
+        Ok(out)
     }
 
     fn name(&self) -> String {

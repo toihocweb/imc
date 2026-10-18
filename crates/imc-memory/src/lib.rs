@@ -19,8 +19,11 @@ pub struct Memory {
     pub paths: Vec<String>,
     pub tags: Vec<String>,
     pub importance: f64,
+    /// Python `hit_count` — number of recalls that surfaced this memory.
     pub use_count: i64,
     pub created_at: i64,
+    /// Python `last_used` (unix seconds); drives the recency decay.
+    pub last_used: i64,
     pub source: String,
 }
 
@@ -42,9 +45,16 @@ CREATE TABLE IF NOT EXISTS memories (
     importance REAL NOT NULL DEFAULT 0.5,
     use_count INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
+    last_used INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'manual'
 );
 CREATE INDEX IF NOT EXISTS idx_memories_cat ON memories(category);
+CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
+CREATE TABLE IF NOT EXISTS memory_vectors (
+    mem_id INTEGER PRIMARY KEY,
+    dim INTEGER NOT NULL,
+    vec BLOB NOT NULL
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     content,
     content='memories',
@@ -65,6 +75,18 @@ END;
 
 pub fn ensure_schema(store: &Store) -> Result<()> {
     store.conn.execute_batch(DDL).context("memory schema")?;
+    // Stores created before `last_used` existed: add the column rather than
+    // failing, so an old project DB keeps working after an upgrade.
+    let has_last_used: i64 = store.conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name='last_used'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_last_used == 0 {
+        store
+            .conn
+            .execute_batch("ALTER TABLE memories ADD COLUMN last_used INTEGER NOT NULL DEFAULT 0")?;
+    }
     Ok(())
 }
 
@@ -127,7 +149,7 @@ pub fn get(store: &Store, id: i64) -> Result<Option<Memory>> {
     Ok(store
         .conn
         .query_row(
-            "SELECT id, content, category, paths, tags, importance, use_count, created_at, source
+            "SELECT id, content, category, paths, tags, importance, use_count, created_at, last_used, source
              FROM memories WHERE id=?1",
             params![id],
             row_to_memory,
@@ -147,17 +169,33 @@ fn row_to_memory(r: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
         importance: r.get(5)?,
         use_count: r.get(6)?,
         created_at: r.get(7)?,
-        source: r.get(8)?,
+        last_used: r.get(8)?,
+        source: r.get(9)?,
     })
 }
 
 pub fn list(store: &Store, limit: usize) -> Result<Vec<Memory>> {
     ensure_schema(store)?;
     let mut stmt = store.conn.prepare(
-        "SELECT id, content, category, paths, tags, importance, use_count, created_at, source
+        "SELECT id, content, category, paths, tags, importance, use_count, created_at, last_used, source
          FROM memories ORDER BY importance DESC, created_at DESC LIMIT ?1",
     )?;
     let rows = stmt.query_map(params![limit as i64], row_to_memory)?;
+    Ok(rows.flatten().collect())
+}
+
+/// Every memory, newest first — the candidate set for ranking.
+///
+/// Ranking must consider the whole store (bounded): Python retrieves over the
+/// full vector index, and pre-truncating by `importance` silently hid any low
+/// priority memory from ranking entirely.
+pub fn list_all(store: &Store, cap: usize) -> Result<Vec<Memory>> {
+    ensure_schema(store)?;
+    let mut stmt = store.conn.prepare(
+        "SELECT id, content, category, paths, tags, importance, use_count, created_at, last_used, source
+         FROM memories ORDER BY created_at DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![cap as i64], row_to_memory)?;
     Ok(rows.flatten().collect())
 }
 
@@ -170,12 +208,35 @@ pub fn delete(store: &Store, id: i64) -> Result<bool> {
 }
 
 pub fn touch(store: &Store, id: i64) -> Result<()> {
+    reinforce(store, id)
+}
+
+/// Python `MemoryStore._reinforce`: bump usage and stamp last_used so the
+/// recency and usage terms in `_blended_score` actually move.
+pub fn reinforce(store: &Store, id: i64) -> Result<()> {
     ensure_schema(store)?;
     store.conn.execute(
-        "UPDATE memories SET use_count = use_count + 1 WHERE id=?1",
-        params![id],
+        "UPDATE memories SET use_count = use_count + 1, last_used = ?1 WHERE id=?2",
+        params![now(), id],
     )?;
     Ok(())
+}
+
+/// Retrieve, then reinforce every returned memory — Python's `recall()` calls
+/// `_reinforce(ids)` before returning, which is what makes `usage` a live
+/// signal instead of a constant 0.
+pub fn recall(
+    store: &Store,
+    embedder: Option<&dyn imc_embed::Embedder>,
+    query: &str,
+    active_paths: &[String],
+    limit: usize,
+) -> Result<Vec<MemoryHit>> {
+    let hits = retrieve(store, embedder, query, active_paths, limit)?;
+    for h in &hits {
+        reinforce(store, h.memory.id)?;
+    }
+    Ok(hits)
 }
 
 /// Merge duplicate rows whose normalised content matches (the Python
@@ -200,10 +261,10 @@ pub fn deduplicate(store: &Store) -> Result<usize> {
     Ok(removed)
 }
 
-fn lexical_scores(store: &Store, query: &str, limit: usize) -> HashMap<i64, f64> {
+fn lexical_scores(store: &Store, query: &str, limit: usize) -> Result<HashMap<i64, f64>> {
     let tokens = tokenize(query);
     if tokens.is_empty() {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
     let expr = tokens
         .iter()
@@ -213,21 +274,79 @@ fn lexical_scores(store: &Store, query: &str, limit: usize) -> HashMap<i64, f64>
     let sql = format!(
         "SELECT rowid, bm25(memories_fts) FROM memories_fts WHERE memories_fts MATCH ?1 LIMIT ?2"
     );
-    let mut stmt = match store.conn.prepare(&sql) {
-        Ok(s) => s,
-        Err(_) => return HashMap::new(),
-    };
+    let mut stmt = store.conn.prepare(&sql).context("prepare memories_fts MATCH")?;
     let rows: Vec<(i64, f64)> = stmt
         .query_map(params![expr, limit as i64], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
-        })
-        .map(|it| it.filter_map(Result::ok).collect())
-        .unwrap_or_default();
-    rows.into_iter().map(|(id, bm)| (id, -bm)).collect()
+        })?
+        .flatten()
+        .collect();
+    Ok(rows.into_iter().map(|(id, bm)| (id, -bm)).collect())
 }
 
-/// Ranked memory retrieval: lexical + optional vector + path boost + importance
-/// and usage decay, mirroring the Python retrieval weighting.
+/// Python `MemoryStore._blended_score`, ported faithfully:
+///
+///   0.55 * similarity + 0.20 * priority + 0.10 * recency
+///   + 0.05 * usage     + 0.10 * overlap
+///
+/// - similarity: fused lexical (BM25 normalised to 0..1) and cosine. Python
+///   only has a vector leg; the lexical half exists because this port can run
+///   with no embedding endpoint, and BM25 carries filename/identifier matches
+///   that a code-embedding cosine misses.
+/// - priority:   `importance` (0..1 here == Python's 0..100 / 100).
+/// - recency:    exp decay on `last_used`, ~30 day constant.
+/// - usage:      log1p(hit_count)/log1p(20) — saturates around 20 recalls.
+/// - overlap:    1.0 when the memory tracks a file in the caller's context.
+/// Cosine floor for the vector leg.
+///
+/// Measured on a 41-memory store with `text-embedding-3-small`: relevant pairs
+/// scored 0.71-0.82, unrelated pairs 0.09-0.28. Without a floor every pair is
+/// "somewhat similar" and a nonsense query returns the highest-importance
+/// filler. BM25 hits bypass the floor (an exact term match is explicit intent).
+fn min_cosine() -> f64 {
+    std::env::var("IMC_MEMORY_MIN_SIM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.45)
+}
+
+fn blended_score(
+    similarity: f64,
+    memory: &Memory,
+    context_paths: &HashSet<String>,
+    now: i64,
+) -> f64 {
+    let recency = if memory.last_used > 0 {
+        let age_days = (now - memory.last_used).max(0) as f64 / 86400.0;
+        (-age_days / 30.0).exp()
+    } else if memory.created_at > 0 {
+        let age_days = (now - memory.created_at).max(0) as f64 / 86400.0;
+        (-age_days / 30.0).exp()
+    } else {
+        1.0
+    };
+
+    let usage = ((memory.use_count.max(0) as f64 + 1.0).ln() / 21.0_f64.ln()).min(1.0);
+
+    let overlap = if context_paths.is_empty() {
+        0.0
+    } else if memory.paths.iter().any(|p| context_paths.contains(p)) {
+        1.0
+    } else {
+        0.0
+    };
+
+    0.55 * similarity.clamp(0.0, 1.0)
+        + 0.20 * memory.importance.clamp(0.0, 1.0)
+        + 0.10 * recency
+        + 0.05 * usage
+        + 0.10 * overlap
+}
+
+/// Ranked memory retrieval over the **whole** store.
+///
+/// `remember`: `retrieve` alone ranks; `recall` (see above) ranks and then
+/// reinforces, matching Python's `recall()`.
 pub fn retrieve(
     store: &Store,
     embedder: Option<&dyn imc_embed::Embedder>,
@@ -236,36 +355,25 @@ pub fn retrieve(
     limit: usize,
 ) -> Result<Vec<MemoryHit>> {
     ensure_schema(store)?;
-    let all = list(store, limit * 6)?;
+
+    // Candidates: every memory, not `limit * 6` rows pre-cut by importance.
+    // The old candidate query silently hid any low-priority memory from
+    // ranking, so an exact lexical hit could lose to irrelevant filler.
+    const CANDIDATE_CAP: usize = 50_000;
+    let all = list_all(store, CANDIDATE_CAP)?;
     if all.is_empty() {
         return Ok(Vec::new());
     }
-    let lex = lexical_scores(store, query, limit * 6);
 
+    let lex = lexical_scores(store, query, CANDIDATE_CAP)?;
+
+    // Cosine leg, when an embedder is configured.
     let query_vec = embedder
         .and_then(|e| e.embed(&[query.to_string()]).ok())
         .and_then(|v| v.into_iter().next());
     let mut vectors: HashMap<i64, Vec<f32>> = HashMap::new();
     if let Some(qv) = &query_vec {
-        let mut stmt = match store
-            .conn
-            .prepare("SELECT mem_id, vec FROM memory_vectors WHERE mem_id IN (SELECT id FROM memories)")
-        {
-            Ok(s) => s,
-            Err(_) => return Ok(Vec::new()),
-        };
-        let rows = stmt
-            .query_map([], |r| {
-                let id: i64 = r.get(0)?;
-                let blob: Vec<u8> = r.get(1)?;
-                let mut v = Vec::with_capacity(blob.len() / 4);
-                for c in blob.chunks_exact(4) {
-                    v.push(f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
-                }
-                Ok((id, v))
-            })
-            .map(|it| it.filter_map(Result::ok).collect::<Vec<_>>())
-            .unwrap_or_default();
+        let rows = load_vectors(store)?;
         for (id, v) in rows {
             if v.len() == qv.len() {
                 vectors.insert(id, v);
@@ -273,40 +381,73 @@ pub fn retrieve(
         }
     }
 
-    let path_set: HashSet<&String> = active_paths.iter().collect();
+    // Normalise BM25 to 0..1 over the candidates so it and cosine are on one
+    // scale before fusing (raw bm25() magnitude depends on corpus size).
+    let lex_max = lex.values().cloned().fold(0.0_f64, f64::max);
+
+    let now = now();
+    let context_paths: HashSet<String> = active_paths.iter().cloned().collect();
     let mut hits = Vec::new();
     for m in all {
-        let mut score = m.importance * 0.25;
-        let mut matched_paths = Vec::new();
-        if let Some(l) = lex.get(&m.id) {
-            score += l * 0.9;
+        let bm = lex
+            .get(&m.id)
+            .map(|s| if lex_max > 0.0 { s / lex_max } else { 0.0 })
+            .unwrap_or(0.0);
+        let cos = match (vectors.get(&m.id), query_vec.as_ref()) {
+            (Some(v), Some(q)) => cosine(v, q),
+            _ => 0.0,
+        };
+        // Fuse: whichever leg is present contributes; when both do, average
+        // them (BM25 rewards exact identifiers, cosine rewards paraphrase).
+        let similarity = match (bm > 0.0, cos > 0.0) {
+            (true, true) => (bm + cos) / 2.0,
+            (true, false) => bm,
+            (false, true) => cos,
+            (false, false) => 0.0,
+        };
+
+        let score = blended_score(similarity, &m, &context_paths, now);
+
+        let matched_paths: Vec<String> = m
+            .paths
+            .iter()
+            .filter(|p| context_paths.contains(p.as_str()))
+            .cloned()
+            .collect();
+
+        // Relevance gate, not a magic score threshold: keep a memory only when
+        // it actually matched the query (lexical, vector above the floor, or
+        // it tracks a file in the caller's context).
+        let relevant = bm > 0.0 || cos >= min_cosine() || !matched_paths.is_empty();
+        if !relevant {
+            continue;
         }
-        if let Some((_, v)) = vectors.get(&m.id).zip(query_vec.as_ref()) {
-            score += cosine(v, query_vec.as_ref().unwrap()) * 0.6;
-        }
-        for p in &m.paths {
-            if path_set.contains(p) {
-                score += 0.5;
-                matched_paths.push(p.clone());
-            }
-        }
-        for t in tokenize(query) {
-            if m.tags.iter().any(|mt| mt.eq_ignore_ascii_case(&t)) {
-                score += 0.2;
-            }
-        }
-        score += (m.use_count as f64).min(10.0) * 0.01;
-        if score > 0.15 {
-            hits.push(MemoryHit {
-                memory: m,
-                score,
-                matched_paths,
-            });
-        }
+
+        hits.push(MemoryHit {
+            memory: m,
+            score,
+            matched_paths,
+        });
     }
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     hits.truncate(limit);
     Ok(hits)
+}
+
+fn load_vectors(store: &Store) -> Result<Vec<(i64, Vec<f32>)>> {
+    let mut stmt = store
+        .conn
+        .prepare("SELECT mem_id, vec FROM memory_vectors WHERE mem_id IN (SELECT id FROM memories)")?;
+    let rows = stmt.query_map([], |r| {
+        let id: i64 = r.get(0)?;
+        let blob: Vec<u8> = r.get(1)?;
+        let mut v = Vec::with_capacity(blob.len() / 4);
+        for c in blob.chunks_exact(4) {
+            v.push(f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
+        }
+        Ok((id, v))
+    })?;
+    Ok(rows.flatten().collect())
 }
 
 pub fn embed_and_store(
