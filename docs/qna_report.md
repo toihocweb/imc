@@ -17,17 +17,15 @@ then a mechanical check of every cited path against the context that was sent.
 
 **Answer**
 
-There are two different things named "graph" in the retrieved context; the substantive answer is about the code-graph retrieval module.
+The graph works as a two-stage retrieval pipeline: a cached graph load, then semantic search with AST annotation.
 
-**Graph loading/caching (`GraphSearcher._load_graph`)**
-- It takes a graph file path, `stat()`s it, and builds a signature of `(st_mtime_ns, st_size)`. If a graph is already loaded and its signature matches, it returns the cached graph immediately ([`main/search/graph.py:46-75`]).
-- Otherwise it acquires `self._graph_lock` and re-checks the signature (double-checked locking) before loading ([`main/search/graph.py:46-75`]).
-- The file is read as JSON and parsed with `nx.node_link_graph(...)` into a networkx graph ([`main/search/graph.py:46-75`]).
-- It builds…
+**Loading (`_load_graph`)**: Loads `graph_store.json` via `nx.node_link_graph`, using an mtime/size signature for cache invalidation (double-checked under a lock). It builds three lookup indexes in one scan: `_file_entities` (file → definition nodes), `_name_entities` ((path, name) → nodes), and `_range_entities` ((path, "line"/"start_char") → sorted entries) for range queries.
+
+**Retrieval (`retrieve`)**: Requires `graph_store.json` to exist (else logs an error and returns `[]`). It runs `self.searcher.search(query, limit)` for base semantic results (capped at 25), then for eac…
 
 **Citations**
 
-- cited: `main/search/graph.py`, `tests/graph_indexing_test.py`, `ui/src/components/ProjectWorkspace.jsx`
+- cited: `main/search/graph.py`, `tests/graph_indexing_test.py`
 - invalid: none
 
 ## `how search works`
@@ -42,15 +40,13 @@ There are two different things named "graph" in the retrieved context; the subst
 
 **Answer**
 
-Search is exposed through three searcher classes, each with a `search(query, limit)` method that delegates to retrieval logic:
+Search is implemented as multiple retriever backends plus a chat UI that drives them.
 
-- `GraphSearcher.search` simply calls `self.retrieve(query, limit)` (`main/search/graph.py:200-201`).
-- `Searcher.search` (semantic) checks whether the index exists, sets up embeddings, then builds a retriever: it starts with a vector retriever (`index.as_retriever(similarity_top_k=limit)`), and if a `bm25_store` directory exists, wraps it in a `QueryFusionRetriever` with `mode="reciprocal_rerank"` for hybrid Vector + BM25 + RRF search; otherwise it falls back to vector-only search. Failures are logged and return `[]` (`main/search/semantic.py:92-133`).
-- `KBSearche…
+- **Semantic codebase search** (`main/search/semantic.py:92-133`): `Searcher.search` returns `[]` if the index dir `self.db_dir` does not exist, otherwise it calls `self.setup_embedding()`, gets a vector index via `self._get_vector_index()`, and builds `index.as_retriever(similarity_top_k=limit)`. If `self.db_dir / "bm25_store"` exists, it tries to build a BM25 retriever and swaps in a `QueryFusionRetriever` with `[vector_retriever, bm25_retriever]`, `num_queries=1`, `mode="reciprocal_rerank"`; it logs `BM25 Index found. Using Hybrid Search (Vector + BM25 + RRF).` If BM25 is absent it logs `BM25 Index not …
 
 **Citations**
 
-- cited: `main/search/graph.py`, `main/search/semantic.py`, `main/search/kb.py`, `ui/src/components/SearchView.jsx`, `main/prompts/imc_search.md`
+- cited: `main/search/semantic.py`, `main/search/graph.py`, `main/search/kb.py`, `ui/src/components/SearchView.jsx`
 - invalid: none
 
 ## `how memory works`
@@ -65,19 +61,15 @@ Search is exposed through three searcher classes, each with a `search(query, lim
 
 **Answer**
 
-Memory in this codebase is a lifecycle-managed, project-scoped knowledge store. It supports create/read/update/delete, pruning of stale entries, feedback-driven lifecycle changes, and rank-based retrieval during queries. The CLI, HTTP API, and UI are the three interaction surfaces.
+Memory in this codebase is a project-scoped (and global) store with retrieval, lifecycle events, and UI/CLI surfaces. It stores text memories with metadata, ranks them for queries, records usage/events, and supports lifecycle transitions and invalidation.
 
-**Core storage and scoping**
-- Memories live in a per-project database directory (`MemoryStore`), with `_global` as a special shared scope.
-- The UI exposes three scopes: `project` (uses `activeProjectId`), `global` (uses `_global`), and `auto` (learned tool-failure patterns).
-- `main/cli/commands/memory.py:32-33` and `main/cli/commands/memory.py:47-48`
-
-**Create / Edit / Delete**
-- The UI's add/edit modal posts …
+#### Storage & scope
+- Memories are stored per project (and `_global`) via `MemoryStore` in the project DB directory. The CLI resolves scope: if `--global`, uses `_global` DB dir; else finds the indexed project and uses its DB dir (`main/cli/commands/memory.py:21-132`).
+- API endpoints resolve store/project via `_resolve_store_and_project` and operate on that store (`main/api/routers/memory.py:191`, `main/api/routers/memory.py:284-295`, `m…
 
 **Citations**
 
-- cited: `main/cli/commands/memory.py`, `ui/src/components/MemoryView.jsx`, `main/api/routers/memory.py`, `main/proxy/lib/imc_memory.py`
+- cited: `main/cli/commands/memory.py`, `main/api/routers/memory.py`, `ui/src/components/MemoryView.jsx`, `main/proxy/lib/imc_memory.py`
 - invalid: none
 
 ## `how the proxy works`
@@ -92,15 +84,15 @@ Memory in this codebase is a lifecycle-managed, project-scoped knowledge store. 
 
 **Answer**
 
-The retrieved context shows only fragments of the proxy, so this is a partial picture.
+Partial answer: the retrieved context shows only fragments of the proxy — provider request forwarding and header preparation — not an end-to-end explanation of how the proxy works.
 
-**Provider proxying (request forwarding).** `forward_provider_alpha_search` builds upstream headers via `build_provider_upstream_headers`, reads the raw request body, resolves the upstream URL via `resolve_provider_request_url` (appending the query string and the path `/v1/alpha/search`), then POSTs to that URL with an `httpx.AsyncClient` and returns the result through `create_provider_proxy_response`.
-
-**Response handling.** `create_provider_proxy_response` copies the upstream response headers into a dict, removes any header names listed in `STRIPPED_RESPONSE_HEADERS`, and returns a `Response` carrying t…
+What the code does, based on the context:
+- For provider endpoints (e.g. `/v1/alpha/search`), the proxy builds upstream headers from the provider config and the incoming request, resolves a target URL, POSTs the body via `httpx.AsyncClient`, and returns the upstream response with certain headers stripped (`STRIPPED_RESPONSE_HEADERS`).
+- For message-proxy traffic, `prepare_message_proxy_headers` injects request IDs (`x-agent-task-id`, `x-request-id`), intent/type headers, and a user agent — unless running as the o…
 
 **Citations**
 
-- cited: `main/proxy/services/providers/provider_proxy.py`, `main/proxy/config.json`, `main/proxy/lib/api_config.py`
+- cited: `main/proxy/services/providers/provider_proxy.py`, `main/proxy/lib/api_config.py`, `main/proxy/config.json`
 - invalid: none
 
 ## `how indexing works`
@@ -115,11 +107,14 @@ The retrieved context shows only fragments of the proxy, so this is a partial pi
 
 **Answer**
 
-Indexing runs as a background task in two phases: a HTTP trigger that validates the target directory and marks the project as indexing, then an incremental semantic pipeline that hashes files, diffs them against a stored hash table, re-embeds only new/modified/deleted files, persists the vector store and docstore, and finally builds a BM25 index for hybrid search. Results stream to the UI over SSE.
+Indexing runs as an API-triggered background pipeline:
+
+- Trigger: `trigger_index` resolves and validates the target directory, adds the project, guards against a concurrent run via the `is_indexing` status, sets `is_indexing: True`, and schedules `server_module.run_indexing` with `background_tasks.add_task`. `main/api/routers/indexing.py:24-42`
+- Core pipeline (`Indexer::build_index`): initializes the DB and storage paths, loads existing hashes from `file_hashes`, reuses a supplied `manifest` or rescans with `FileIngester`, classifies files as new/modified/unchanged plus deleted, and returns early if there are no changes. If changes exist, it sets up embeddings, loads or creates the LanceDB…
 
 **Citations**
 
-- cited: `main/api/routers/indexing.py`, `main/indexing/semantic.py`, `tests/graph_indexing_test.py`, `ui/src/components/ProjectWorkspace.jsx`
+- cited: `main/api/routers/indexing.py`, `main/indexing/semantic.py`, `ui/src/components/ProjectWorkspace.jsx`, `tests/graph_indexing_test.py`
 - invalid: none
 
 ## `how trace works`
@@ -134,9 +129,14 @@ Indexing runs as a background task in two phases: a HTTP trigger that validates 
 
 **Answer**
 
-Trace is implemented as a CLI command (`run_trace`) backed by `ASTTracer.trace_callees` (forward) and `ASTTracer.trace_callers` (reverse/blast radius). The flow is: validate project/graph and resolve target; choose direction (callers or `reverse` => reverse); if no candidates and not reverse, error; if JSON, emit per-mode trees; else print joined ASCII trees. For callers, the CLI preserves the selected definition identity by using `raw_target_name = candidates[0][0] if len(candidates)==1 else target` and passes `target_file=file_filter`.
+`imc trace` is implemented in two layers: a CLI entry point and an `ASTTracer` core.
 
-Forward (`trace_callees`, node_id, depth, show_all, visited, current_depth): build tree from synthetic or graph node (name/file/line/type); return if `curr…
+**CLI layer (`run_trace`)**
+- Creates an `ASTTracer(project_id=project)` and exits with an error if no indexed project or no AST graph exists.
+- Resolves the target via `tracer.resolve_target(target, file_filter)`.
+- Determines direction: `is_reverse = callers or reverse`. If no candidates are found and it is not a reverse trace, it errors out.
+- In JSON mode it builds a result object with `project`, `target`, `depth`, and `results`; it appends a `"callees"` tree when `both or not is_reverse`, and a `"callers"` tree when `both or is_reverse`, then prints `json.dumps(..., indent=2)`.
+- In text mode it does t…
 
 **Citations**
 
@@ -155,7 +155,7 @@ Forward (`trace_callees`, node_id, depth, show_all, visited, current_depth): bui
 
 **Answer**
 
-`Config` is a singleton configuration manager for Code Indexer that loads and caches configuration from a default YAML file. On first instantiation, `__new__` calls `_init_config`, which resolves the app directory, creates a centralized `data` directory inside the app, determines the target directory (from `active_project.txt` if present, otherwise the app dir, or an explicitly passed `target_dir` which it persists to that file), loads YAML from `DEFAULT_CONFIG_PATH` into `_config_data`, and sets database paths (`lancedb_dir`, `sqlite_db_path`) inside the app's data directory rather than the target directory. Configuration values are exposed as properties with getters (falling back to defaul…
+`Config` is a singleton configuration manager for Code Indexer that loads and caches configuration from a default YAML file. On first instantiation, `__new__` calls `_init_config`, which resolves the app directory, creates a central `data` directory, determines the target (indexed) directory — from `active_project.txt` if present, an explicit `target_dir` argument, or the app dir as fallback — and writes the active project file when a target is given. It then loads YAML from `DEFAULT_CONFIG_PATH` into `_config_data` (errors are logged, not raised), and always stores databases (`lancedb_data`, `file_hashes.db`) inside the app's data directory rather than the target directory. Settings are exp…
 
 **Citations**
 
@@ -174,15 +174,15 @@ Forward (`trace_callees`, node_id, depth, show_all, visited, current_depth): bui
 
 **Answer**
 
-The retrieved context shows several distinct, unrelated "context" mechanisms rather than one unified system, so a single end-to-end explanation is not supported. What the chunks do show:
+The retrieved context shows four distinct "context" mechanisms:
 
-- **CLI feature context:** `run_context(target, project, depth)` is the CLI handler for `imc context <target>`. It builds a dossier by calling `get_feature_context(target, project_id=project or "", depth=depth)` and prints it.
-- **Request context:** `set_request_context(context)` stores a `RequestContext` in a context variable via `request_context_var.set(context)`.
-- **Context packing (retrieval):** `pack_context` assembles chunks into a text block, deduplicating exact and suffix-overlapping content, honor…
+1. **CLI context command** — `imc context <target>` calls `run_context`, which delegates to `get_feature_context(target, project_id=..., depth=depth)` and prints the resulting dossier `main/cli/commands/context.py:679-682`.
+2. **Request-scoped context (proxy)** — `set_request_context` stores a `RequestContext` object into a `ContextVar` (`request_context_var.set(context)`), i.e. per-request state propagation `main/proxy/lib/request_context.py:23-24`.
+3. **Context packing for retrieval** — `pack_context` merges duplicate/overlapping chunks: a repeated line appears once, exact duplicates collapse, a token budget of 0 yields empty…
 
 **Citations**
 
-- cited: `main/cli/commands/context.py`, `main/proxy/lib/request_context.py`, `tests/graph_retrieval_context_test.py`, `main/proxy/services/copilot/context_filters.py`, `ui/src/components/ProjectWorkspace.jsx`
+- cited: `main/cli/commands/context.py`, `main/proxy/lib/request_context.py`, `tests/graph_retrieval_context_test.py`, `main/proxy/services/copilot/context_filters.py`
 - invalid: none
 
 ## `how claude integration works`
@@ -197,20 +197,17 @@ The retrieved context shows several distinct, unrelated "context" mechanisms rat
 
 **Answer**
 
-## Overview
+Claude Code integration works at three layers:
 
-Claude integration in this codebase (IndexMyCode/IMC) operates on multiple levels: a CLI setup command, a proxy that intercepts Claude Code traffic, session tracking via `~/.claude/projects`, an API layer for session management, and a desktop terminal embedding Claude Code via Electron IPC.
+1. **CLI setup**: `imc claude` calls `_setup_claude_code(target_dir)` for the resolved current directory to generate the Claude Code configuration, then reports "Claude Code integration configured." Per CLAUDE.md, this creates `.claude/settings.local.json` for a project.
 
-### 1. CLI Project Setup
+2. **Session tracking**: The backend resolves the Claude Code session store by mapping a workspace path to `~/.claude/projects/<slug>` — the path is normalized and slugified (`re.sub(r'[^a-zA-Z0-9]', '-', norm)`), with a fallback that matches directories by base filename if the exact slug doesn't exist. This directory is used by session list/detail/export/learn endpoints.
 
-The `imc claude` command scaffolds Claude Code settings for the current project:
-
-- `main/cli/commands/claude.py:L21-28` — `run_claude()` resolves the target directory and delegates to `_setup_claude_code(target_dir)` (from `main/cli/commands/index.py`), then prints a success message.
-- `CLAUDE.md:1-95` documents this as: `imc claude` → "generate .claude/settings.lo…
+3. …
 
 **Citations**
 
-- cited: `main/cli/commands/claude.py`, `main/cli/commands/index.py`, `main/proxy/main.py`, `main/core/claude_sessions.py`, `ui/src/components/ClaudeSessionViewer.jsx`, `ui/src/components/ClaudeCodeView.jsx`
+- cited: `main/proxy/main.py`, `main/cli/commands/claude.py`, `main/core/claude_sessions.py`, `ui/src/components/ClaudeCodeView.jsx`, `ui/src/components/ClaudeSessionViewer.jsx`
 - invalid: none
 
 ## `how compact works`
@@ -225,20 +222,11 @@ The `imc claude` command scaffolds Claude Code settings for the current project:
 
 **Answer**
 
-The compact feature works in two layers:
+The context shows two separate "compact" mechanisms, and only partially covers how each works:
 
-**CLI (`compact` command)** — dispatches on a subcommand:
-- `save` → `_save(args.name)`
-- `list` → `_list()`
-- `use` → `_use(args.name)`
-- `clear` → `_clear()`
-- anything else prints "Unknown compact command."
+1. **CLI `compact` command** (`main/cli/commands/compact.py`): `run_compact` dispatches on a subcommand — `save` (calls `_save(args.name)`), `list` (calls `_list()`), `use` (calls `_use(args.name)`), `clear` (calls `_clear()`), else prints "Unknown compact command." The active compact is resolved by `_get_active_compact(db_dir)`, which reads `db_dir / "active_compact.txt"` and returns its stripped contents, or `None` if the file doesn't exist. The bodies of `_save`, `_list`, `_use`, and `_clear` are not in the retrieved context, so what "save"/"use"/"clear" actually do to data is not covered.
 
-The active compact is tracked via a file named `active_compact.txt` inside `db_dir`: `_get_active_compact` reads that file and returns its stripped contents, or `None` if the file doesn't exist.
-
-**UI (Claude History Drawer)** — the "Compact" button on a session card calls `handleCompactSession`, which:
-1. POSTs to `/claude/sessions/{sessionId}/prepare-compact` (with `project_id` / `project_path` params)
-2. On success, builds the prompt ``Load…
+2. …
 
 **Citations**
 
@@ -247,6 +235,6 @@ The active compact is tracked via a file named `active_compact.txt` inside `db_d
 
 ## Totals
 
-- distinct paths cited: 36
+- distinct paths cited: 32
 - invalid citations: 0
 - answers that opened by declaring partial coverage: 0/10

@@ -41,9 +41,9 @@ pub fn get_feature_context(target: &str, root_dir: &Path, store: Option<&Store>)
         }
     };
 
-    let content = match std::fs::read_to_string(&source_file) {
-        Ok(c) => c,
-        Err(e) => return format!("Error reading file '{}': {e}", source_file.display()),
+    let content = match read_text_lossy(&source_file) {
+        Some(c) => c,
+        None => return format!("Error reading file '{}'", source_file.display()),
     };
 
     // Compute a project-relative path, with a marker-based fallback.
@@ -431,7 +431,7 @@ fn build_ui_dossier(
                 let ext = ext_lower(&resolved);
                 if (ext == ".tsx" || ext == ".jsx") && has_upper_identifier(&clause) {
                     let props = extract_props_interface(&resolved);
-                    if let Ok(child_txt) = std::fs::read_to_string(&resolved) {
+                    if let Some(child_txt) = read_text_lossy(&resolved) {
                         collect_keys(&child_txt, &t_key_re, &ikey_re, &mut all_i18n_keys);
                     }
                     resolved_components.push((res_rel, label, props));
@@ -635,7 +635,7 @@ fn with_suffix_safe(base: &Path, ext: &str) -> Option<PathBuf> {
 
 /// Port of `extract_props_interface` — interface/type `*Props` snippet.
 pub fn extract_props_interface(file_path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(file_path).ok()?;
+    let content = read_text_lossy(file_path)?;
     let re = Regex::new(r"((?:export\s+)?(?:interface|type)\s+\w*Props\b[^{=]*[\{=][^}]+})").ok()?;
     let m = re.captures(&content)?;
     let snippet = m.get(1)?.as_str().trim();
@@ -725,7 +725,7 @@ pub fn resolve_i18n_keys(
     for f in i18n_files {
         let ext = ext_lower(f);
         if ext == ".properties" {
-            let Ok(txt) = std::fs::read_to_string(f) else { continue };
+            let Some(txt) = read_text_lossy(f) else { continue };
             for k in keys {
                 if resolved.contains_key(k) {
                     continue;
@@ -739,7 +739,7 @@ pub fn resolve_i18n_keys(
                 }
             }
         } else if ext == ".json" {
-            let Ok(txt) = std::fs::read_to_string(f) else { continue };
+            let Some(txt) = read_text_lossy(f) else { continue };
             let Ok(data) = serde_json::from_str::<Value>(&txt) else { continue };
             search_json_keys(&data, keys, &mut resolved);
         }
@@ -1082,6 +1082,16 @@ fn split_nonword(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// Read a file the way Python's dossier does: `open(..., errors="ignore")`.
+///
+/// One stray non-UTF-8 byte (latin-1 in a comment, a stray byte in a fixture)
+/// must not fail the whole dossier. `from_utf8_lossy` substitutes U+FFFD where
+/// Python drops the byte; both keep the readable text around it.
+fn read_text_lossy(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 // ─── Shared path helpers ─────────────────────────────────────────────────────
 
 fn ext_lower(p: &Path) -> String {
@@ -1205,6 +1215,19 @@ mod tests {
         let resolved = resolve_i18n_keys(&keys, &[f]);
         assert_eq!(resolved.get("flag").map(|s| s.as_str()), Some("True"));
         assert_eq!(resolved.get("off").map(|s| s.as_str()), Some("False"));
+    }
+
+    #[test]
+    fn dossier_survives_invalid_utf8() {
+        // Python opens with errors="ignore"; a latin-1 byte in a comment must
+        // not fail the dossier.
+        let root = tmp_dir("lossy");
+        let p = root.join("api/handler.py");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b"class Svc:\n    # caf\xe9 comment\n    def m(self):\n        pass\n").unwrap();
+        let d = get_feature_context("api/handler.py", &root, None);
+        assert!(!d.starts_with("Error"), "{d}");
+        assert!(d.contains("declaration: class Svc"), "{d}");
     }
 
     #[test]
