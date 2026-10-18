@@ -176,11 +176,20 @@ impl Embedder for RemoteEmbedder {
     }
 }
 
-/// Prefer remote embeddings when a key is configured; otherwise stay offline.
-pub fn build(cfg: &EmbedConfig) -> Box<dyn Embedder> {
+/// Embedding provider selection:
+///   1. remote OpenAI-compatible endpoint when an API key is present
+///   2. offline hashing embedder ONLY when `IMC_VECTOR=1` (or IMC_EMBED_MODEL is
+///      explicitly set while a key exists but the endpoint is unreachable)
+///   3. `None` — retrieval then runs BM25 + graph only.
+///
+/// The hashing embedder is a lexical stand-in: measured on the `imc` repo it
+/// *lowered* top-1 accuracy vs BM25-only, so it must never be on by default.
+pub fn build(cfg: &EmbedConfig) -> Option<Box<dyn Embedder>> {
     if cfg.api_key.is_some() {
-        Box::new(RemoteEmbedder::new(cfg.clone()))
-    } else {
-        Box::new(HashingEmbedder::new(cfg.fallback_dim))
+        return Some(Box::new(RemoteEmbedder::new(cfg.clone())));
     }
+    if std::env::var("IMC_VECTOR").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false) {
+        return Some(Box::new(HashingEmbedder::new(cfg.fallback_dim)));
+    }
+    None
 }

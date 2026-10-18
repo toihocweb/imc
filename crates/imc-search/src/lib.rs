@@ -12,6 +12,8 @@ use imc_core::types::{SearchHit, Symbol};
 use imc_embed::tokenize;
 
 const RRF_K: f64 = 60.0;
+/// OR-only (non-conjunctive) matches rank below exact all-term matches.
+const OR_PENALTY: f64 = 0.55;
 const CANDIDATES: usize = 60;
 
 /// Create the FTS5 index + triggers if missing (external content over `chunks`).
@@ -58,37 +60,79 @@ impl<T> ContextDebug<T> for Result<T, rusqlite::Error> {
     }
 }
 
-fn fts_query(raw: &str) -> String {
-    // Escape FTS5 special chars: quote each token, prefix-match the last one.
-    let tokens = tokenize(raw);
-    if tokens.is_empty() {
-        return String::new();
-    }
-    let mut parts: Vec<String> = tokens.iter().map(|t| format!("\"{t}\"")).collect();
-    if tokens.last().is_some() {
-        let last = parts.pop().unwrap();
-        parts.push(format!("\"{}\"*", last.trim_matches('"')));
-    }
-    parts.join(" ")
-}
+/// Function words carry no code signal; drop them before matching.
+const STOPWORDS: &[&str] = &[
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "is", "are", "was",
+    "be", "do", "does", "did", "how", "what", "where", "which", "who", "why", "when", "that",
+    "this", "it", "its", "we", "you", "i", "my", "our", "their", "from", "by", "as", "at", "can",
+    "should", "would", "could", "if", "then", "than", "use", "using", "used",
+];
 
-fn bm25_scores(store: &Store, query: &str) -> Result<HashMap<i64, f64>> {
-    let q = fts_query(query);
-    if q.is_empty() {
+/// Two-phase lexical retrieval: strict conjunction first, then relax to OR
+/// when it cannot fill the candidate pool. `query_tokens` is the stopword-
+/// filtered token list, reused for the path boost.
+fn bm25_scores(store: &Store, query: &str, want: usize) -> Result<HashMap<i64, f64>> {
+    let tokens = query_tokens(query);
+    if tokens.is_empty() {
         return Ok(HashMap::new());
     }
-    let mut stmt = store.conn.prepare(
-        "SELECT rowid, bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ?1 LIMIT ?2",
-    )?;
-    let rows = stmt.query_map(params![q, CANDIDATES as i64], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
-    })?;
+    let sql = "SELECT rowid, bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ?1 LIMIT ?2";
+
+    let run = |expr: &str, cap: usize| -> Result<Vec<(i64, f64)>> {
+        let mut stmt = store.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![expr, cap as i64], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
+        })?;
+        // bm25() is negative (lower = better); invert into a positive score.
+        Ok(rows.flatten().collect())
+    };
+
+    // Always fetch both: strict AND hits, plus OR-only hits at a penalty.
+    // Running OR only as a fallback starved small-but-correct files
+    // (e.g. services/copilot/stream_translation.py) from the pool entirely.
+    // The relaxed pass needs a wider cap: small, very specific files
+    // (services/copilot/*) lose on bm25 and would never enter the pool.
+    let strict = run(&join_expr(&tokens, false), CANDIDATES)?;
+    let mut rows: Vec<(i64, f64)> = strict
+        .iter()
+        .map(|(id, bm)| (*id, -(*bm)))
+        .collect();
+    let relaxed = run(&join_expr(&tokens, true), CANDIDATES * 4)?;
+    for (id, bm) in relaxed {
+        if !rows.iter().any(|(i, _)| *i == id) {
+            rows.push((id, -bm * OR_PENALTY));
+        }
+    }
+
     let mut out = HashMap::new();
-    // bm25() is negative (lower = better); invert into a positive score.
-    for row in rows.flatten() {
-        out.insert(row.0, -row.1);
+    for (id, score) in rows {
+        out.insert(id, score);
     }
     Ok(out)
+}
+
+/// Stopword-filtered tokens for one query (single source of truth).
+pub fn query_tokens(raw: &str) -> Vec<String> {
+    let mut tokens = tokenize(raw);
+    tokens.retain(|t| !STOPWORDS.contains(&t.as_str()));
+    tokens
+}
+
+/// Quoted tokens joined by `AND` (space) when strict, or by `OR` when relaxed;
+/// the last (most specific) token gets a `*` prefix match in both modes.
+fn join_expr(tokens: &[String], or_mode: bool) -> String {
+    let mut parts: Vec<String> = tokens.iter().map(|t| format!("\"{t}\"")).collect();
+    if let Some(last) = parts.last_mut() {
+        // FTS5 prefix syntax is `tok*` / `"tok"*` — the star must sit OUTSIDE the
+        // quotes. Writing `"tok*"` is a literal token and matches nothing, which
+        // silently emptied the whole BM25 leg.
+        *last = format!("{}\"*", last.trim_end_matches('"'));
+    }
+    if or_mode {
+        parts.join(" OR ")
+    } else {
+        parts.join(" ")
+    }
 }
 
 fn cosine(a: &[f32], b: &[f32]) -> f64 {
@@ -141,7 +185,10 @@ fn rrf(rank_lists: &[HashMap<i64, f64>]) -> Vec<(i64, f64)> {
 
 /// Lexical-ish boost: symbols whose name matches query tokens.
 fn symbol_name_boost(store: &Store, query: &str) -> HashMap<String, f64> {
-    let tokens = tokenize(query);
+    let tokens: Vec<String> = tokenize(query)
+        .into_iter()
+        .filter(|t| !STOPWORDS.contains(&t.as_str()))
+        .collect();
     let mut boost = HashMap::new();
     for t in tokens.iter().take(12) {
         for sym in store.find_symbols_by_name(t, 50) {
@@ -266,6 +313,7 @@ fn mentions(name: &str, text: &str) -> bool {
 
 pub struct SearchOptions {
     pub limit: usize,
+    /// Enable the vector leg (needs an embedder).
     pub vector: bool,
 }
 
@@ -280,19 +328,31 @@ impl Default for SearchOptions {
 
 pub fn search(
     store: &Store,
-    embedder: &dyn imc_embed::Embedder,
+    embedder: Option<&dyn imc_embed::Embedder>,
     query: &str,
     opts: &SearchOptions,
 ) -> Result<Vec<SearchHit>> {
     let mut lists: Vec<HashMap<i64, f64>> = Vec::new();
 
-    let bm = bm25_scores(store, query)?;
+    let bm = bm25_scores(store, query, opts.limit)?;
     if !bm.is_empty() {
         lists.push(bm);
     }
 
-    if opts.vector {
-        if let Ok(qv) = embedder.embed(&[query.to_string()]) {
+    if let Some(embedder) = embedder.filter(|_| opts.vector) {
+        // Same token filter as the lexical leg, else the hashing embedder
+        // spends its whole budget on "how"/"to"/"the".
+        let mut vq = query.to_string();
+        {
+            let toks: Vec<String> = tokenize(query)
+                .into_iter()
+                .filter(|t| !STOPWORDS.contains(&t.as_str()))
+                .collect();
+            if !toks.is_empty() {
+                vq = toks.join(" ");
+            }
+        }
+        if let Ok(qv) = embedder.embed(&[vq]) {
             if let Some(v) = qv.into_iter().next() {
                 let vs = vector_scores(store, &v);
                 if !vs.is_empty() {
@@ -309,14 +369,40 @@ pub fn search(
     let fused = rrf(&lists);
     let file_boost = symbol_name_boost(store, query);
 
-    let mut hits = Vec::new();
-    for (chunk_id, score) in fused.into_iter().take(opts.limit * 4) {
+    let mut scored: Vec<(f64, SearchHit)> = Vec::new();
+    for (chunk_id, score) in fused.into_iter().take(opts.limit * 24) {
         let Some(chunk) = store.chunk_by_id(chunk_id) else {
             continue;
         };
         let mut s = score;
         if let Some(b) = file_boost.get(&chunk.file) {
-            s += b * 0.01;
+            s += b * 0.02;
+        }
+        // Chunk that IS the named symbol (query "deleteProject" -> its def).
+        if let (Some(sym), Some(_)) = (chunk.sym_id.as_deref(), chunk.sym_id.as_deref()) {
+            let short = sym.rsplit("::").next().unwrap_or("");
+            if query_tokens(query).iter().any(|t| t.eq_ignore_ascii_case(short)) {
+                s += 0.040;
+            }
+        }
+        // A query token that appears in the path is strong evidence:
+        // "parser" -> main/ingest/parser.py, "limits" -> main/search/limits.py.
+        let path_lc = chunk.file.to_lowercase();
+        let stem_lc = path_lc
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
+        for t in query_tokens(query) {
+            if t.len() < 3 {
+                continue;
+            }
+            // Filename match (`git.py` for "git") beats directory match.
+            if stem_lc.contains(&t) {
+                s += 0.030;
+            } else if path_lc.contains(&t) {
+                s += 0.012;
+            }
         }
         let (sym_name, sym_kind) = match &chunk.sym_id {
             Some(sid) => {
@@ -335,7 +421,9 @@ pub fn search(
         if !evidence.is_empty() {
             text.push_str(&format!("\n// graph: {}", evidence.join("; ")));
         }
-        hits.push(SearchHit {
+        scored.push((
+            s,
+            SearchHit {
             score: s,
             file: chunk.file.clone(),
             start_line: chunk.start_line,
@@ -345,7 +433,21 @@ pub fn search(
             sym_name,
             sym_kind,
             source: "hybrid",
-        });
+            },
+        ));
+    }
+
+    // Rank by the reranked score, then apply per-file diversity.
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut per_file: HashMap<String, usize> = HashMap::new();
+    let mut hits = Vec::new();
+    for (_, h) in scored {
+        let seen = per_file.entry(h.file.clone()).or_insert(0);
+        if *seen >= 2 {
+            continue;
+        }
+        *seen += 1;
+        hits.push(h);
         if hits.len() >= opts.limit {
             break;
         }

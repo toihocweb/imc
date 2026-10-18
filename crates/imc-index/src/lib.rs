@@ -81,15 +81,22 @@ pub fn run(cfg: &Config, root: &Path, extra_ignores: &[String], force: bool) -> 
         .collect::<Result<Vec<_>>>()?;
 
     let embedder = imc_embed::build(&cfg.embedding);
+    let embedder_name = embedder.as_ref().map(|e| e.name()).unwrap_or_else(|| "none".into());
 
     for (rel, symbols, edges, chunks) in parsed {
         store.clear_file(&rel)?;
         store.insert_symbols(&rel, &symbols)?;
         store.insert_edges(&rel, &edges)?;
         let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
-        let vectors = embedder.embed(&texts)?;
+        let vectors = match &embedder {
+            Some(e) => e.embed(&texts)?,
+            None => Vec::new(),
+        };
         for (i, c) in chunks.iter().enumerate() {
-            let cid = store.insert_chunk(&rel, c.start_line, c.end_line, &c.text, c.sym_id.as_deref())?;
+            // Path + line range inside the indexed text: filename queries
+            // (`parser.py`, `mcp/server.py`) must hit FTS directly.
+            let text = format!("{}:{}-{}\n{}", rel, c.start_line, c.end_line, c.text);
+            let cid = store.insert_chunk(&rel, c.start_line, c.end_line, &text, c.sym_id.as_deref())?;
             if let Some(v) = vectors.get(i) {
                 store.insert_embedding(cid, v.len(), v)?;
             }
@@ -107,7 +114,7 @@ pub fn run(cfg: &Config, root: &Path, extra_ignores: &[String], force: bool) -> 
         symbols: store.count_symbols(),
         edges: store.count_edges(),
         chunks: store.count_chunks(),
-        embedder: embedder.name(),
+        embedder: embedder_name,
         elapsed_ms: start.elapsed().as_millis(),
     })
 }

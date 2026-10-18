@@ -58,7 +58,7 @@ def process_refund(order_id):
     let store = store::open(&db).unwrap();
     let hits = imc_search::search(
         &store,
-        &HashingEmbedder::new(384),
+        Some(&HashingEmbedder::new(384)),
         "refund order",
         &SearchOptions::default(),
     )
@@ -153,7 +153,7 @@ fn memory_crud_and_dedup() {
     )
     .unwrap()
     .expect("memory inserted");
-    imc_memory::embed_and_store(&store, &embedder, id, "Rule: all indexing writes go through the FileIngester").unwrap();
+    imc_memory::embed_and_store(&store, Some(&embedder), id, "Rule: all indexing writes go through the FileIngester").unwrap();
 
     // Same content, different whitespace/case → duplicate rejected.
     let dup = imc_memory::add(
@@ -168,7 +168,7 @@ fn memory_crud_and_dedup() {
     .unwrap();
     assert!(dup.is_none(), "duplicate should be rejected");
 
-    let hits = imc_memory::retrieve(&store, &embedder, "indexing FileIngester", &["src/m.py".to_string()], 5).unwrap();
+    let hits = imc_memory::retrieve(&store, Some(&embedder), "indexing FileIngester", &["src/m.py".to_string()], 5).unwrap();
     assert!(!hits.is_empty(), "expected memory recall");
     assert!(imc_memory::delete(&store, id).unwrap());
     assert!(imc_memory::list(&store, 5).unwrap().is_empty());

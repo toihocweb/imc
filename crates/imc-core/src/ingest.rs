@@ -65,6 +65,16 @@ pub fn is_indexable_file(path: &std::path::Path, max_bytes: u64) -> bool {
     if EXCLUDED_FILENAMES.contains(&name.as_str()) {
         return false;
     }
+    // Bundled build output: hashed filenames (index-CuOPrw-O.js) and any
+    // `assets/` directory — these are 900 KB+ of minified JS that drown out real code.
+    if let Some(parent) = path.parent() {
+        if parent.file_name().map(|p| p == "assets").unwrap_or(false) {
+            return false;
+        }
+    }
+    if is_hashed_bundle_name(&name) {
+        return false;
+    }
     if name.ends_with(".lock")
         || name.ends_with(".min.js")
         || name.ends_with(".min.css")
@@ -87,6 +97,22 @@ pub fn is_indexable_file(path: &std::path::Path, max_bytes: u64) -> bool {
         return std::fs::metadata(path).map(|m| m.len() <= max_bytes).unwrap_or(false);
     }
     false
+}
+
+/// `index-CuOPrw-O.js`, `logo-BmnHdZ4s.svg`, `main-Dk3x9Pq2.css` — build output.
+pub fn is_hashed_bundle_name(name: &str) -> bool {
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    if !matches!(ext, "js" | "css" | "mjs" | "map") {
+        return false;
+    }
+    // at least one '-'-separated segment of >=8 base64url chars, no lowercase-only words
+    stem.rsplit('-').any(|seg| {
+        seg.len() >= 8
+            && seg.chars().any(|c| c.is_ascii_digit())
+            && seg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    })
 }
 
 pub fn language_of(rel: &str) -> Option<&'static str> {

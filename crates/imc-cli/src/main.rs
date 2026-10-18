@@ -43,7 +43,7 @@ enum Command {
     /// Hybrid search over the index.
     Search {
         query: String,
-        #[arg(long, short = 'l')]
+        #[arg(long, short = 'l', default_value_t = 8)]
         limit: usize,
         /// Disable the vector leg (BM25 + graph only).
         #[arg(long)]
@@ -87,7 +87,39 @@ enum Command {
     MemoryDelete { id: i64 },
     /// Extract and store memories from a transcript/markdown file.
     Learn { file: PathBuf },
-    /// View or edit ~/.indexer_config.yaml (LLM url/key/model, embedding model).
+    /// One-shot Claude Code integration: index + .claude/settings + CLAUDE.md + proxy.
+    #[command(name = "claude")]
+    Claude {
+        #[command(subcommand)]
+        action: ClaudeAction,
+    },
+    /// Run / control the LLM proxy that Claude Code talks to.
+    #[command(name = "proxy")]
+    Proxy {
+        #[command(subcommand)]
+        action: ProxyAction,
+    },
+    /// Token-optimised file reader (Claude Code Read replacement).
+    Read {
+        /// Path to the file to read.
+        file: PathBuf,
+        /// Print only the outline of symbols.
+        #[arg(long)]
+        symbols: bool,
+        /// Print only one method/function/class by name.
+        #[arg(long)]
+        method: Option<String>,
+        /// Skip N lines from the top.
+        #[arg(long)]
+        offset: Option<usize>,
+        /// Max lines to print.
+        #[arg(long, short = 'l')]
+        limit: Option<usize>,
+        /// Print without compression.
+        #[arg(long)]
+        raw: bool,
+    },
+    /// View or edit ~/.imc_config.yaml (LLM url/key/model, embedding model).
     Config {
         #[command(subcommand)]
         action: ConfigAction,
@@ -95,9 +127,50 @@ enum Command {
 }
 
 #[derive(Subcommand, Debug)]
+enum ClaudeAction {
+    /// Index the project, wire .claude/settings.local.json + CLAUDE.md, start the proxy.
+    Setup {
+        #[arg(long, short = 'f')]
+        force: bool,
+        /// Proxy port (default 12345).
+        #[arg(long, default_value_t = 12345)]
+        port: u16,
+    },
+    /// Write settings + CLAUDE.md without indexing.
+    Wire {
+        #[arg(long, default_value_t = 12345)]
+        port: u16,
+    },
+    /// Start the proxy in the background.
+    Start {
+        #[arg(long, default_value_t = 12345)]
+        port: u16,
+    },
+    /// Stop the background proxy.
+    Stop,
+    /// Show proxy status.
+    Status,
+}
+
+#[derive(Subcommand, Debug)]
+enum ProxyAction {
+    /// Serve the proxy in the foreground (used by `imc claude start`).
+    Serve {
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+    },
+    /// Show proxy status.
+    Status,
+    /// Stop the background proxy.
+    Stop,
+}
+
+#[derive(Subcommand, Debug)]
 enum ConfigAction {
-    /// Print the config file path.
+    /// Print the config file path in use (new, or legacy if only that exists).
     Path,
+    /// Move an old ~/.indexer_config.yaml to ~/.imc_config.yaml (one-time).
+    Migrate,
     /// Get a dotted key, e.g. llm.base_url or embedding.model (api_key masked).
     Get { key: String },
     /// Set a dotted key: imc config set llm.base_url http://localhost:11434/v1
@@ -170,7 +243,7 @@ fn main() -> Result<()> {
                 limit: (*limit).clamp(1, 50),
                 vector: !*no_vector,
             };
-            let hits = imc_search::search(&store, embedder.as_ref(), query, &opts)?;
+            let hits = imc_search::search(&store, embedder.as_deref(), query, &opts)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
@@ -262,7 +335,7 @@ fn main() -> Result<()> {
             let embedder = imc_embed::build(&cfg.embedding);
             match imc_memory::add(&store, &content, &category, &path, &tag, *importance, "manual")? {
                 Some(id) => {
-                    imc_memory::embed_and_store(&store, embedder.as_ref(), id, &content)?;
+                    imc_memory::embed_and_store(&store, embedder.as_deref(), id, &content)?;
                     if cli.json {
                         println!("{}", serde_json::json!({"id": id, "stored": true}));
                     } else {
@@ -282,7 +355,7 @@ fn main() -> Result<()> {
             let db = cfg.project_db(&root);
             let store = store::open(&db)?;
             let embedder = imc_embed::build(&cfg.embedding);
-            let hits = imc_memory::retrieve(&store, embedder.as_ref(), query, &[], *limit)?;
+            let hits = imc_memory::retrieve(&store, embedder.as_deref(), query, &[], *limit)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
@@ -313,10 +386,95 @@ fn main() -> Result<()> {
             let removed = imc_memory::delete(&store, *id)?;
             println!("memory #{id} deleted: {removed}");
         }
+        Command::Claude { action } => match action {
+            ClaudeAction::Setup { force, port } => {
+                let lines = imc_cli::claude::setup_and_start(&cfg, &root, *port, *force)?;
+                if cli.json {
+                    println!("{}", serde_json::json!({"ok": true, "log": lines}));
+                } else {
+                    for l in &lines {
+                        println!("  ✓ {l}");
+                    }
+                }
+            }
+            ClaudeAction::Wire { port } => {
+                let s = imc_cli::claude::write_claude_settings(&root, *port)?;
+                let (md, changed) = imc_cli::claude::write_claude_md(&root)?;
+                println!(
+                    "wrote {} and {}{}",
+                    s.display(),
+                    md.display(),
+                    if changed { " (updated)" } else { "" }
+                );
+            }
+            ClaudeAction::Start { port } => {
+                let state = imc_cli::claude::start_proxy(&cfg, *port)?;
+                println!("proxy started: pid={} http://127.0.0.1:{}", state["pid"], state["port"]);
+            }
+            ClaudeAction::Stop => match imc_cli::claude::stop_proxy(&cfg)? {
+                Some(p) => println!("proxy stopped (was :{p})"),
+                None => println!("no proxy state file — nothing to stop"),
+            },
+            ClaudeAction::Status => {
+                let s = imc_cli::claude::proxy_status(&cfg);
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
+                } else {
+                    match s {
+                        Some(v) => println!(
+                            "proxy: {} (pid={}, port={})",
+                            if v["running"] == true { "RUNNING" } else { "NOT REACHABLE" },
+                            v["state"]["pid"],
+                            v["state"]["port"]
+                        ),
+                        None => println!("proxy: not started"),
+                    }
+                }
+            }
+        },
+        Command::Proxy { action } => match action {
+            ProxyAction::Serve { port } => {
+                let bin = imc_cli::claude::proxy_bin()?;
+                let status = std::process::Command::new(bin)
+                    .args(["--port", &port.to_string()])
+                    .status()?;
+                if !status.success() {
+                    std::process::exit(status.code().unwrap_or(1));
+                }
+            }
+            ProxyAction::Status => {
+                let s = imc_cli::claude::proxy_status(&cfg);
+                println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
+            }
+            ProxyAction::Stop => {
+                match imc_cli::claude::stop_proxy(&cfg)? {
+                    Some(p) => println!("proxy stopped (was :{p})"),
+                    None => println!("no proxy state file"),
+                };
+            }
+        },
+        Command::Read { file, symbols, method, offset, limit, raw } => {
+            let opts = imc_find::find::FindOptions {
+                limit: *limit,
+                offset: *offset,
+                raw: *raw,
+                // Leak only the --method argument (CLI-lifetime string).
+                method: method
+                    .as_deref()
+                    .map(|m| &*Box::leak(m.to_string().into_boxed_str())),
+                symbols: *symbols,
+            };
+            let out = imc_find::find::run_find(&file.to_string_lossy(), opts)?;
+            print!("{out}");
+        }
         Command::Config { action } => {
             use imc_core::settings as st;
             match action {
-                ConfigAction::Path => println!("{}", st::path().display()),
+                ConfigAction::Path => println!("{}", st::active_path().display()),
+                ConfigAction::Migrate => match st::migrate_legacy()? {
+                    Some(from) => println!("migrated {} -> {}", from.display(), st::path().display()),
+                    None => println!("nothing to migrate (no legacy file, or already migrated)"),
+                },
                 ConfigAction::Get { key } => {
                     let s = st::load();
                     match st::get(&s, &key) {
@@ -388,7 +546,7 @@ fn main() -> Result<()> {
                                 ),
                             }
                         }
-                        println!("\nfile: {}", st::path().display());
+                        println!("\nfile: {}", st::active_path().display());
                     }
                 }
                 ConfigAction::Test => {
@@ -435,7 +593,7 @@ fn main() -> Result<()> {
                     .ok()
                     .flatten();
                     if let Some(id) = id {
-                        let _ = imc_memory::embed_and_store(&store, embedder.as_ref(), id, &c.content);
+                        let _ = imc_memory::embed_and_store(&store, embedder.as_deref(), id, &c.content);
                         stored += 1;
                     }
                     Some(serde_json::json!({"id": id, "category": c.category, "content": c.content}))

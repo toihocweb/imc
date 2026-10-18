@@ -230,7 +230,7 @@ fn lexical_scores(store: &Store, query: &str, limit: usize) -> HashMap<i64, f64>
 /// and usage decay, mirroring the Python retrieval weighting.
 pub fn retrieve(
     store: &Store,
-    embedder: &dyn imc_embed::Embedder,
+    embedder: Option<&dyn imc_embed::Embedder>,
     query: &str,
     active_paths: &[String],
     limit: usize,
@@ -242,7 +242,9 @@ pub fn retrieve(
     }
     let lex = lexical_scores(store, query, limit * 6);
 
-    let query_vec = embedder.embed(&[query.to_string()]).ok().and_then(|v| v.into_iter().next());
+    let query_vec = embedder
+        .and_then(|e| e.embed(&[query.to_string()]).ok())
+        .and_then(|v| v.into_iter().next());
     let mut vectors: HashMap<i64, Vec<f32>> = HashMap::new();
     if let Some(qv) = &query_vec {
         let mut stmt = match store
@@ -309,11 +311,13 @@ pub fn retrieve(
 
 pub fn embed_and_store(
     store: &Store,
-    embedder: &dyn imc_embed::Embedder,
+    embedder: Option<&dyn imc_embed::Embedder>,
     id: i64,
     content: &str,
 ) -> Result<()> {
-    let Some(v) = embedder.embed(&[content.to_string()])?.into_iter().next() else {
+    let Some(v) = embedder
+        .and_then(|e| e.embed(&[content.to_string()]).ok())
+        .and_then(|v| v.into_iter().next()) else {
         return Ok(());
     };
     let mut buf = Vec::with_capacity(v.len() * 4);

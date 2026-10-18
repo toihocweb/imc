@@ -51,13 +51,44 @@ pub fn path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             dirs::home_dir()
-                .map(|h| h.join(".indexer_config.yaml"))
-                .unwrap_or_else(|| PathBuf::from(".indexer_config.yaml"))
+                .map(|h| h.join(".imc_config.yaml"))
+                .unwrap_or_else(|| PathBuf::from(".imc_config.yaml"))
         })
 }
 
+/// Pre-rename location, still read so existing setups keep working.
+pub fn legacy_path() -> PathBuf {
+    dirs::home_dir()
+        .map(|h| h.join(".indexer_config.yaml"))
+        .unwrap_or_else(|| PathBuf::from(".indexer_config.yaml"))
+}
+
+/// Which file a `load` would actually read.
+pub fn active_path() -> PathBuf {
+    let p = path();
+    if p.exists() || std::env::var("IMC_CONFIG").is_ok() {
+        p
+    } else {
+        let legacy = legacy_path();
+        if legacy.exists() {
+            legacy
+        } else {
+            p
+        }
+    }
+}
+
+/// New file wins; otherwise fall back to the legacy file.
 pub fn load() -> Settings {
-    load_at(&path())
+    let p = path();
+    if p.exists() {
+        return load_at(&p);
+    }
+    let legacy = legacy_path();
+    if legacy.exists() {
+        return load_at(&legacy);
+    }
+    Settings::default()
 }
 
 pub fn load_at(p: &std::path::Path) -> Settings {
@@ -81,6 +112,18 @@ pub fn save_at(p: &std::path::Path, s: &Settings) -> Result<()> {
 
 pub fn save(s: &Settings) -> Result<()> {
     save_at(&path(), s)
+}
+
+/// Copy the legacy `~/.indexer_config.yaml` to `~/.imc_config.yaml` once.
+pub fn migrate_legacy() -> Result<Option<PathBuf>> {
+    let legacy = legacy_path();
+    let new = path();
+    if !legacy.exists() || new.exists() {
+        return Ok(None);
+    }
+    std::fs::copy(&legacy, &new)
+        .with_context(|| format!("copy {} -> {}", legacy.display(), new.display()))?;
+    Ok(Some(legacy))
 }
 
 /// Dotted get: `llm.base_url`, `embedding.model`, `ingest.ignored_dirs`.
@@ -152,6 +195,67 @@ pub fn set(s: &mut Settings, key: &str, value: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("imc-settings-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn set_and_get_roundtrip() {
+        let dir = tmp("rt");
+        let f = dir.join("imc_config.yaml");
+        let mut s = Settings::default();
+        set(&mut s, "llm.base_url", "http://localhost:11434/v1").unwrap();
+        set(&mut s, "llm.api_key", "sk-test-1234567890abcdef").unwrap();
+        set(&mut s, "embedding.model", "text-embedding-4-mini").unwrap();
+        set(&mut s, "ingest.ignored_dirs", "a, b ,c").unwrap();
+        save_at(&f, &s).unwrap();
+
+        let loaded = load_at(&f);
+        assert_eq!(
+            get(&loaded, "llm.base_url").unwrap().as_str().unwrap(),
+            "http://localhost:11434/v1"
+        );
+        assert_eq!(get(&loaded, "embedding.model").unwrap().as_str().unwrap(), "text-embedding-4-mini");
+        let dirs = get(&loaded, "ingest.ignored_dirs").unwrap();
+        assert_eq!(dirs.as_sequence().unwrap().len(), 3);
+        // yaml shape matches the Python file
+        let raw = std::fs::read_to_string(&f).unwrap();
+        assert!(raw.contains("llm:"), "{raw}");
+        assert!(raw.contains("embedding:"), "{raw}");
+    }
+
+    #[test]
+    fn unknown_key_and_secrets_masked() {
+        let mut s = Settings::default();
+        assert!(set(&mut s, "llm.nope", "x").is_err());
+        assert!(set(&mut s, "llm", "x").is_err());
+        set(&mut s, "jira.token", "tok-abcdefgh").unwrap();
+        let masked = mask(&get(&s, "jira.token").unwrap());
+        assert!(masked.starts_with("tok-") && masked.contains('*'), "{masked}");
+        assert!(!masked.contains("abcdefgh"), "secret leaked: {masked}");
+    }
+
+    #[test]
+    fn save_is_atomic_and_overwrites() {
+        let dir = tmp("atomic");
+        let f = dir.join("imc_config.yaml");
+        let mut s = Settings::default();
+        set(&mut s, "llm.model", "m1").unwrap();
+        save_at(&f, &s).unwrap();
+        set(&mut s, "llm.model", "m2").unwrap();
+        save_at(&f, &s).unwrap();
+        assert_eq!(load_at(&f).llm.unwrap().model.unwrap(), "m2");
+        assert!(!dir.join("imc_config.yaml.tmp").exists(), "tmp file left behind");
+    }
 }
 
 /// `imc config list` output with the secret masked: `sk-...abcd`.
