@@ -519,6 +519,25 @@ fn stable_hash(s: &str) -> u64 {
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
+/// Python's `path.name` (`path.name` in the not-found messages).
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// `path.relative_to(Path.cwd())` with a fallback to the absolute path: the
+/// Python reader prints the cwd-relative path in `--method` headers.
+fn display_path(path: &Path) -> String {
+    match std::env::current_dir() {
+        Ok(cwd) => match path.strip_prefix(&cwd) {
+            Ok(rel) => rel.display().to_string(),
+            Err(_) => path.display().to_string(),
+        },
+        Err(_) => path.display().to_string(),
+    }
+}
+
 /// Build a JSON object from `(key, value)` pairs, preserving insertion order.
 fn object(fields: Vec<(&str, Value)>) -> Value {
     let mut map = Map::new();
@@ -714,9 +733,11 @@ pub fn extract_method(text: &str, path: &Path, method: &str) -> String {
                 .enumerate()
                 .map(|(i, l)| format!("{}\t{}", start + i + 1, l))
                 .collect();
+            // Python shows the path relative to the cwd when it can
+            // (`path.relative_to(Path.cwd())`), not the absolute path.
             let header = format!(
                 "{}:{}-{} {}",
-                path.display(),
+                display_path(path),
                 sym.line,
                 sym.end_line,
                 target_method
@@ -739,18 +760,20 @@ pub fn extract_method(text: &str, path: &Path, method: &str) -> String {
     if !suggestions.is_empty() {
         let hint: Vec<String> = suggestions
             .iter()
-            .map(|s| format!("  imc-read {} --method {}", path.display(), s))
+            // Python's hint says `imc-read`, its console script; no such
+            // command exists in this binary (the wrapper is `imc read`).
+            .map(|s| format!("  imc read {} --method {}", display_path(path), s))
             .collect();
         return format!(
             "[imc find] Method '{method}' not found in {}.\nDid you mean one of these?\n{}",
-            path.display(),
+            file_name(path),
             hint.join("\n")
         );
     }
 
     format!(
         "[imc find] Method '{method}' not found in {}. Use --symbols to list all available symbols.",
-        path.display()
+        file_name(path)
     )
 }
 
@@ -803,9 +826,17 @@ fn suggest_symbols(text: &str, path: &Path, query: &str, max_results: usize) -> 
     let Some(parsed) = imc_parser::parse(&rel, text) else {
         return Vec::new();
     };
+
+    // Python scores in outline order (line, then byte), so ties keep that order.
+    let mut symbols = parsed.symbols.clone();
+    symbols.sort_by(|a, b| a.line.cmp(&b.line).then(a.start_byte.cmp(&b.start_byte)));
+
     let q_lower = query.to_lowercase();
+    let q_tokens = ident_tokens(query);
+    let q_tri = trigrams(&q_lower);
+
     let mut scored: Vec<(f64, String)> = Vec::new();
-    for s in &parsed.symbols {
+    for s in &symbols {
         if s.name.is_empty() {
             continue;
         }
@@ -816,13 +847,21 @@ fn suggest_symbols(text: &str, path: &Path, query: &str, max_results: usize) -> 
         } else if q_lower.contains(&n_lower) || n_lower.contains(&q_lower) {
             sc += 10.0;
         }
-        if n_lower.contains(&q_lower) && q_lower.len() > 2 {
-            sc += 3.0;
+        // Token overlap carries camelCase/snake_case names, and the trigram
+        // Jaccard is what catches a misspelling (`resolve_search_limt`).
+        let n_tokens = ident_tokens(&s.name);
+        sc += (q_tokens.intersection(&n_tokens).count() as f64) * 3.0;
+        let n_tri = trigrams(&n_lower);
+        if !q_tri.is_empty() || !n_tri.is_empty() {
+            let inter = q_tri.intersection(&n_tri).count() as f64;
+            let union = q_tri.union(&n_tri).count().max(1) as f64;
+            sc += inter / union * 5.0;
         }
         if sc > 0.0 {
             scored.push((sc, s.name.clone()));
         }
     }
+
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -833,6 +872,46 @@ fn suggest_symbols(text: &str, path: &Path, query: &str, max_results: usize) -> 
         if out.len() >= max_results {
             break;
         }
+    }
+    out
+}
+
+/// Python's `re.findall(r"[a-z]+|[A-Z][a-z]*", s)`, lowercased.
+fn ident_tokens(s: &str) -> std::collections::HashSet<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = std::collections::HashSet::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_lowercase() {
+            let start = i;
+            while i < chars.len() && chars[i].is_ascii_lowercase() {
+                i += 1;
+            }
+            out.insert(chars[start..i].iter().collect::<String>());
+        } else if chars[i].is_ascii_uppercase() {
+            let start = i;
+            i += 1;
+            while i < chars.len() && chars[i].is_ascii_lowercase() {
+                i += 1;
+            }
+            out.insert(chars[start..i].iter().collect::<String>().to_lowercase());
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Python: `"  {t}  "` then every 3-char window.
+fn trigrams(s: &str) -> std::collections::HashSet<String> {
+    let padded = format!("  {s}  ");
+    let chars: Vec<char> = padded.chars().collect();
+    let mut out = std::collections::HashSet::new();
+    if chars.len() < 3 {
+        return out;
+    }
+    for i in 0..=chars.len() - 3 {
+        out.insert(chars[i..i + 3].iter().collect::<String>());
     }
     out
 }
@@ -853,6 +932,34 @@ mod tests {
         let p = tmp_path(name);
         std::fs::write(&p, content).unwrap();
         p
+    }
+
+    // symbol suggestions ---------------------------------------------------
+    #[test]
+    fn suggest_symbols_catches_misspellings_and_prefixes() {
+        // Python's scorer: substring 20/10, camel/snake token overlap * 3, and
+        // trigram Jaccard * 5. Without the last two the list was always empty,
+        // because an exact hit never reaches the not-found branch.
+        let src = "def resolve_search_limit(query):\n    return 1\n\n\ndef other_thing():\n    return 2\n";
+        let path = tmp_path("suggest.py");
+        let miss = suggest_symbols(src, &path, "resolve_search_limt", 5);
+        assert_eq!(miss.first().map(|s| s.as_str()), Some("resolve_search_limit"), "{miss:?}");
+        let partial = suggest_symbols(src, &path, "resolve_limit", 5);
+        assert_eq!(partial.first().map(|s| s.as_str()), Some("resolve_search_limit"), "{partial:?}");
+        let camel = suggest_symbols(src, &path, "resolveSearchLimit", 5);
+        assert_eq!(camel.first().map(|s| s.as_str()), Some("resolve_search_limit"), "{camel:?}");
+        // A name sharing nothing (tokens or trigrams) must suggest nothing.
+        assert!(suggest_symbols(src, &path, "generate_invoice", 5).is_empty());
+    }
+
+    #[test]
+    fn ident_tokens_and_trigrams_match_python() {
+        let t = ident_tokens("resolveSearchLimit");
+        assert!(t.contains("resolve") && t.contains("search") && t.contains("limit"), "{t:?}");
+        let s = ident_tokens("resolve_search_limit");
+        assert_eq!(s.len(), 3, "{s:?}");
+        let tri = trigrams("ab");
+        assert!(tri.contains("  a") && tri.contains(" ab") && tri.contains("ab "), "{tri:?}");
     }
 
     // blank-line stripping ------------------------------------------------

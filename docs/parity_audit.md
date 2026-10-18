@@ -44,6 +44,16 @@ not redone. Dispositions:
 | context 11 | nested i18n key could shadow its ancestor (sorted map) | `preserve_order` |
 | context 16 | dossier had no trailing newline | `println!` |
 
+Found outside the three audited commands, while checking the rest of the tool
+against Python:
+
+| Finding | Fix |
+|---|---|
+| `read --method <typo>` never suggested anything. The scorer only had substring matching, and an exact hit never reaches the not-found branch, so the list was always empty — Python also weighs camelCase/snake_token overlap and trigram Jaccard | ported the full scorer; e2e D6 |
+| The suggestion hint said `imc-read`, Python's console script, which is not a command here | says `imc read` |
+| `read --method` headers printed the absolute path where Python prints `path.relative_to(cwd)` | `display_path` |
+| The not-found message printed the full path; Python prints `path.name` | `file_name` |
+
 Not from the audit but found while fixing context 5: the bridge searched for the
 handler from line 1 of the file instead of from the annotation
 (`.take()` without `.skip(i)`), so every route in a file took the first `def` as

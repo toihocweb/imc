@@ -504,6 +504,18 @@ def suite_reader(root, data):
 
     check("D5 read on a missing file exits 1", missing_file)
 
+    def method_typo_suggests_the_real_name():
+        # The scorer needs token overlap and trigrams, not just substrings: an
+        # exact hit never reaches this branch, so a substring-only scorer always
+        # came back empty.
+        p = run_imc(["read", "src/billing.py", "--method", "calculate_tx"], root, data)
+        out = p.stdout + p.stderr
+        assert "calculate_tax" in out, f"no suggestion for a near miss:\n{out[:300]}"
+        assert "imc-read" not in out, f"suggests a command that does not exist:\n{out[:300]}"
+        return "typo suggests the real symbol, via a command that exists"
+
+    check("D6 --method typo suggests the real symbol", method_typo_suggests_the_real_name)
+
 
 # -- E. memory -----------------------------------------------------------------
 def suite_memory(vectors, root, data):
