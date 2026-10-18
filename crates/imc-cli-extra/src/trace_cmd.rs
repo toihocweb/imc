@@ -1,6 +1,7 @@
 //! Port of `main/cli/commands/trace.py` (89 lines).
 //!
-//! CLI command: `imc trace <target> [--depth N] [--callers] [--both] [--all] [--json]`
+//! CLI command: `imc trace <target> [-d N] [-r/--callers] [-b/--both] [-a/--all] [--json]`
+//! (plus the `callers` / `callees` / `blast` shorthands, which preset direction)
 //! — AST-based call hierarchy / execution-flow tracer.
 //!
 //! `main/core/tracer.py` is `ASTTracer`; the Rust `imc-trace` crate is still a
@@ -94,7 +95,7 @@ pub trait Tracer {
     fn format_ascii_tree(&self, tree: &Value, direction: Direction) -> String;
     /// Is `target` referenced anywhere in the graph?
     ///
-    /// Reverse tracing (`-d callers`) legitimately accepts names that have no
+    /// Reverse tracing (`-r/--callers`) legitimately accepts names that have no
     /// definition of their own — builtins and imported helpers like `print` are
     /// only ever a *call target*. That allowance must not extend to names that
     /// appear nowhere at all, or a typo silently returns "no callers".
@@ -162,7 +163,7 @@ pub fn run_trace(tracer: &dyn Tracer, opts: &TraceOptions) -> Result<TraceOutput
 
     // No definition: fatal outright when walking forward, and fatal for reverse
     // too unless the name is referenced somewhere as a call target. Before this
-    // guard, `imc trace typo -d callers` printed nothing and exited 0.
+    // guard, `imc trace typo --callers` printed nothing and exited 0.
     if candidates.is_empty() && (!is_reverse || !tracer.target_is_known(&opts.target)) {
         return Err(TraceError::SymbolNotFound { target: opts.target.clone(), project });
     }

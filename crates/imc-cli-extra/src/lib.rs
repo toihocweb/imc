@@ -9,6 +9,11 @@
 //!
 //! `adapter` implements `trace_cmd::Tracer` over the real `imc-trace` engine,
 //! so the ported orchestration drives the ported tracer.
+//!
+//! `endpoint_bridge` adapts `imc-support`'s `EndpointBridge` to the engine's
+//! `RouteBridge` trait, which is how Python's `ASTTracer` always runs: with a
+//! bridge attached, `GET /api/x` targets and frontend call sites resolve.
 
 pub mod adapter;
+pub mod endpoint_bridge;
 pub mod trace_cmd;

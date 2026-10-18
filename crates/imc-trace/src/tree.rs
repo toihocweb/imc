@@ -697,6 +697,11 @@ impl<'a> Tracer<'a> {
                     routes = bridge.routes_for_caller(&ep, &info.file);
                 }
             }
+            // Several call sites in one function can reach the same route (two
+            // `fetch`s, a hook alias). Python adds each `route:<METHOD>:<path>`
+            // to its `visited` set as it emits it, so siblings collapse to one
+            // node; without this the same route is emitted once per call site.
+            let mut emitted_routes: HashSet<String> = HashSet::new();
             for (client_call, matched) in routes {
                 if self.is_known(node_id)
                     && info.name == client_call.caller_name
@@ -719,7 +724,8 @@ impl<'a> Tracer<'a> {
                 }
                 for route in matched {
                     let route_id = format!("route:{}:{}", route.method, route.normalized_path);
-                    if path.iter().any(|v| v == &route_id) {
+                    if path.iter().any(|v| v == &route_id) || !emitted_routes.insert(route_id.clone())
+                    {
                         continue;
                     }
                     let mut route_path = path.clone();
@@ -825,10 +831,15 @@ impl<'a> Tracer<'a> {
             ..Default::default()
         };
 
-        // Ambiguous names are not a selected identity (Python returns early);
-        // an *undefined* target (external/stdlib callee) still has reverse edges
-        // in Python's graph, so it must fall through and be expanded instead of
-        // returning an empty tree.
+        // Ambiguous names are not a selected identity (Python returns early).
+        //
+        // Undefined names (builtins, stdlib, imported helpers) are a deliberate
+        // divergence: measured on /root/imc and on the e2e fixture, Python's
+        // `imc trace sum -r` prints the bare name and no callers, because it
+        // needs a graph node to walk `in_edges` from. This port has the call
+        // edges in the store, so it reports who calls `sum`. An agent reads a
+        // childless tree as "nothing calls this", which is a different claim
+        // from "this name has no definition" — the useful answer wins.
         let undefined_target = defs.is_empty();
         if defs.len() > 1 {
             return tree;
@@ -858,10 +869,9 @@ impl<'a> Tracer<'a> {
         } {
             let caller = self.node_info(&caller_id);
             // A name-only edge only contributes when its conservative forward
-            // resolution identifies this exact definition. When the target has
-            // no definition at all (an external / stdlib callee), Python still
-            // had a graph node for it and reported its predecessors, so we must
-            // not filter those edges out.
+            // resolution identifies this exact definition. Undefined targets
+            // have no definition to compare against, so their edges are kept —
+            // see `undefined_target` above for why that is deliberate.
             if !undefined_target
                 && self
                     .resolve_callee(&raw_name, &caller.file)
@@ -1979,10 +1989,11 @@ mod tests {
         assert!(o.with_depth(5).with_show_all(true).show_all);
     }
 
-    /// Regression: a callee with no definition (external / stdlib) still has a
-    /// Python graph node, so its callers must be reported. Before the fix the
-    /// conservative-resolution filter dropped every reverse edge and the blast
-    /// radius came back empty.
+    /// Regression: a callee with no definition (external / stdlib) must still
+    /// report its callers. Before the fix the conservative-resolution filter
+    /// dropped every reverse edge and the blast radius came back empty — which
+    /// an agent reads as "nothing calls this". (Python prints the bare name
+    /// here; this port is deliberately more informative.)
     #[test]
     fn callers_of_an_undefined_name_still_resolve() {
         let dir = std::env::temp_dir().join(format!("imc-trace-ext-{}", std::process::id()));

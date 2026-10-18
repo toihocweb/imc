@@ -7,7 +7,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use imc_core::store::Store;
-use imc_trace::tree::{self, CalleeNode, CallerNode, TraceOptions as TreeOptions};
+use imc_trace::tree::{self, CalleeNode, CallerNode, RouteBridge, TraceOptions as TreeOptions};
 
 use crate::trace_cmd::{Candidate, Direction, Tracer};
 
@@ -30,6 +30,16 @@ impl<'a> ImcTracer<'a> {
             store,
             project_name: indexed.then_some(name),
         }
+    }
+
+    /// Attach a cross-boundary route/client-call bridge. Python's `ASTTracer`
+    /// always has one for an indexed project (`tracer.py:98`), so the CLI must
+    /// pass it too or `GET /api/x` targets and frontend call sites resolve to
+    /// nothing.
+    pub fn with_bridge(mut self, bridge: &'a dyn RouteBridge) -> Self {
+        self.inner = std::mem::replace(&mut self.inner, tree::Tracer::new(self.store))
+            .with_bridge(bridge);
+        self
     }
 }
 
