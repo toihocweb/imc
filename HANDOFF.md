@@ -1,93 +1,129 @@
-# Session handoff — 2026-10-18
+# Session handoff — 2026-10-18/19
 
-Written when switching the agent model from DeepSeek to Qwen3.8-max. Everything
-below was verified by running the tool, not inferred from reading code.
+Continues from the previous handoff (which is now history; see `docs/parity_audit.md`
+for the parity analysis this session produced). Everything below was verified by
+running the tool, not read off the code.
 
 ## Repos
 
-- `/root/imc` — the **Python original**. Source of truth for behaviour.
-- `/root/imc-rs` — the **Rust port**. 12 commits this session, HEAD `73bf658`.
-- Binary: `imc-rs/target/release/imc` (plus `imc-proxyd`).
+- `/root/imc` — the **Python original**, source of truth for behaviour.
+- `/root/imc-rs` — the **Rust port**. Binary `target/release/imc`.
+- Rule: keep Rust behaviour identical to Python unless a deviation is deliberate
+  and recorded. `docs/parity_audit.md` holds that record, finding by finding.
 
-Rule: keep Rust behaviour identical to Python unless told otherwise.
-
-## Verified state
-
-```
-unit tests   283 passed, 0 failed   (cargo test --release, whole workspace)
-e2e suite     49 passed             (python3 e2e/e2e_suite.py)
-build         0 errors              (cargo build --release)
-```
-
-The e2e suite covers python / typescript / rust / go / java on one fixture.
-
-## Measured numbers (don't re-derive these)
-
-`imc search` on `/root/imc` (25 labelled queries, `e2e/search_bench.py`):
-
-- BM25 only — top-1 52%, top-3 76%, top-5 80%, MRR 0.785
-- Hybrid — top-1 52%, top-5 84%, MRR 0.757
-- Vector does **not** beat BM25 here. Say so rather than implying it does.
-
-`main/prompts/imc_search.md` prompt tuning (`e2e/prompt_eval.py`, 3 runs, frozen
-context — `docs/search_prompt_tuning.md` has the method):
-
-| prompt | grounded (of 8) | key files | invalid citations |
-|---|---|---|---|
-| baseline (Python) | 5.3 | 7.3 | 4.3 |
-| tuned (`docs/search_prompt_tuned.md`) | **8.0** | **8.3** | **0.0** |
-
-`e2e/fe_be_link.py` — frontend→backend by string match, 35/36 endpoints across 6
-React components, zero LLM calls.
-
-## Uncommitted work (deliberate)
+## Verified state (end of session)
 
 ```
-M crates/imc-cli/src/claude.rs        reminder to pass -C when cwd may not be the project
-M crates/imc-proxy-types/src/types/anthropic.rs
-?? crates/imc-proxy-types/tests/
+unit tests   302 passed, 0 failed   (cargo test --release, whole workspace)
+e2e suite     62 passed             (python3 e2e/e2e_suite.py) — was 49
+build         0 errors, 1 pre-existing dead-code warning (resolve_symbol_ids)
 ```
 
-The proxy change is **untagged -> tagged** on five serde enums. Untagged matched
-the first variant, and every variant's fields were `#[serde(default)]`, so:
+e2e suites now: A index, B retrieval, C call graph, D reader, E memory, F claude,
+G config, H proxy, I json, J multi-language, **K cross-boundary routes**,
+**L agentic search** (stub LLM server, no network/key needed).
 
-- every assistant message deserialized as a **user** message (role has a default)
-- every `tool_use` block became an empty `Text`, losing id, name and input
+## Measured numbers
 
-Verified with a repro that round-trips a real payload. Tests in
-`tests/anthropic_block_dispatch.rs`. Left uncommitted on request — say so rather
-than assuming it should stay.
+`imc search` on `/root/imc`, 25 labelled queries (`e2e/search_bench.py`):
 
-## Pending, not started
+| leg | top-1 | top-3 | top-5 | MRR |
+|---|---|---|---|---|
+| BM25 only | 52% | 76% | 80% | 0.785 |
+| hybrid | 52% | 80% | **88%** | 0.745 |
 
-1. **`imc context` reports wrong paths for prefixed routers.** `git.py` has
-   `APIRouter(prefix="/api/git")` and `@router.get("/status")`; the command prints
-   `GET /status`, but the real route is `GET /api/git/status`. It re-implements
-   route scanning instead of using `EndpointBridge`. Fix: use the bridge.
-2. **`RouteBridge` is not wired to `imc trace`.** `EndpointBridge` is ported
-   (`imc-support/src/endpoints.rs`, 1130 lines, has tests), the trait exists
-   (`imc-trace/src/tree.rs`), `HttpRoute`/`ClientCall`/`KIND_ROUTE` exist, but no
-   `impl RouteBridge for EndpointBridge` and `ImcTracer` holds only `NoBridge`.
-   Roughly 60-80 lines of glue plus parsing `GET /api/x` targets at the CLI.
+BM25 is byte-for-byte the pre-change baseline. Hybrid top-5 improved 84 → 88;
+MRR moved 0.757 → 0.745 (one query's ordering). Junk queries are **empty in both
+legs** for all three junk queries, which is new — they used to return five
+confident hits at ~0.016.
 
-With #2 done, `fe_be_link.py` becomes redundant.
+`e2e/qna_report.py` (10 questions, retrieval → prompt → LLM, mechanical citation
+check): 5 chunks retrieved per question, **0 invalid citations, 0 partial
+answers**, 32 distinct paths cited. The previous run cited 36 with two answers
+empty/truncated (answers vary with the model; retrieval is unchanged).
+
+Prompt tuning (`e2e/prompt_eval.py`, frozen context, 3 runs) is unchanged from
+last session: tuned prompt 8.0/8 grounded, 0.0 invalid citations.
+
+## What this session changed (commit order)
+
+```
+bb50ea0 context: extract routes through EndpointBridge, and fix the handler scan it exposed
+a17c660 trace: give the tracer a route bridge, so `GET /api/path` targets work
+5c31156 search: answer through the LLM by default, and stop returning junk
+2fe6f5a parser: index the declarations Python indexes, and not the ones it does not
+22a8df9 cli: match Python's flags, and never silently ignore a wrong one
+0aab33e parity: JSON document order, and the kinds a file target expands into
+c1617b5 context: tolerate invalid UTF-8 like Python, and record the parity audit
+```
+
+The two items the last handoff listed as pending are both done: prefixed-router
+paths in `imc context`, and `RouteBridge` wired to `imc trace`. `e2e/fe_be_link.py`
+is now redundant (the tracer does that linkage itself) but is left in place as a
+Python-side cross-check.
+
+Biggest additions: agentic `imc search` (the port's first LLM path, with a
+hermetic e2e suite), the full Python trace/context CLI surface, and the parser
+fixes that were hiding structs (id collision with `impl`) and every lowercase
+TS/JS arrow helper.
+
+## Uncommitted, deliberately
+
+```
+M crates/imc-proxy-types/src/types/anthropic.rs   untagged -> tagged on five serde enums
+?? crates/imc-proxy-types/tests/                  the repro that proves it
+```
+
+Left uncommitted on request last session and still uncommitted now; its tests
+pass. The change fixes real corruption (every assistant message deserialised as a
+user message; every `tool_use` block became an empty `Text`, losing id, name and
+input). Say so rather than assuming it should stay or go.
+
+## Verified cross-boundary behaviour (new)
+
+On `/root/imc`, byte-identical to Python:
+
+```
+imc trace "GET /api/git/status"      -> route node -> handler get_git_status -> its calls
+```
+
+On a fixture with a React caller:
+
+```
+trace <component>          component -> HTTP route -> backend handler
+trace <handler> --callers  handler <- HTTP route <- component
+trace "GET /api/nope"      rc=1, "Symbol ... not found"
+```
 
 ## Things that bit us, so they don't bite again
 
-- `imc -C <repo>` — always pass it. Without it `resolve_root` prefers the globally
-  active project over cwd, so an unrelated directory answers the query. This made
-  a benchmark report 25/25 misses.
-- `imc read --method` needs the **exact** name as printed by `--symbols`, including
-  a leading underscore. `blended_score` fails, `_blended_score` works.
-- `-l 50` returns 20 hits. That is Python parity (`min(max(n,1),20)`), not a bug.
-- `imc trace <typo> -d callers` used to exit 0 with an empty tree, which an agent
-  reads as "no callers". Fixed; now rc=1.
-- Python's builtin list is applied to **Python callers only**. Applying it to Java
-  silently hid `sum()` and `round()` from traces.
-- `imc trace` resolves callees by bare name, so `User.describe` and
-  `Checkout.describe` collide, and `Repository.findById` vs
-  `UserRepository.findById` is ambiguous. Known limit, not fixed.
-- The eval harness's citation checker must treat a path named *inside* a retrieved
-  chunk as grounded. It previously flagged a correct citation as a hallucination.
-- The prompt-eval labels were checked against the index: one asked for a language
-  list the index does not contain, so the model refusing to cite it was correct.
+- `imc -C <repo>` — always pass it. Without it the port answers for the active
+  project or a registry match from the cwd (both new behaviours), not necessarily
+  the directory you meant. `e2e/search_bench.py` pins `-C` for this reason.
+- Shell exports persist across `bash` tool calls. A stray `export IMC_DATA_DIR`
+  made an earlier probe read another project's DB and report "no such table:
+  chunks_fts". `unset IMC_DATA_DIR IMC_CONFIG IMC_VECTOR` before comparing
+  against `~/.imc_config.yaml`.
+- `chunks_fts` is created by `imc index`, not by `store::open`. A unit test that
+  builds a store by hand must call `imc_search::ensure_fts` first.
+- Python's `search` on this machine finds nothing at all: it reads
+  `~/.indexer_config.yaml`, which does not exist here, so its vector table is
+  uninitialised. "Python says No results found" is therefore not evidence about
+  relevance — check `imc config path` before drawing a parity conclusion from it.
+- The LLM endpoint is configured with `base_url https://api.xah.io/v1` and
+  **no** `llm.model`, so the default `gemini-3.1-flash-lite` 404s ("model is not
+  available"). `claude-haiku-4.5` works. `imc search` now prints the response body
+  and says which model it tried, so this is a five-second diagnosis rather than a
+  mystery.
+- `imc context -d/--depth` is accepted and ignored: Python's
+  `get_feature_context(..., depth)` never reads it either (main/cli/commands/
+  context.py:555-681).
+- A subcommand-level `--project` and a global one share clap's arg id and clap
+  **panics** on the type mismatch. The global path flag is `-C/--root` for that
+  reason; do not rename it back.
+- `imc trace <typo> --callers` exits 1 (parity break kept deliberately); the
+  Python original prints an empty tree and exits 0.
+- When comparing Rust and Python output, run both on the *same* repo and check
+  who is right before "fixing" the port: several audit findings turned out to be
+  Python bugs the port had faithfully copied (the route prefix), and one turned
+  out to be the port being deliberately better (undefined-name callers).
