@@ -147,7 +147,7 @@ def pack_context(hits: list[dict]) -> str:
 CITE_RE = re.compile(r"([A-Za-z0-9_./-]+\.[A-Za-z0-9]+)(?::L?(\d+)(?:-L?(\d+))?)?")
 
 
-def check_citations(answer: str, context_files: set[str]):
+def check_citations(answer: str, context_files: set[str], context_text: str = ""):
     """Split cited spans into (grounded, bad).
 
     Two ways to be bad:
@@ -160,8 +160,12 @@ def check_citations(answer: str, context_files: set[str]):
     for path, a, b in CITE_RE.findall(answer):
         if not path.startswith(("main/", "ui/", "tests/", "services/", "src/")):
             continue
-        if path not in context_files:
+        # A path named inside a retrieved chunk counts as grounded — an import
+        # line is evidence even when no chunk of that file was retrieved.
+        if path not in context_files and path not in context_text:
             bad.append(f"{path}: not in context")
+            continue
+        if path not in context_files:
             continue
         if not a:
             grounded.append(path)
@@ -191,7 +195,7 @@ def run(prompt_path: Path, query: str, limit: int, model: str, verbose=False):
     context = pack_context(hits)
     context_files = {h["file"] for h in hits}
     answer = llm(build_prompt(template, context, query), model)
-    valid, invalid = check_citations(answer, context_files)
+    valid, invalid = check_citations(answer, context_files, context)
     return {
         "query": query,
         "answer": answer,
