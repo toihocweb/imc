@@ -1,0 +1,5 @@
+//! Library surface for the `imc` binary, exposed so integration tests can
+//! exercise the same indexing path the CLI runs.
+
+pub mod index;
+pub mod mcp;
