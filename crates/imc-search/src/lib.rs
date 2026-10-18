@@ -98,6 +98,26 @@ fn bm25_scores(store: &Store, query: &str) -> Result<HashMap<i64, f64>> {
         .map(|(id, bm)| (*id, -(*bm)))
         .collect();
     let relaxed = run(&join_expr(&tokens, true), CANDIDATES * 4)?;
+
+    // The relaxed pass is an OR, so one incidental token is enough to enter it,
+    // and a nonsense query still shares a rare word with the corpus — measured
+    // on /root/imc: "quantum banana teleport protocol" matches only `protocol`
+    // (10 chunks), "kubernetes helm chart rollout strategy" only `strategy`
+    // (7), and "photosynthesis chlorophyll wavelength" nothing at all.
+    //
+    // The separating signal is query-level, not per-chunk: every real query in
+    // the labelled set has at least two content tokens that appear *somewhere*
+    // in the corpus (lowest is 2 of 3, "tokenization and bm25 scoring"), while
+    // every junk query has at most one. So when fewer than two tokens exist in
+    // the corpus, the query has no lexical support and the relaxed pass adds
+    // nothing. Per-chunk ">= 2 tokens" gates look similar but are wrong: they
+    // cost three top-3 answers, because a correct file may legitimately share
+    // just one token. Strict (all-token) hits are never gated.
+    let tokens_present = tokens_present_in_corpus(store, &tokens)?;
+    if tokens.len() >= 2 && tokens_present < 2 {
+        return Ok(rows.into_iter().collect());
+    }
+
     for (id, bm) in relaxed {
         if !rows.iter().any(|(i, _)| *i == id) {
             rows.push((id, -bm * OR_PENALTY));
@@ -109,6 +129,37 @@ fn bm25_scores(store: &Store, query: &str) -> Result<HashMap<i64, f64>> {
         out.insert(id, score);
     }
     Ok(out)
+}
+
+/// How many distinct query tokens the corpus knows about.
+///
+/// Three kinds of evidence count, because FTS5 stores `OrderService` as one
+/// token: a chunk match, a symbol whose *name* matches, and a file path that
+/// contains the token. The last two matter for queries like `OrderService.java`,
+/// which tokenizes to `order`/`service`/`java` — only `java` is an FTS token, so
+/// a text-only probe would call a real query unsupported and drop every hit.
+/// Paths are checked in memory (a few hundred files) rather than with a
+/// `LIKE '%tok%'` scan per token.
+fn tokens_present_in_corpus(store: &Store, tokens: &[String]) -> Result<usize> {
+    let paths: Vec<String> = store
+        .all_file_hashes()
+        .into_iter()
+        .map(|(p, _)| p.to_lowercase())
+        .collect();
+    let mut stmt = store
+        .conn
+        .prepare("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?1 LIMIT 1")?;
+    let mut present = 0usize;
+    for t in tokens.iter().take(12) {
+        let mut rows = stmt.query(params![format!("\"{t}\"")])?;
+        let in_chunks = rows.next()?.is_some();
+        let in_symbols = !store.find_symbols_by_name(t, 1).is_empty();
+        let in_paths = paths.iter().any(|p| p.contains(t.as_str()));
+        if in_chunks || in_symbols || in_paths {
+            present += 1;
+        }
+    }
+    Ok(present)
 }
 
 /// Stopword-filtered tokens for one query (single source of truth).
@@ -155,13 +206,29 @@ fn cosine(a: &[f32], b: &[f32]) -> f64 {
     dot / (na.sqrt() * nb.sqrt())
 }
 
+/// Cosine floor for the vector leg.
+///
+/// Measured on `/root/imc` (1234 chunks, `text-embedding-3-small`): a nonsense
+/// query ("quantum banana teleport protocol") peaks at 0.26, while the correct
+/// file for a real query scores 0.35-0.53. Without a floor every chunk is
+/// "somewhat similar" to everything, so a nonsense query returns five confident
+/// hits at ~0.016 fused — and an agent reads that as evidence. BM25 hits bypass
+/// the floor: an exact term match is explicit intent (same rule as
+/// `imc_memory::min_cosine`).
+fn min_cosine() -> f64 {
+    std::env::var("IMC_SEARCH_MIN_SIM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.30)
+}
+
 fn vector_scores(store: &Store, query_vec: &[f32]) -> HashMap<i64, f64> {
     let mut scored: Vec<(i64, f64)> = store
         .all_vectors()
         .into_iter()
         .filter(|(_, v)| v.len() == query_vec.len())
         .map(|(id, v)| (id, cosine(query_vec, &v)))
-        .filter(|(_, s)| *s > 0.0)
+        .filter(|(_, s)| *s >= min_cosine())
         .collect();
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(CANDIDATES);
@@ -472,4 +539,94 @@ pub fn search(
         }
     }
     Ok(hits)
+}
+
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use imc_core::store;
+
+    fn tmp_db(tag: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("imc-search-{tag}-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    /// Two files with disjoint vocabulary: `billing.py` knows invoice/tax words,
+    /// `crypto.py` knows the word "protocol" (the trap a junk query lands on).
+    fn seeded(tag: &str) -> (store::Store, std::path::PathBuf) {
+        let db = tmp_db(tag);
+        let store = store::open(&db).unwrap();
+        // `chunks_fts` is created by `imc index`, not by `store::open`.
+        ensure_fts(&store).unwrap();
+        store.upsert_file("src/billing.py", "h1", Some("python"), 64).unwrap();
+        store.upsert_file("src/crypto.py", "h2", Some("python"), 64).unwrap();
+        store
+            .insert_chunk(
+                "src/billing.py",
+                1,
+                3,
+                "src/billing.py:1-3\ndef calculate_tax(amount, rate):\n    return amount * rate\n",
+                None,
+            )
+            .unwrap();
+        store
+            .insert_chunk(
+                "src/crypto.py",
+                20,
+                22,
+                "src/crypto.py:20-22\n# TLS protocol handshake notes\ndef handshake():\n    return None\n",
+                None,
+            )
+            .unwrap();
+        (store, db)
+    }
+
+    #[test]
+    fn real_query_returns_its_chunk() {
+        let (store, db) = seeded("real");
+        let hits = search(&store, None, "calculate tax rate", &SearchOptions { limit: 5, vector: false }).unwrap();
+        assert!(!hits.is_empty(), "a two-token query in the corpus must hit");
+        assert_eq!(hits[0].file, "src/billing.py");
+        let _ = std::fs::remove_file(&db);
+    }
+
+    /// Measured on /root/imc: junk shares one word with the corpus and used to
+    /// come back as five confident hits. The gate must keep it empty.
+    #[test]
+    fn junk_query_returns_nothing() {
+        let (store, db) = seeded("junk");
+        for q in [
+            "quantum banana teleport protocol",
+            "kubernetes helm chart rollout strategy",
+            "photosynthesis chlorophyll wavelength",
+        ] {
+            let hits = search(&store, None, q, &SearchOptions { limit: 5, vector: false }).unwrap();
+            assert!(hits.is_empty(), "{q:?} returned {hits:?}");
+        }
+        let _ = std::fs::remove_file(&db);
+    }
+
+    /// A query naming a file, with the extension, still has support: the tokens
+    /// are not FTS words (`calculate_tax` is one token), only path evidence.
+    #[test]
+    fn filename_query_is_not_gated_out() {
+        let (store, db) = seeded("filename");
+        let hits = search(&store, None, "billing.py", &SearchOptions { limit: 5, vector: false }).unwrap();
+        assert!(!hits.is_empty(), "a file named in the query must still hit");
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn single_token_query_is_exempt_from_the_gate() {
+        let (store, db) = seeded("single");
+        let hits = search(&store, None, "handshake", &SearchOptions { limit: 5, vector: false }).unwrap();
+        assert!(!hits.is_empty(), "a one-word query must not be gated");
+        let _ = std::fs::remove_file(&db);
+    }
 }
