@@ -14,10 +14,15 @@ running the tool, not read off the code.
 ## Verified state (end of session)
 
 ```
-unit tests   302 passed, 0 failed   (cargo test --release, whole workspace)
-e2e suite     62 passed             (python3 e2e/e2e_suite.py) — was 49
-build         0 errors, 1 pre-existing dead-code warning (resolve_symbol_ids)
+unit tests   304 passed, 0 failed   (cargo test --release, whole workspace)
+e2e suite     64 passed             (python3 e2e/e2e_suite.py) — was 49
+build         0 errors
 ```
+
+The e2e run is now genuinely hermetic: it writes an empty `config.yaml` into its
+temp data dir, so no embedding endpoint is touched. Before that fix it silently
+fell back to `~/.indexer_config.yaml` (a missing `IMC_CONFIG` file is not an
+empty config, it is a fallback to the legacy path).
 
 e2e suites now: A index, B retrieval, C call graph, D reader, E memory, F claude,
 G config, H proxy, I json, J multi-language, **K cross-boundary routes**,
@@ -42,8 +47,9 @@ check): 5 chunks retrieved per question, **0 invalid citations, 0 partial
 answers**, 32 distinct paths cited. The previous run cited 36 with two answers
 empty/truncated (answers vary with the model; retrieval is unchanged).
 
-Prompt tuning (`e2e/prompt_eval.py`, frozen context, 3 runs) is unchanged from
-last session: tuned prompt 8.0/8 grounded, 0.0 invalid citations.
+Prompt tuning (`e2e/prompt_eval.py`, frozen context, 3 runs) re-measured after
+the prompt's `-d callers` example became `--callers`: grounded 8.0/8, key files
+9/13, 70 valid citations, 0 invalid, refusal handled 1/1. Unchanged.
 
 ## What this session changed (commit order)
 
@@ -55,6 +61,9 @@ a17c660 trace: give the tracer a route bridge, so `GET /api/path` targets work
 22a8df9 cli: match Python's flags, and never silently ignore a wrong one
 0aab33e parity: JSON document order, and the kinds a file target expands into
 c1617b5 context: tolerate invalid UTF-8 like Python, and record the parity audit
+1c3e83a HANDOFF: session state after the parity pass
+97bb848 read: make --method suggestions work, and print paths like Python
+10650bc cli/e2e: Python command aliases, -C path resolution, and a hermetic test run
 ```
 
 The two items the last handoff listed as pending are both done: prefixed-router
@@ -63,9 +72,15 @@ is now redundant (the tracer does that linkage itself) but is left in place as a
 Python-side cross-check.
 
 Biggest additions: agentic `imc search` (the port's first LLM path, with a
-hermetic e2e suite), the full Python trace/context CLI surface, and the parser
-fixes that were hiding structs (id collision with `impl`) and every lowercase
-TS/JS arrow helper.
+hermetic e2e suite), the full Python trace/context CLI surface, the parser fixes
+that were hiding structs (id collision with `impl`) and every lowercase TS/JS
+arrow helper, and a working `read --method` suggestion scorer (it was always
+empty). `docs/parity_audit.md` has the per-finding record.
+
+Outside the three audited commands, `read` was compared against Python too:
+suggestion scoring, `-C` path resolution, relative-path headers, `path.name` in
+the not-found message, and the `find`/`list`/`status` aliases all came from that
+pass.
 
 ## Uncommitted, deliberately
 
@@ -127,3 +142,13 @@ trace "GET /api/nope"      rc=1, "Symbol ... not found"
   who is right before "fixing" the port: several audit findings turned out to be
   Python bugs the port had faithfully copied (the route prefix), and one turned
   out to be the port being deliberately better (undefined-name callers).
+- `~/.indexer_config.yaml` exists on this machine as well as `~/.imc_config.yaml`
+  (both hold the same key). A missing config file does **not** mean "no config":
+  the loader falls back to the legacy path, so anything that wants a clean
+  environment must create an empty file at `IMC_CONFIG`.
+- Python's own search is unusable here (it reads `~/.indexer_config.yaml` for its
+  *Pydantic* config but its vector store was never initialised), so Python cannot
+  be the oracle for search behaviour on this machine; use the labelled benchmark
+  and the junk-query set instead.
+- `imc find` / `imc list` / `imc status` now resolve to `read` / `projects` /
+  `stats`, so a doc that says `imc find` is correct again.
