@@ -1208,6 +1208,23 @@ mod tests {
     }
 
     #[test]
+    fn resolve_i18n_keys_follows_document_order() {
+        // Python walks the JSON in document order and keeps the first hit, so a
+        // top-level key wins over a later nested one. Rust needs serde_json's
+        // `preserve_order` for this: a sorted map visits "outer" first and the
+        // nested value shadows the top-level key.
+        let root = tmp_dir("i18n-order");
+        let f = write(
+            &root,
+            "src/i18n/en.json",
+            r#"{"title":"Outer","outer":{"title":"Inner"}}"#,
+        );
+        let keys: BTreeSet<String> = ["title"].iter().map(|s| s.to_string()).collect();
+        let resolved = resolve_i18n_keys(&keys, &[f]);
+        assert_eq!(resolved.get("title").map(|s| s.as_str()), Some("Outer"));
+    }
+
+    #[test]
     fn expand_tilde_uses_home() {
         let prev = std::env::var_os("HOME");
         std::env::set_var("HOME", "/tmp/imc-home-probe");

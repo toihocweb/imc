@@ -44,6 +44,11 @@ pub const KIND_CLIENT_CALL: &str = "client_call";
 pub const KIND_CLIENT_HOOK: &str = "client_hook";
 const DEFAULT_KIND: &str = "function";
 
+/// Kinds a *file* target expands into. Python's file fallback filters node types
+/// to `("function", "class", "component", "method")`; `struct` is this port's
+/// spelling of Python's `class` for Rust files.
+const FILE_TARGET_KINDS: &[&str] = &["function", "class", "component", "method", "struct"];
+
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
@@ -516,18 +521,24 @@ impl<'a> Tracer<'a> {
         // File fallback: every definition in that file, file stem first.
         if candidates.is_empty() {
             if let Some(cands) = self.by_file.get(target.as_str()) {
-                if !cands.is_empty() {
+                // Python's file fallback keeps only `function`, `class`,
+                // `component` and `method` node types (tracer.py:228), so `type`,
+                // `enum` and `interface` declarations never appear as trace
+                // sections. `struct` is Rust's spelling of Python's `class` and
+                // must stay, or a Rust file target loses its own type.
+                let kept: Vec<ResolvedTarget> = cands
+                    .iter()
+                    .filter(|c| FILE_TARGET_KINDS.contains(&c.kind.as_str()))
+                    .cloned()
+                    .collect();
+                if !kept.is_empty() {
                     let stem = std::path::Path::new(target.as_str())
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("");
                     let stem_match: Vec<ResolvedTarget> =
-                        cands.iter().filter(|c| c.name == stem).cloned().collect();
-                    return if stem_match.is_empty() {
-                        cands.clone()
-                    } else {
-                        stem_match
-                    };
+                        kept.iter().filter(|c| c.name == stem).cloned().collect();
+                    return if stem_match.is_empty() { kept } else { stem_match };
                 }
             }
         }
