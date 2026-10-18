@@ -16,6 +16,8 @@ imc-memory = { path = "../imc-memory" }
 imc-index = { path = "../imc-index" }
 imc-search = { path = "../imc-search" }
 imc-find = { path = "../imc-find" }
+imc-trace = { path = "../imc-trace" }
+imc-support = { path = "../imc-support" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

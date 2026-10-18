@@ -988,6 +988,8 @@ dependencies = [
  "imc-memory",
  "imc-parser",
  "imc-search",
+ "imc-support",
+ "imc-trace",
  "rayon",
  "serde",
  "serde_json",

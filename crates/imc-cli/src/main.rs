@@ -43,8 +43,8 @@ enum Command {
     /// Hybrid search over the index.
     Search {
         query: String,
-        #[arg(long, short = 'l', default_value_t = 8)]
-        limit: usize,
+        #[arg(long, short = 'l')]
+        limit: Option<usize>,
         /// Disable the vector leg (BM25 + graph only).
         #[arg(long)]
         no_vector: bool,
@@ -118,6 +118,28 @@ enum Command {
         /// Print without compression.
         #[arg(long)]
         raw: bool,
+    },
+    /// Call-hierarchy tracer: callees (what it calls) or callers (blast radius).
+    Trace {
+        /// Symbol name or `file::qualified::name`.
+        symbol: String,
+        /// callees (forward, default) or callers (blast radius).
+        #[arg(long, short = 'd', default_value = "callees")]
+        direction: String,
+        /// Max tree depth (Python default 2).
+        #[arg(long, default_value_t = 2)]
+        depth: usize,
+        /// Keep builtins / trivial accessors in the output.
+        #[arg(long)]
+        all: bool,
+        /// Disambiguate which file defines the symbol.
+        #[arg(long, short = 'f')]
+        file: Option<String>,
+    },
+    /// One-shot resolved context for a file/module (component + deps + tests).
+    Context {
+        /// File path or query target.
+        target: String,
     },
     /// View or edit ~/.imc_config.yaml (LLM url/key/model, embedding model).
     Config {
@@ -239,11 +261,24 @@ fn main() -> Result<()> {
             }
             let store = store::open(&db)?;
             let embedder = imc_embed::build(&cfg.embedding);
+
+            // `query | directive` — the Python CLI splits the pipe first, then
+            // resolve_search_limit decides the chunk budget from both halves.
+            let (search_query, directive) = match query.split_once('|') {
+                Some((q, d)) => (q.trim().to_string(), d.trim().to_string()),
+                None => (query.clone(), String::new()),
+            };
+            let effective = imc_support::limits::resolve_search_limit(
+                &search_query,
+                &directive,
+                limit.map(|v| v as i64),
+            )
+            .clamp(1, 20) as usize;
             let opts = imc_search::SearchOptions {
-                limit: (*limit).clamp(1, 50),
+                limit: effective.clamp(1, 50),
                 vector: !*no_vector,
             };
-            let hits = imc_search::search(&store, embedder.as_deref(), query, &opts)?;
+            let hits = imc_search::search(&store, embedder.as_deref(), &search_query, &opts)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
@@ -385,6 +420,65 @@ fn main() -> Result<()> {
             let store = store::open(&db)?;
             let removed = imc_memory::delete(&store, *id)?;
             println!("memory #{id} deleted: {removed}");
+        }
+        Command::Trace {
+            symbol,
+            direction,
+            depth,
+            all,
+            file,
+        } => {
+            let db = cfg.project_db(&root);
+            if !db.exists() {
+                bail!("project {} is not indexed. Run `imc index {}` first", root.display(), root.display());
+            }
+            let store = store::open(&db)?;
+            let tracer = imc_trace::tree::Tracer::new(&store);
+            let node_ids = resolve_symbol_ids(&store, symbol, file.as_deref())?;
+            let opts = imc_trace::tree::TraceOptions::new()
+                .with_depth(*depth)
+                .with_show_all(*all);
+            let want_callers = matches!(direction.as_str(), "callers" | "caller" | "up");
+            if cli.json {
+                let trees: Vec<serde_json::Value> = node_ids
+                    .iter()
+                    .map(|id| {
+                        if want_callers {
+                            serde_json::to_value(tracer.trace_callers_at(id, &opts))
+                        } else {
+                            serde_json::to_value(tracer.trace_callees(id, &opts))
+                        }
+                    })
+                    .collect::<serde_json::Result<_>>()?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({"resolved": node_ids, "trees": trees}))?
+                );
+            } else {
+                for (i, id) in node_ids.iter().enumerate() {
+                    let text = if want_callers {
+                        imc_trace::tree::format_caller_tree(&tracer.trace_callers_at(id, &opts))
+                    } else {
+                        imc_trace::tree::format_callee_tree(&tracer.trace_callees(id, &opts))
+                    };
+                    if node_ids.len() > 1 {
+                        println!("── {id}");
+                    }
+                    print!("{text}");
+                    if !text.ends_with('\n') {
+                        println!();
+                    }
+                }
+            }
+        }
+        Command::Context { target } => {
+            let db = cfg.project_db(&root);
+            let store = if db.exists() { Some(store::open(&db)?) } else { None };
+            let out = imc_find::context::get_feature_context(target, &root, store.as_ref());
+            if out.is_empty() {
+                bail!("no context resolved for {target:?}");
+            }
+            print!("{out}");
         }
         Command::Claude { action } => match action {
             ClaudeAction::Setup { force, port } => {
@@ -607,6 +701,38 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Resolve a user-typed symbol to a stored symbol id.
+/// Accepts `name`, `file::qualname` (used verbatim), or `name` + `--file`.
+fn resolve_symbol_ids(store: &store::Store, symbol: &str, file: Option<&str>) -> Result<Vec<String>> {
+    if symbol.contains("::") {
+        return Ok(vec![symbol.to_string()]);
+    }
+    let mut cands = store.find_symbols_by_name(symbol, 25);
+    if let Some(f) = file {
+        cands.retain(|s| s.file == f || s.file.ends_with(f));
+    }
+    cands.retain(|s| s.kind.is_definition());
+    match cands.len() {
+        0 => {
+            let all = store.find_symbols_by_name(symbol, 25);
+            let hint = if all.is_empty() {
+                String::new()
+            } else {
+                let where_ = all
+                    .iter()
+                    .map(|s| format!("\n    {}::{} ({}:{})", s.file, s.qualname, s.kind.as_str(), s.line))
+                    .collect::<Vec<_>>()
+                    .join("");
+                format!("\nsymbol exists but is not a definition; pass --file:{where_}")
+            };
+            bail!("symbol {symbol:?} not found in index{hint}")
+        }
+        // Names like `search` or `build_index` are common; trace every
+        // definition instead of forcing the caller to disambiguate.
+        _ => Ok(cands.into_iter().map(|s| s.id).collect()),
+    }
 }
 
 fn indent(s: &str, pad: &str) -> String {
