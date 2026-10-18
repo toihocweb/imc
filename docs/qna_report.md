@@ -5,6 +5,11 @@ Model `claude-haiku-4.5`, retrieval top-5 from the real index of `/root/imc` (18
 Each entry shows what retrieval actually returned, then the model's answer,
 then a mechanical check of every cited path against the context that was sent.
 
+The answer text is model output and differs run to run; the numbers are the part
+to trust (a re-run after the search changes gave the same 32 citations, 0 invalid,
+0 partial across the 10 questions, with different wording and one fewer cited
+file on `how graph works`). Re-run with `python3 e2e/qna_report.py`.
+
 ## `how graph works`
 
 **Retrieved**
