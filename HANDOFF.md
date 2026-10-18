@@ -14,7 +14,7 @@ running the tool, not read off the code.
 ## Verified state (end of session)
 
 ```
-unit tests   304 passed, 0 failed   (cargo test --release, whole workspace)
+unit tests   305 passed, 0 failed   (cargo test --release, whole workspace)
 e2e suite     64 passed             (python3 e2e/e2e_suite.py) — was 49
 build         0 errors
 ```
@@ -64,6 +64,8 @@ c1617b5 context: tolerate invalid UTF-8 like Python, and record the parity audit
 1c3e83a HANDOFF: session state after the parity pass
 97bb848 read: make --method suggestions work, and print paths like Python
 10650bc cli/e2e: Python command aliases, -C path resolution, and a hermetic test run
+93bb872 cli: name the offending path when -C does not resolve
+da4d76c endpoints: read Flask's @app.route, which neither implementation saw
 ```
 
 The two items the last handoff listed as pending are both done: prefixed-router
@@ -80,7 +82,8 @@ empty). `docs/parity_audit.md` has the per-finding record.
 Outside the three audited commands, `read` was compared against Python too:
 suggestion scoring, `-C` path resolution, relative-path headers, `path.name` in
 the not-found message, and the `find`/`list`/`status` aliases all came from that
-pass.
+pass. The last change is Flask: `@app.route(...)` is now a route — nothing read
+it before, in either implementation, so a Flask service was invisible.
 
 ## Uncommitted, deliberately
 
