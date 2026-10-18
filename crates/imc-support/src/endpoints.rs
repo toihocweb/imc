@@ -348,7 +348,7 @@ impl<'a> EndpointBridge<'a> {
             if calls.is_empty() {
                 if let Some(m) = re_use_hook().captures(&hook_name) {
                     let ep_cap = m.get(1).unwrap().as_str();
-                    let ep_name = format!("{}{}", ep_cap[..1].to_lowercase(), &ep_cap[1..]);
+                    let ep_name = crate::lower_first(&ep_cap);
                     calls = self.calls_by_caller.get(&ep_name).cloned().unwrap_or_default();
                     if !calls.is_empty() {
                         self.calls_by_caller.insert(hook_name.clone(), calls.clone());
@@ -561,9 +561,9 @@ re!(
     r#"(?:@\w+(?:\([^)]*\))?\s+)*(?:public|protected|private|static|final|abstract)?\s*[\w<>\[\],?]+\s+(\w+)\s*\("#
 );
 re!(re_py_prefix, r#"APIRouter\s*\([^)]*prefix\s*=\s*["']([^"']+)["']"#);
-/// Flask blueprints carry `url_prefix=` instead of `prefix=`.
+// Flask blueprints carry `url_prefix=` instead of `prefix=.
 re!(re_py_blueprint_prefix, r#"Blueprint\s*\([^)]*url_prefix\s*=\s*["']([^"']+)["']"#);
-/// Flask `@app.route("/x")` / `@bp.route("/x", methods=["GET", "POST"])`.
+// Flask `@app.route("/x")` / `@bp.route("/x", methods=["GET", "POST"])`.
 re!(
     re_py_flask_route,
     r#"@\w+\.route\s*\(\s*["']([^"']*)["']\s*(?:,\s*methods\s*=\s*[\[({]([^\])}]*)[\])}])?"#
@@ -1147,7 +1147,7 @@ impl<'a> EndpointBridge<'a> {
             for hook in inner.split(',').map(|h| h.trim()).filter(|h| !h.is_empty()) {
                 let Some(mh) = re_use_hook().captures(hook) else { continue };
                 let ep_cap = mh.get(1).unwrap().as_str();
-                let ep_name = format!("{}{}", &ep_cap[..1].to_lowercase(), &ep_cap[1..]);
+                let ep_name = crate::lower_first(&ep_cap);
                 if let Some(calls) = self.calls_by_caller.get(&ep_name).cloned() {
                     for call in calls {
                         let slot = self.calls_by_caller.entry(hook.to_string()).or_default();

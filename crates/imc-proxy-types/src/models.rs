@@ -56,13 +56,32 @@ pub fn normalize_sdk_model_id(sdk_model_id: &str) -> Option<NormalizedSdkModelId
     None
 }
 
+#[cfg(test)]
+mod strip_date_tests {
+    use super::strip_trailing_date;
+
+    #[test]
+    fn multibyte_model_ids_do_not_panic() {
+        // `s.len() - 8` used to land inside a character: this input panicked.
+        assert_eq!(strip_trailing_date("한국어모델이름-2026010"), "한국어모델이름");
+        assert_eq!(strip_trailing_date("모델-2026-01-02"), "모델-2026-01-02");
+        // ASCII behaviour is unchanged.
+        assert_eq!(strip_trailing_date("abc-2026010"), "abc");
+        assert_eq!(strip_trailing_date("claude-x-2026-01-02"), "claude-x-2026-01-02");
+    }
+}
+
 fn strip_trailing_date(s: &str) -> String {
-    let bytes = s.as_bytes();
-    if bytes.len() >= 9 {
-        let tail = &s[s.len() - 8..];
-        if tail.starts_with('-') && tail[1..].chars().all(|c| c.is_ascii_digit()) {
-            return s[..s.len() - 8].to_string();
-        }
+    // Byte offsets: `s.len() - 8` and `tail[1..]` are only boundaries when the
+    // suffix is ASCII, which is not something a model id has to be.
+    let Some(cut) = s.len().checked_sub(8) else { return s.to_string() };
+    if !s.is_char_boundary(cut) {
+        return s.to_string();
+    }
+    let tail = &s[cut..];
+    let mut chars = tail.chars();
+    if chars.next() == Some('-') && chars.all(|c| c.is_ascii_digit()) {
+        return s[..cut].to_string();
     }
     s.to_string()
 }

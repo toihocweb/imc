@@ -543,7 +543,7 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&payload)?);
             } else {
                 if syms.is_empty() {
-                    println!("symbol {symbol:?} not found in index");
+                    bail!("symbol {symbol:?} not found in index");
                 }
                 for s in &syms {
                     println!("{} {}  {}:{}-{}", s.kind.as_str(), s.qualname, s.file, s.line, s.end_line);

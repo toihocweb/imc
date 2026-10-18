@@ -161,16 +161,33 @@ fn make_symbol(
     }
 }
 
+/// Largest index `<= i` that is a UTF-8 char boundary. `str::floor_char_boundary`
+/// is still unstable, and byte offsets over arbitrary source text are unsafe.
+fn floor_char_boundary(s: &str, i: usize) -> usize {
+    let mut i = i.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 fn chunk_of(sym: &Symbol, bytes: &[u8], text: &str) -> RawChunk {
     let end = sym.end_byte.min(bytes.len());
     let start = sym.start_byte.min(end);
     let mut body = &text[start..end];
     // Cap very large symbols at ~4 KB to keep embedding batches sane.
     if body.len() > 4096 {
-        if let Some(cut) = body[4096..].rfind('\n') {
-            body = &body[..4096 + cut];
+        // Byte 4096 can land inside a multi-byte character; slicing there
+        // panicked the whole index on a Korean repo (chunks ended up empty).
+        // Python's CodeSplitter caps by *characters* and cannot do this.
+        // `find`, not `rfind`: the last newline of the remainder is almost at
+        // the end of the body, so the cap never actually truncated anything
+        // (a 6 KB function kept 6030 of its 6032 bytes).
+        let cut_at = floor_char_boundary(body, 4096);
+        if let Some(cut) = body[cut_at..].find('\n') {
+            body = &body[..cut_at + cut];
         } else {
-            body = &body[..4096];
+            body = &body[..cut_at];
         }
     }
     RawChunk {

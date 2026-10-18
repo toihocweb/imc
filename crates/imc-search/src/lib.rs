@@ -222,13 +222,33 @@ fn min_cosine() -> f64 {
         .unwrap_or(0.30)
 }
 
+/// Floor for a query that has *some* lexical support; the vector leg is then a
+/// second opinion on a query we know is about this corpus.
 fn vector_scores(store: &Store, query_vec: &[f32]) -> HashMap<i64, f64> {
+    vector_scores_with_floor(store, query_vec, min_cosine())
+}
+
+/// Floor when the lexical leg found nothing: the vector leg is then the *only*
+/// evidence, so "somewhat similar" is not enough.
+///
+/// Measured over 8 nonsense + 8 real queries on two corpora (1234 and 2125
+/// chunks, `/root/imc` and a Korean full-stack repo): no absolute cosine, gap or
+/// z-score separates nonsense from real across both — on the Korean corpus a
+/// nonsense query peaks at 0.396, above a real query's 0.333. What *does*
+/// separate them is this case: nonsense queries have no lexical support at all
+/// and peak at 0.396, while every query whose answer exists and has no lexical
+/// support starts at 0.45. Hence a much higher bar when BM25 is empty.
+fn vector_scores_with_lexical_support_absent(store: &Store, query_vec: &[f32]) -> HashMap<i64, f64> {
+    vector_scores_with_floor(store, query_vec, min_cosine().max(0.45))
+}
+
+fn vector_scores_with_floor(store: &Store, query_vec: &[f32], floor: f64) -> HashMap<i64, f64> {
     let mut scored: Vec<(i64, f64)> = store
         .all_vectors()
         .into_iter()
         .filter(|(_, v)| v.len() == query_vec.len())
         .map(|(id, v)| (id, cosine(query_vec, &v)))
-        .filter(|(_, s)| *s >= min_cosine())
+        .filter(|(_, s)| *s >= floor)
         .collect();
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(CANDIDATES);
@@ -289,7 +309,13 @@ fn snippet(text: &str, query: &str, max_chars: usize) -> String {
             .unwrap_or(0),
         None => 0,
     };
-    let start = start.min(text.len().saturating_sub(max_chars));
+    // Both bounds must sit on a char boundary: `i + 120` above lands inside a
+    // multi-byte char often enough (Korean, CJK, emoji) that `text[start..end]`
+    // panicked the whole `imc search -r` run.
+    let mut start = start.min(text.len().saturating_sub(max_chars));
+    while start > 0 && !text.is_char_boundary(start) {
+        start -= 1;
+    }
     let mut end = (start + max_chars).min(text.len());
     while end > start && !text.is_char_boundary(end) {
         end -= 1;
@@ -359,20 +385,17 @@ fn mentions(name: &str, text: &str) -> bool {
         return false;
     }
     let bytes = text.as_bytes();
-    let nb = name.as_bytes();
-    let mut start = 0;
-    while let Some(p) = text[start..].find(name) {
-        let abs = start + p;
-        let before_ok = abs == 0 || !(bytes[abs - 1].is_ascii_alphanumeric() || bytes[abs - 1] == b'_');
-        let after = abs + nb.len();
+    // `match_indices`, not a manual `text[start..].find(name)` loop: advancing by
+    // one byte from a match can land inside a multi-byte char and panic on the
+    // next slice (a Korean chunk did exactly that).
+    for (abs, _) in text.match_indices(name) {
+        let before_ok =
+            abs == 0 || !(bytes[abs - 1].is_ascii_alphanumeric() || bytes[abs - 1] == b'_');
+        let after = abs + name.len();
         let after_ok =
             after >= bytes.len() || !(bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_');
         if before_ok && after_ok {
             return true;
-        }
-        start = abs + 1;
-        if start >= text.len() {
-            break;
         }
     }
     false
@@ -402,7 +425,8 @@ pub fn search(
     let mut lists: Vec<HashMap<i64, f64>> = Vec::new();
 
     let bm = bm25_scores(store, query)?;
-    if !bm.is_empty() {
+    let lexical_support = !bm.is_empty();
+    if lexical_support {
         lists.push(bm);
     }
 
@@ -421,7 +445,11 @@ pub fn search(
         }
         if let Ok(qv) = embedder.embed(&[vq]) {
             if let Some(v) = qv.into_iter().next() {
-                let vs = vector_scores(store, &v);
+                let vs = if lexical_support {
+                    vector_scores(store, &v)
+                } else {
+                    vector_scores_with_lexical_support_absent(store, &v)
+                };
                 if !vs.is_empty() {
                     lists.push(vs);
                 }
@@ -585,6 +613,38 @@ mod tests {
             )
             .unwrap();
         (store, db)
+    }
+
+    /// The vector floor is raised when the lexical leg found nothing: with no
+    /// lexical support the vector leg is the only evidence, and "somewhat
+    /// similar" (0.30-0.45) is not evidence. Measured: nonsense queries max out
+    /// at 0.396 across two corpora, while answerable-but-unlexical queries
+    /// start at 0.45.
+    #[test]
+    fn the_vector_floor_is_higher_without_lexical_support() {
+        let (store, db) = seeded("floors");
+        let ids: Vec<i64> = store.all_vectors().iter().map(|(id, _)| *id).collect();
+        assert!(ids.is_empty(), "seeded store starts without vectors");
+        let a = store
+            .insert_chunk("src/billing.py", 10, 12, "src/billing.py:10-12\ncalculate_tax\n", None)
+            .unwrap();
+        let b = store
+            .insert_chunk("src/crypto.py", 30, 32, "src/crypto.py:30-32\nhandshake protocol\n", None)
+            .unwrap();
+        let q = vec![1.0f32, 0.0, 0.0, 0.0];
+        store.insert_embedding(a, 4, &[1.0, 0.0, 0.0, 0.0]).unwrap(); // cosine 1.0
+        store.insert_embedding(b, 4, &[0.35, 0.93, 0.0, 0.0]).unwrap(); // cosine ~0.35
+
+        let normal = vector_scores_with_floor(&store, &q, min_cosine());
+        assert!(normal.contains_key(&a) && normal.contains_key(&b), "{normal:?}");
+
+        let no_lexical = vector_scores_with_floor(&store, &q, min_cosine().max(0.45));
+        assert!(no_lexical.contains_key(&a), "a 1.0 cosine survives any floor");
+        assert!(
+            !no_lexical.contains_key(&b),
+            "a 0.35 cosine must not be the sole evidence for a query the corpus never mentions"
+        );
+        let _ = std::fs::remove_file(&db);
     }
 
     #[test]

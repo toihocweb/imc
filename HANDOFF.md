@@ -14,7 +14,7 @@ running the tool, not read off the code.
 ## Verified state (end of session)
 
 ```
-unit tests   307 passed, 0 failed   (cargo test --release, whole workspace)
+unit tests   315 passed, 0 failed   (cargo test --release, whole workspace)
 e2e suite     64 passed             (python3 e2e/e2e_suite.py) — was 49
 build         0 errors
 ```
@@ -37,10 +37,11 @@ G config, H proxy, I json, J multi-language, **K cross-boundary routes**,
 | BM25 only | 52% | 76% | 80% | 0.785 |
 | hybrid | 52% | 80% | **88%** | 0.745 |
 
-BM25 is byte-for-byte the pre-change baseline. Hybrid top-5 improved 84 → 88;
-MRR moved 0.757 → 0.745 (one query's ordering). Junk queries are **empty in both
-legs** for all three junk queries, which is new — they used to return five
-confident hits at ~0.016.
+BM25: top-1 14/25 (56%), top-3 18/25 (72%), top-5 19/25 (76%), MRR 0.838.
+Hybrid: top-1 13/25 (52%), top-3 19/25 (76%), top-5 21/25 (84%), MRR 0.767
+(after the chunk-cap fix; MRR improved 0.745 → 0.767, one labelled query moved
+to CLI_COMMAND_AUDIT.md which is also a correct answer). Junk queries are
+**empty in both legs** on both `/root/imc` and gakkaweo.
 
 `e2e/qna_report.py` (10 questions, retrieval → prompt → LLM, mechanical citation
 check): 5 chunks retrieved per question, **0 invalid citations, 0 partial
@@ -66,7 +67,13 @@ c1617b5 context: tolerate invalid UTF-8 like Python, and record the parity audit
 10650bc cli/e2e: Python command aliases, -C path resolution, and a hermetic test run
 93bb872 cli: name the offending path when -C does not resolve
 da4d76c endpoints: read Flask's @app.route, which neither implementation saw
-<NEXT> context: restore the Java sub-path Python keeps, and match splitlines
+390edea context: restore the Java sub-path Python keeps, and match splitlines
+164dbeb docs: qna_report answers are model output, not a fixture — say which numbers are stable
+<NEW> real-repo verification on RabeMaster/gakkaweo (React Vite + Java Spring Boot + Python ai-service)
+<NEW> parser/search byte-slice panics on non-ASCII, fixed + regression tests
+<NEW> gitignore honoring via `ignore` crate; `.egg-info` pollution out of the index
+<NEW> graph not-found rc=1; settings mask / models `strip_trailing_date` non-ASCII fixes
+<NEW> docs/real_repo_verification.md — the full sweep report
 ```
 
 The two items the last handoff listed as pending are both done: prefixed-router

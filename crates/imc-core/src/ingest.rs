@@ -1,5 +1,4 @@
 use anyhow::Result;
-use walkdir::WalkDir;
 
 use crate::hash::hash_file;
 
@@ -164,23 +163,44 @@ pub fn build_manifest(root: &std::path::Path, max_bytes: u64, extra: &[String]) 
     let mut ignores: Vec<String> = DEFAULT_IGNORES.iter().map(|s| (*s).to_string()).collect();
     ignores.extend(extra.iter().cloned());
 
-    let mut out = Vec::new();
-    for entry in WalkDir::new(root).follow_links(false).into_iter().filter_entry(|e| {
+    // Python reads the project's `.gitignore` and asks git for
+    // `ls-files --exclude-standard`, so generated trees (`*.egg-info/`, `data/`,
+    // whatever the repo ignores) never reach the index. A hardcoded dir list
+    // cannot know that: the port indexed `indexmycode.egg-info/entry_points.txt`
+    // and it outranked `main/cli/main.py` for "cli entry point argument parsing".
+    let walker = ignore::WalkBuilder::new(root)
+        .follow_links(false)
+        // .gitignore + .ignore, including negations (`!ui/dist/`), but no global
+        // user excludes and no "skip hidden files" — Python indexes dotfiles it
+        // is not told to ignore.
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(false)
+        .hidden(false)
+        .require_git(false)
+        // The hardcoded list still prunes these dirs before .gitignore is even
+        // consulted (`filter_entry` on the builder, which is the pruning hook;
+        // `Walk` itself has none).
+        .filter_entry(move |e| {
         let name = e.file_name().to_string_lossy().to_string();
         if e.depth() == 0 {
             return true;
         }
-        if e.file_type().is_dir() {
+        if e.file_type().is_some_and(|t| t.is_dir()) {
             let with_slash = format!("{name}/");
             return !ignores.iter().any(|ig| ig == &with_slash || ig == &name);
         }
         true
-    }) {
+        })
+        .build();
+
+    let mut out = Vec::new();
+    for entry in walker {
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
         };
-        if !entry.file_type().is_file() {
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
         let path = entry.path();

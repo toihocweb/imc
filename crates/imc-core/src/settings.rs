@@ -209,6 +209,16 @@ mod tests {
     }
 
     #[test]
+    fn mask_handles_non_ascii_and_short_values() {
+        let v = |s: &str| serde_yaml::Value::String(s.to_string());
+        // Byte-indexed masking panicked on both of these.
+        assert_eq!(mask(&v("갱신된토큰입니다요")), "갱신된토*입니다요");
+        assert_eq!(mask(&v("갱신된토큰입니다")), "********");
+        assert_eq!(mask(&v("abcd")), "****");
+        assert_eq!(mask(&v("sk-abcdefghijklmnop")), "sk-a***********mnop");
+    }
+
+    #[test]
     fn set_and_get_roundtrip() {
         let dir = tmp("rt");
         let f = dir.join("imc_config.yaml");
@@ -264,8 +274,14 @@ pub fn mask(v: &serde_yaml::Value) -> String {
         serde_yaml::Value::String(s) => s.clone(),
         other => format!("{other:?}"),
     };
-    if s.len() <= 8 {
-        return "*".repeat(s.len());
+    // Count and cut by char: a non-ASCII value (or one whose 4th/last-4th byte
+    // falls inside a character) panicked here, and this runs on every
+    // `imc config` display.
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= 8 {
+        return "*".repeat(chars.len());
     }
-    format!("{}{}{}", &s[..4], "*".repeat((s.len() - 8).min(12)), &s[s.len() - 4..])
+    let head: String = chars[..4].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}{}{tail}", "*".repeat((chars.len() - 8).min(12)))
 }
