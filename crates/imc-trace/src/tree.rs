@@ -643,7 +643,10 @@ impl<'a> Tracer<'a> {
         // Outgoing call edges. The Python graph deduplicated parallel edges, so
         // repeat calls to the same name are one child.
         for dst in dedupe(self.store.callees(node_id)) {
-            if builtins::should_filter(&dst, opts.show_all) {
+            // `info.file` is the caller's file: the Python builtin list only
+            // applies to Python callers, or a Java `sum()`/`round()` call
+            // vanishes from the trace.
+            if builtins::should_filter_in(&dst, opts.show_all, &info.file) {
                 continue;
             }
             match self.resolve_callee(&dst, &info.file) {

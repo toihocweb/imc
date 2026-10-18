@@ -88,10 +88,26 @@ pub fn is_trivial_accessor(name: &str) -> bool {
 /// Should this callee name be dropped from a trace? `show_all` (`--all`)
 /// disables all filtering, matching `trace_callees(show_all=...)`.
 pub fn should_filter(name: &str, show_all: bool) -> bool {
+    should_filter_in(name, show_all, "x.py")
+}
+
+/// Same filter, but aware of the language of the file making the call.
+///
+/// `COMMON_BUILTINS` is Python's builtin list, kept verbatim for Python parity
+/// (`tests` assert the 183 entries). Applying it to every language silently
+/// deleted real calls in other grammars: a Java `calculator.sum(items)` or
+/// `round(amount)` disappeared from the trace because Python has builtins by
+/// those names. POJO accessors stay filtered everywhere — `getName`/`setAge`
+/// are Java/.NET idiom, not Python's.
+pub fn should_filter_in(name: &str, show_all: bool, caller_file: &str) -> bool {
     if show_all {
         return false;
     }
-    is_builtin(name) || is_trivial_accessor(name)
+    if is_trivial_accessor(name) {
+        return true;
+    }
+    let caller_is_python = caller_file.ends_with(".py") || caller_file.ends_with(".pyi");
+    caller_is_python && is_builtin(name)
 }
 
 #[cfg(test)]
@@ -149,5 +165,55 @@ mod tests {
         assert!(!should_filter("print", true));
         assert!(!should_filter("getName", true));
         assert!(!should_filter("run_find", false));
+    }
+
+    /// Regression: `should_filter` is Python's builtin list, but it was applied
+    /// to callers of every language. A Java `calculator.sum(items)` and a
+    /// `round(amount)` call disappeared from the default trace because Python
+    /// has builtins of those names — silently truncating a call chain.
+    #[test]
+    fn python_builtin_list_only_applies_to_python_callers() {
+        for name in ["sum", "round", "format", "map", "filter", "len", "list"] {
+            assert!(
+                should_filter_in(name, false, "main/cli/main.py"),
+                "{name} must still be filtered for a Python caller"
+            );
+            assert!(
+                !should_filter_in(name, false, "src/main/java/com/shop/OrderService.java"),
+                "{name} must NOT be filtered for a Java caller"
+            );
+            assert!(
+                !should_filter_in(name, false, "src/payments/ledger.ts"),
+                "{name} must NOT be filtered for a TypeScript caller"
+            );
+            assert!(
+                !should_filter_in(name, false, "src/engine.rs"),
+                "{name} must NOT be filtered for a Rust caller"
+            );
+            assert!(
+                !should_filter_in(name, false, "cmd/server/main.go"),
+                "{name} must NOT be filtered for a Go caller"
+            );
+        }
+    }
+
+    /// POJO accessors are Java/.NET idiom, not Python's — they stay filtered
+    /// regardless of caller language.
+    #[test]
+    fn pojo_accessors_stay_filtered_everywhere() {
+        // The list is a fixed set, not a get*/set* prefix rule: `getname`,
+        // `setvalue`, `getstatus` are in it, `setAge` is not.
+        for file in ["a.py", "a.java", "a.ts", "a.rs", "a.go"] {
+            assert!(should_filter_in("getName", false, file), "getName {file}");
+            assert!(should_filter_in("setValue", false, file), "setValue {file}");
+            assert!(should_filter_in("GETSTATUS", false, file), "GETSTATUS {file}");
+        }
+    }
+
+    /// `--all` still bypasses everything, in every language.
+    #[test]
+    fn show_all_bypasses_language_aware_filter() {
+        assert!(!should_filter_in("sum", true, "a.py"));
+        assert!(!should_filter_in("getName", true, "a.java"));
     }
 }
