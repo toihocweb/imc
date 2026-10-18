@@ -383,35 +383,35 @@ def suite_retrieval(vectors, root, data):
 # -- C. call graph -------------------------------------------------------------
 def suite_trace(root, data):
     def callers():
-        out = run_imc(["trace", "generate_invoice", "-d", "callers"], root, data).stdout
+        out = run_imc(["trace", "generate_invoice", "--callers"], root, data).stdout
         assert "export_invoice" in out, out[:400]
         return "export_invoice shows up as a caller"
 
     check("C1 callers of a python function", callers)
 
     def callees():
-        out = run_imc(["trace", "generate_invoice", "-d", "callees"], root, data).stdout
+        out = run_imc(["trace", "generate_invoice"], root, data).stdout
         assert "calculate_tax" in out, out[:400]
         return "callees resolve to method calls"
 
     check("C2 callees include the method call (attribute-call layer alive)", callees)
 
     def blast_radius():
-        out = run_imc(["trace", "calculate_tax", "-d", "callers", "--depth", "3"], root, data).stdout
+        out = run_imc(["trace", "calculate_tax", "--callers", "--depth", "3"], root, data).stdout
         assert "audit_invoice" in out and "generate_invoice" in out, out[:400]
         return "both callers found across an attribute-call edge"
 
     check("C3 blast radius across method callers", blast_radius)
 
     def java_callers():
-        out = run_imc(["trace", "add", "-d", "callers"], root, data).stdout
+        out = run_imc(["trace", "add", "--callers"], root, data).stdout
         assert "taxOn" in out, out[:400]
         return "java method_invocation edge resolves"
 
     check("C4 java method_invocation edges are traced", java_callers)
 
     def go_selector():
-        out = run_imc(["trace", "NewServer", "-d", "callers"], root, data).stdout
+        out = run_imc(["trace", "NewServer", "--callers"], root, data).stdout
         assert "main" in out, out[:400]
         return "go selector_expression edge resolves"
 
@@ -428,26 +428,38 @@ def suite_trace(root, data):
         # Regression: reverse tracing skipped the not-found check entirely, so
         # a typo printed nothing and exited 0 — an agent reads that as
         # "no callers" rather than "no such symbol".
-        p = run_imc(["trace", "definitely_not_a_symbol", "-d", "callers"], root, data, expect_rc=1)
+        p = run_imc(["trace", "definitely_not_a_symbol", "--callers"], root, data, expect_rc=1)
         assert "not found" in (p.stdout + p.stderr).lower(), (p.stdout + p.stderr)[:200]
         return "rc=1, not a silent empty tree"
 
-    check("C7 unknown symbol with -d callers still exits 1", unknown_symbol_reverse)
+    check("C7 unknown symbol with --callers still exits 1", unknown_symbol_reverse)
 
     def unknown_symbol_every_flag():
-        for extra in (["-d", "callers", "--depth", "1"], ["-d", "calllees"],
-                      ["--depth", "2"], ["--json"], ["-d", "callers", "--json"]):
+        for extra in (["--callers", "--depth", "1"], ["--both"],
+                      ["--depth", "2"], ["--json"], ["--callers", "--json"]):
             run_imc(["trace", "definitely_not_a_symbol", *extra], root, data, expect_rc=1)
         return "5 flag combinations all exit 1"
 
     check("C8 unknown symbol exits 1 under every flag combination", unknown_symbol_every_flag)
+
+    def bad_flag_values_are_rejected():
+        # Python rejects these at argparse (rc=2); a silently ignored
+        # direction/value is how `-d callers` used to print a wrong tree.
+        for args in (["trace", "generate_invoice", "--direction", "sideways"],
+                     ["trace", "generate_invoice", "--depth", "0"],
+                     ["trace", "generate_invoice", "-d", "callers"],
+                     ["search", "invoice", "-n", "0"]):
+            run_imc(args, root, data, expect_rc=2)
+        return "invalid direction / zero depth+limit exit 2"
+
+    check("C10 invalid flag values exit 2 instead of being ignored", bad_flag_values_are_rejected)
 
     def external_name_still_traces():
         # The opposite half: names that have no definition of their own but are
         # called from the codebase must keep working. `sum` is a builtin and the
         # fixture calls it in generate_invoice; `print` would prove nothing here
         # because nothing in the fixture calls it.
-        p = run_imc(["trace", "sum", "-d", "callers", "--depth", "1"], root, data)
+        p = run_imc(["trace", "sum", "--callers", "--depth", "1"], root, data)
         assert p.stdout.strip(), "external/builtin name lost its callers"
         return f"{len([l for l in p.stdout.splitlines() if l.strip()])} lines of callers"
 
@@ -726,7 +738,7 @@ def suite_json(root, data):
     commands = [
         ["index", "."],
         ["search", "invoice tax", "-l", "3"],
-        ["trace", "generate_invoice", "-d", "callers"],
+        ["trace", "generate_invoice", "--callers"],
         ["stats"],
         ["projects"],
         ["config", "list"],
@@ -764,7 +776,7 @@ def suite_languages(root, data):
     def resolved():
         found = []
         for lang, (sym, want_file) in cases.items():
-            out = run_imc(["--json", "trace", sym, "-d", "callers"], root, data).stdout
+            out = run_imc(["--json", "trace", sym, "--callers"], root, data).stdout
             assert want_file in out, f"{lang}: {want_file} not in trace output for {sym!r}"
             found.append(lang)
         return "resolved: " + ", ".join(found)
@@ -801,6 +813,221 @@ def suite_languages(root, data):
         for ext in ("py", "ts", "rs", "go", "java"):
             assert ext in langs, f"no symbols for .{ext}: {sorted(langs)}"
         return f"{len(rows)} (file,kind) symbol groups across {len(langs)} extensions"
+
+
+# -- K. cross-boundary routes --------------------------------------------------
+CROSS_FIXTURE = {
+    "server/api/orders.py": '''"""Orders API."""
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/api/orders")
+
+
+@router.get("/list")
+async def list_orders():
+    return []
+
+
+@router.post("/create")
+async def create_order(payload):
+    return payload
+''',
+    "web/App.jsx": """export function App() {
+  return fetch('/api/orders/list');
+}
+""",
+}
+
+
+def suite_cross_boundary():
+    root = Path(tempfile.mkdtemp(prefix="imc-e2e-cross-"))
+    for rel, body in CROSS_FIXTURE.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+    data = Path(tempfile.mkdtemp(prefix="imc-e2e-cross-data-"))
+    jrun(["index", "."], root, data, False)
+
+    def context_prefixed_routes():
+        out = run_imc(["context", "server/api/orders.py"], root, data).stdout
+        assert "`GET /api/orders/list`" in out, f"prefix dropped:\n{out}"
+        assert "`POST /api/orders/create`" in out, f"prefix dropped:\n{out}"
+        # Source order, not hash order.
+        lines = [ln for ln in out.splitlines() if ln.startswith("- `")]
+        assert lines == [
+            "- `GET /api/orders/list` [line 7]",
+            "- `POST /api/orders/create` [line 12]",
+        ], lines
+        return "prefixed routes in source order"
+
+    check("K1 context applies the APIRouter prefix", context_prefixed_routes)
+
+    def trace_route_target():
+        p = run_imc(["trace", "GET /api/orders/list"], root, data)
+        assert "HTTP GET /api/orders/list" in p.stdout, p.stdout
+        assert "list_orders" in p.stdout, f"route did not reach its handler:\n{p.stdout}"
+        return "route target -> handler"
+
+    check("K2 trace 'GET /path' reaches the backend handler", trace_route_target)
+
+    def trace_unknown_route():
+        p = run_imc(["trace", "GET /api/nope"], root, data, expect_rc=1)
+        assert "not found" in p.stderr, p.stderr
+        return "rc=1 with the standard message"
+
+    check("K3 an unknown route target exits 1", trace_unknown_route)
+
+    def frontend_call_crosses_boundary():
+        p = run_imc(["trace", "App"], root, data)
+        assert "HTTP GET /api/orders/list" in p.stdout, p.stdout
+        assert "list_orders" in p.stdout, p.stdout
+        return "component -> HTTP route -> handler"
+
+    check("K4 a frontend component traces to its backend handler", frontend_call_crosses_boundary)
+
+    def handler_blast_radius_crosses_boundary():
+        p = run_imc(["trace", "list_orders", "--callers"], root, data)
+        assert "HTTP GET /api/orders/list" in p.stdout, p.stdout
+        assert "App" in p.stdout, p.stdout
+        return "handler <- HTTP route <- component"
+
+    check("K5 a backend handler's blast radius reaches the frontend", handler_blast_radius_crosses_boundary)
+
+    def route_json_contract():
+        raw = run_imc(["--json", "trace", "GET /api/orders/list"], root, data).stdout
+        doc = json.loads(raw)
+        tree = doc["results"][0]["tree"]
+        assert tree["name"] == "HTTP GET /api/orders/list", tree
+        assert tree["type"] == "route", tree
+        assert tree["callees"][0]["name"] == "list_orders", tree
+        return "JSON carries the route node and its handler"
+
+    check("K6 a route trace emits valid JSON", route_json_contract)
+
+    return root, data
+
+
+# -- L. agentic search ---------------------------------------------------------
+def suite_agentic():
+    """`imc search` with an LLM: the default path, against a stub endpoint.
+
+    Hermetic: the stub is a local HTTP server, so no key or network is needed and
+    the assertions can inspect the request the CLI actually sent.
+    """
+    import http.server
+    import threading
+
+    seen = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 (http.server API)
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(n) or b"{}")
+            # The embedding leg also points here (same base_url), so record
+            # everything but assert on /chat/completions.
+            seen.append({"path": self.path, "auth": self.headers.get("Authorization"), "body": body})
+            if self.path.startswith("/boom/"):
+                payload = b'{"error":{"message":"stub internal error"}}'
+                self.send_response(500)
+            else:
+                prompt = body.get("messages", [{}])[0].get("content", "")
+                payload = json.dumps(
+                    {"choices": [{"message": {"content": f"stub answer len={len(prompt)}"}}]}
+                ).encode()
+                self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):  # keep the suite output clean
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    root = new_case("agentic")
+    data = Path(tempfile.mkdtemp(prefix="imc-e2e-agentic-"))
+    jrun(["index", "."], root, data, False)
+    env = imc_env(data, False)
+
+    def cfg(*args):
+        p = subprocess.run([str(IMC), "config", *args], cwd=str(root), env=env,
+                           capture_output=True, text=True, timeout=60)
+        if p.returncode != 0:
+            raise AssertionError(f"config {' '.join(args)} rc={p.returncode}: {p.stderr[:200]}")
+        return p
+
+    cfg("set", "llm.base_url", f"http://127.0.0.1:{port}/v1")
+    cfg("set", "llm.api_key", "sk-stub")
+    cfg("set", "llm.model", "stub-model")
+
+    def asks_the_llm():
+        seen.clear()
+        p = run_imc(["search", "invoice tax", "-l", "3"], root, data)
+        assert "stub answer" in p.stdout, f"no answer from the stub:\n{p.stdout[:300]}"
+        chats = [c for c in seen if c["path"].endswith("/chat/completions")]
+        assert len(chats) == 1, f"expected exactly one chat call, saw {[c['path'] for c in seen]}"
+        call = chats[0]
+        assert call["path"].endswith("/chat/completions"), call["path"]
+        assert call["auth"] == "Bearer sk-stub", call["auth"]
+        assert call["body"]["model"] == "stub-model", call["body"].get("model")
+        assert call["body"]["stream"] is False, call["body"]
+        prompt = call["body"]["messages"][0]["content"]
+        assert "invoice tax" in prompt, "query missing from the prompt"
+        assert "src/billing.py" in prompt, "retrieved context missing from the prompt"
+        assert "<codebase_context>" in prompt, "tuned prompt scaffold missing"
+        return "answer printed, context + query in the prompt"
+
+    check("L1 search answers via the configured LLM", asks_the_llm)
+
+    def raw_never_calls():
+        seen.clear()
+        p = run_imc(["search", "invoice tax", "-r", "-l", "3"], root, data)
+        assert "src/billing.py" in p.stdout, p.stdout[:300]
+        assert not [c for c in seen if c["path"].endswith("/chat/completions")], seen
+        return "--r printed hits, zero HTTP calls"
+
+    check("L2 -r/--raw prints hits and skips the LLM", raw_never_calls)
+
+    def json_never_calls():
+        seen.clear()
+        out = jrun(["search", "invoice tax", "-l", "3"], root, data)
+        assert isinstance(out, list) and out and "file" in out[0], out[:1]
+        assert not [c for c in seen if c["path"].endswith("/chat/completions")], seen
+        return "--json emitted hits, zero HTTP calls"
+
+    check("L3 --json emits raw hits and skips the LLM", json_never_calls)
+
+    def empty_hits_skip_the_llm():
+        seen.clear()
+        p = run_imc(["search", "quantum banana teleport protocol", "-l", "5"], root, data)
+        assert "No results found." in p.stdout, p.stdout[:200]
+        assert not [c for c in seen if c["path"].endswith("/chat/completions")], seen
+        return "junk query: no hits, no LLM call"
+
+    check("L4 an empty retrieval never calls the LLM", empty_hits_skip_the_llm)
+
+    def unreachable_falls_back():
+        cfg("set", "llm.base_url", "http://127.0.0.1:1/v1")
+        p = run_imc(["search", "invoice tax", "-l", "3"], root, data)
+        assert "src/billing.py" in p.stdout, f"raw hits missing:\n{p.stdout[:300]}"
+        assert "unreachable" in p.stderr, p.stderr[:200]
+        return "raw hits on stdout, note on stderr, rc=0"
+
+    check("L5 an unreachable LLM degrades to raw hits", unreachable_falls_back)
+
+    def http_error_is_fatal():
+        cfg("set", "llm.base_url", f"http://127.0.0.1:{port}/boom/v1")
+        p = run_imc(["search", "invoice tax", "-l", "3"], root, data, expect_rc=1)
+        assert "500" in p.stderr, p.stderr[:200]
+        return "rc=1 and the status reaches the user"
+
+    check("L6 a reachable endpoint that errors exits 1", http_error_is_fatal)
+
+    srv.shutdown()
+    return root, data
 
 
 # -- main ----------------------------------------------------------------------
@@ -845,6 +1072,18 @@ def main():
     if not args.keep:
         shutil.rmtree(lang_root, ignore_errors=True)
         shutil.rmtree(lang_data, ignore_errors=True)
+
+    print("\nK. cross-boundary routes")
+    cross_root, cross_data = suite_cross_boundary()
+    if not args.keep:
+        shutil.rmtree(cross_root, ignore_errors=True)
+        shutil.rmtree(cross_data, ignore_errors=True)
+
+    print("\nL. agentic search")
+    ag_root, ag_data = suite_agentic()
+    if not args.keep:
+        shutil.rmtree(ag_root, ignore_errors=True)
+        shutil.rmtree(ag_data, ignore_errors=True)
 
     total = len(PASS) + len(FAIL)
     print("\n" + "=" * 64)

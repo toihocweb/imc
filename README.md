@@ -7,7 +7,7 @@ No UI. No Python runtime. No vector server. One binary, one SQLite file per proj
 
 ```
 imc claude setup      # ← the one command you need: index + wire Claude Code + start proxy
-imc search "..."      # hybrid search, no LLM cost
+imc search "..."      # answer from the index with the LLM (-r for raw hits)
 imc trace <symbol>    # what it calls / what calls it (blast radius)
 imc read <file>       # token-optimised reader (replaces Read for big files)
 ```
@@ -50,8 +50,8 @@ Requires a C compiler — tree-sitter grammars and the bundled SQLite build from
 | Command | What it does |
 |---|---|
 | `imc index [path] [-i <glob>] [--force]` | Incremental index. Unchanged files skipped by MD5. |
-| `imc search "<query>"` | Hybrid search. `query \| directive` splits facets; `-l N` overrides; `--no-vector` forces BM25 + graph. |
-| `imc trace <symbol> -d callees\|callers [--depth N] [--all] [-f file]` | Call tree / blast radius. Merges every definition when a name is ambiguous. |
+| `imc search "<query>"` | Retrieve (BM25 + vector + graph boosts), then answer with the LLM like the Python CLI. `-r/--raw` prints ranked hits only, `--json` emits hits, `-l N`/`-n N` override the count, `--no-vector` forces BM25. |
+| `imc trace <target> [-d N] [-r\|--callers] [-b\|--both] [-a\|--all] [-f file]` | Call tree / blast radius, also for `GET /api/path` route targets. `imc callers` / `callees` / `blast` are shorthands. Merges every definition when a name is ambiguous. |
 | `imc read <file> [--symbols] [--method NAME] [--offset N] [--limit N] [--raw]` | Compressed reader: blank-line strip, JSON smart-strip, auto-truncate with summary header. |
 | `imc context <target>` | One-shot resolved context for a file/module (outline, deps, tests). |
 | `imc claude setup\|wire\|start\|stop\|status` | Claude Code integration (see below). |
@@ -61,8 +61,9 @@ Requires a C compiler — tree-sitter grammars and the bundled SQLite build from
 | `imc memory-add/-search/-list/-delete`, `imc learn <file>` | Project memory (rules, decisions). |
 | `imc stats`, `imc projects` | Index statistics, registered projects. |
 
-Global flags: `-C/--project <dir>` (defaults to the active project) and `--json`
-(every command emits machine-readable JSON).
+Global flags: `-C/--root <dir>` (defaults to the active project) and `--json`
+(every command emits machine-readable JSON). `search`/`trace`/`context` also take
+`-p/--project <registered-id-or-name>`.
 
 ---
 

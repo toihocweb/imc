@@ -381,60 +381,85 @@ fn cosine_below_floor_is_rejected() {
 
 // ───────────────────── prompt claims must be real commands ─────────────────────
 
-/// The Python original's prompt recommended `imc callers` and `imc trace --both`;
-/// neither exists in this binary, so following it dead-ends. Every `imc <cmd>`
-/// the shipped block mentions must resolve to a real subcommand.
+/// Every `imc <cmd>` and flag the shipped instruction block mentions must exist
+/// in the binary that ships it. This asks the binary itself (`--help`) instead
+/// of keeping a hand-written list: the previous version hard-coded the command
+/// names and asserted the block taught `-d callers`, so it kept passing while
+/// `-d` silently changed meaning from direction to depth, and while `callers`
+/// and `--both` were added.
 #[test]
-fn instruction_block_only_references_real_subcommands() {
-    const REAL: &[&str] = &[
-        "index", "search", "graph", "stats", "projects", "memory-add", "memory-prune",
-        "memory-search", "memory-list", "memory-delete", "learn", "claude", "proxy",
-        "read", "trace", "context", "config",
-    ];
+fn instruction_block_only_references_real_commands_and_flags() {
+    fn help(args: &[&str]) -> String {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_imc"))
+            .args(args)
+            .arg("--help")
+            .output()
+            .expect("run `imc --help`");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    }
 
     let block = imc_cli::claude::instruction_block();
     assert!(block.contains(imc_cli::claude::BEGIN_MARKER), "marker missing");
 
-    let mut referenced: Vec<String> = Vec::new();
     // Odd segments of a backtick split are the ones *inside* backticks — that is
     // where the prompt writes its commands.
+    let mut referenced: Vec<(String, Vec<String>)> = Vec::new();
     for (i, inside) in block.split('`').enumerate() {
         if i % 2 == 0 {
             continue;
         }
         let mut words = inside.split_whitespace();
-        if words.next() == Some("imc") {
-            if let Some(cmd) = words.next() {
-                if !cmd.starts_with('-') && !referenced.contains(&cmd.to_string()) {
-                    referenced.push(cmd.to_string());
-                }
-            }
+        if words.next() != Some("imc") {
+            continue;
+        }
+        let Some(cmd) = words.next() else { continue };
+        if cmd.starts_with('-') {
+            continue;
+        }
+        let flags: Vec<String> = words
+            .filter(|w| w.starts_with('-'))
+            .map(|w| {
+                w.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-')
+                    .to_string()
+            })
+            .filter(|w| w.len() > 1)
+            .collect();
+        match referenced.iter_mut().find(|(c, _)| c == cmd) {
+            Some((_, f)) => f.extend(flags),
+            None => referenced.push((cmd.to_string(), flags)),
         }
     }
-
     assert!(!referenced.is_empty(), "no `imc <cmd>` references parsed");
-    let unknown: Vec<&String> = referenced
-        .iter()
-        .filter(|c| !REAL.contains(&c.as_str()))
-        .collect();
+
+    let top = help(&[]);
+    for (cmd, flags) in &referenced {
+        assert!(
+            top.contains(format!("  {cmd}").as_str()) || top.contains(format!("{cmd} ").as_str()),
+            "`imc {cmd}` is not a subcommand of this binary"
+        );
+        let h = help(&[cmd]);
+        for f in flags {
+            assert!(h.contains(f.as_str()), "`imc {cmd} {f}` is not a flag:\n{h}");
+        }
+    }
+}
+
+/// Names that only ever existed as Python wrappers must not creep back in.
+#[test]
+fn instruction_block_omits_python_only_wrappers() {
+    let block = imc_cli::claude::instruction_block();
     assert!(
-        unknown.is_empty(),
-        "instruction block references commands that do not exist: {unknown:?} (real: {REAL:?})"
+        !block.contains("imc-read"),
+        "`imc-read` is a Python console script, not a subcommand here"
+    );
+    // Direction is taught with the flags that exist, not with `-d`.
+    assert!(block.contains("--callers"), "should teach `trace --callers`");
+    assert!(
+        !block.contains("-d callers"),
+        "`-d` is depth (Python parity); direction is `--callers`"
     );
 }
-
-/// The Python prompt taught `imc trace --both`, which was never a flag here.
-#[test]
-fn instruction_block_does_not_recommend_nonexistent_flags() {
-    let block = imc_cli::claude::instruction_block();
-    for bad in ["--both", "imc callers", "imc-read"] {
-        assert!(
-            !block.contains(bad),
-            "prompt must not mention {bad:?}: it does not exist in this binary"
-        );
-    }
-    // The flags the block does teach must be the ones that work.
-    assert!(block.contains("-d callers"), "should teach `trace -d callers`");
-    assert!(block.contains("-d callees"), "should teach `trace -d callees`");
-}
-

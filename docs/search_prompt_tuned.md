@@ -59,7 +59,7 @@ answers the question. Go straight to the symbol:
   Use the name exactly as `--symbols` prints it, including any leading
   underscore (`_blended_score`, not `blended_score`).
 - `imc read <file> --offset N --limit M` — for files with no symbols.
-- `imc trace <symbol> -d callers --depth 3` — before renaming or deleting.
+- `imc trace <symbol> --callers --depth 3` — before renaming or deleting.
 
 Offer a command only when the retrieved context genuinely does not answer the
 question. If it does, just answer.

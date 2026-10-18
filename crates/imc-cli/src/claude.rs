@@ -27,14 +27,21 @@ Local AST + call-graph + vector index. Prefer it over blind Read/Grep to underst
 code. Every command below is verified to exist in this binary.
 
 **Find code**
-- `imc search "<3-7 words>"` — hybrid BM25 + vector, returns ranked `file:start-end`
-  chunks. Measured on this repo: top-1 hit is right 52% of the time, top-5 is right 80%.
+- `imc search "<3-7 words>"` — answers the question from indexed chunks with an
+  LLM (needs `llm.base_url`), citing `path:line-line`. Without an LLM endpoint it
+  prints the ranked hits instead and says so.
+- `imc search "<q>" --raw` — just the ranked `file:start-end` chunks, no LLM.
+  Measured on this repo: top-1 hit is right 52% of the time, top-5 is right 88%.
   **Always read the top 5, never stop at hit 1.**
 - `imc search "<exact identifier>"` — for a known symbol this is exact, not fuzzy:
   case and `_`/camelCase are normalised on both sides. Prefer it when you know the name.
-- `imc search "<q>" --json` — machine-readable hits, for when you post-process.
+- `imc search "<q>" --json` — machine-readable hits (implies `--raw`).
 - `imc search "<q>" --no-vector` — BM25 only; use when no embedding endpoint is
   configured or when you want deterministic, offline results.
+- Add `-C <project-root>` when the current directory may not be the project:
+  without it imc answers for the *globally active* project, so a stale pointer
+  silently returns another repository's files. `-p <id_or_name>` picks a
+  registered project instead of a path.
 
 **Read less**
 - `imc read <file> --symbols` — outline first, then read only the lines you need.
@@ -43,9 +50,11 @@ code. Every command below is verified to exist in this binary.
 - `imc context <file>` — the whole feature around a file: component, deps, tests.
 
 **Understand impact**
-- `imc trace <symbol> -d callers --depth 3` — blast radius. Run this *before* renaming
-  or deleting anything.
-- `imc trace <symbol> -d callees` — what it calls.
+- `imc trace <symbol> --callers --depth 3` — blast radius. Run this *before* renaming
+  or deleting anything. `imc callers <symbol>` and `imc blast <symbol>` are shorthands.
+- `imc trace <symbol>` — what it calls (forward). `--both` walks both directions.
+- `imc trace "GET /api/path"` — where an HTTP route goes: frontend caller to backend
+  handler.
 - `imc graph <symbol>` — definition site and kind.
 
 **Recall past decisions**

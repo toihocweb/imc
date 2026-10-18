@@ -19,7 +19,7 @@ Local AST + call-graph + vector index. Prefer it over blind Read/Grep to underst
 code. Every command below is verified to exist in this binary.
 
 **Find code**
-- `imc search "<3-7 words>"` — hybrid BM25 + vector, returns ranked `file:start-end`
+- `imc search "<3-7 words>"` — answers from the indexed chunks with an LLM
   chunks. Measured on this repo: top-1 hit is right 52% of the time, top-5 is right 80%.
   **Always read the top 5, never stop at hit 1.**
 - `imc search "<exact identifier>"` — for a known symbol this is exact, not fuzzy:
@@ -35,9 +35,9 @@ code. Every command below is verified to exist in this binary.
 - `imc context <file>` — the whole feature around a file: component, deps, tests.
 
 **Understand impact**
-- `imc trace <symbol> -d callers --depth 3` — blast radius. Run this *before* renaming
-  or deleting anything.
-- `imc trace <symbol> -d callees` — what it calls.
+- `imc trace <symbol> --callers --depth 3` — blast radius. Run this *before* renaming
+  or deleting anything. `imc callers <symbol>` / `imc blast <symbol>` are shorthands.
+- `imc trace <symbol>` — what it calls (forward); `--both` walks both directions.
 - `imc graph <symbol>` — definition site and kind.
 
 **Recall past decisions**
@@ -47,8 +47,9 @@ code. Every command below is verified to exist in this binary.
 **Rules**
 1. Search before you edit; never invent an API, path, or line number.
 2. Cite `path/to/file:L10-L25` when answering. Never cite a range you did not see.
-3. `imc trace` has no relevance floor: a junk query still returns hits. Hits are
-   ranked evidence, not proof — open the file before relying on it.
+3. Hits are ranked evidence, not proof — open the file before relying on it. A
+   query whose content words mostly do not exist in the index now returns nothing
+   (junk-query gate), so an empty result means "not in the index".
 4. If search misses repeatedly, fall back to Read/Grep. An empty result means
    "not in the index", not "does not exist".
 <!-- imc:end -->
@@ -58,8 +59,8 @@ code. Every command below is verified to exist in this binary.
 
 | Python prompt said | Reality in the Rust binary | Change |
 |---|---|---|
-| `imc trace <symbol> --both` | no `--both` flag | replaced with `-d callers` / `-d callees` |
-| `imc callers <symbol>` | no `callers` subcommand | replaced with `imc trace -d callers` |
+| `imc trace <symbol> --both` | no `--both` flag then | added `-b/--both` (+ `-r/--callers`, `-a/--all`, `-d/--depth`) |
+| `imc callers <symbol>` | no `callers` subcommand then | added `callers` / `callees` / `blast` |
 | `imc-read <file> --method <symbol>` | command is `imc read` | corrected |
 | `"how indexing works \| ast and memory"` (directive) | directives are not evaluated; they only clamp the limit | directive guidance removed |
 | `"chunk count: \| 8 chunks or --limit N"` | `--limit` works, directive does not | kept `-l/--limit`, dropped directive claim |
@@ -112,12 +113,12 @@ updated together. When it asks how something works, give entry point → call ch
 ### Why it is written this way
 
 - **"Not covered by retrieved context."** A confident hallucination is worse than a
-  refusal, and search has no relevance floor — junk queries return hits, so the
-  model will always be handed something that looks like evidence.
+  refusal, and retrieval can be weak — a junk query used to return five
+  confident-looking hits, so the evidence rule is stated as a rule, not taste.
 - **"Omit chunks that did not contribute."** The context is assembled by BM25+RRF,
   which optimises ranking, not relevance to a question. Without this the model
   tends to narrate every chunk it was given, including the filler.
-- **Impact section.** `imc trace -d callers` already computes the blast radius
+- **Impact section.** `imc trace --callers` already computes the blast radius
   precisely; asking for it in prose keeps the answer aligned with the graph.
 
 ---

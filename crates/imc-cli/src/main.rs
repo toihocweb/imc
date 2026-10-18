@@ -1,9 +1,9 @@
 use imc_cli::index;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 use imc_core::config::{upsert_project, Config, ProjectMeta};
 use imc_core::hash::md5_hex;
@@ -16,9 +16,13 @@ use imc_core::store;
     version
 )]
 struct Cli {
+    // Long form is `--root` (not `--project`) and the field is `root`, because
+    // subcommands take Python's `-p/--project <name_or_id>`: sharing either the
+    // long name or the clap arg id makes clap panic on a type mismatch between
+    // the global `PathBuf` and the per-command `String`.
     /// Project root (defaults to the active project or the current directory).
-    #[arg(long, short = 'C', global = true)]
-    project: Option<PathBuf>,
+    #[arg(long = "root", short = 'C', global = true)]
+    root: Option<PathBuf>,
 
     /// Print JSON instead of formatted text.
     #[arg(long, global = true)]
@@ -43,11 +47,18 @@ enum Command {
     /// Hybrid search over the index.
     Search {
         query: String,
-        #[arg(long, short = 'l')]
+        /// Number of chunks to retrieve. Python's `-n/--limit`.
+        #[arg(long, short = 'l', short_alias = 'n', value_parser = positive_usize)]
         limit: Option<usize>,
         /// Disable the vector leg (BM25 + graph only).
         #[arg(long)]
         no_vector: bool,
+        /// Raw hits only: skip the LLM answer (Python's `-r/--raw`).
+        #[arg(long, short = 'r')]
+        raw: bool,
+        /// Target project by registered id or name (Python's `-p/--project`).
+        #[arg(long, short = 'p')]
+        project: Option<String>,
     },
     /// Show definitions/callees/callers for a symbol.
     Graph { symbol: String },
@@ -133,32 +144,59 @@ enum Command {
         raw: bool,
     },
     /// Call-hierarchy tracer: callees (what it calls) or callers (blast radius).
-    Trace {
-        /// Symbol name or `file::qualified::name`.
-        symbol: String,
-        /// callees (forward, default) or callers (blast radius).
-        #[arg(long, short = 'd', default_value = "callees")]
-        direction: String,
-        /// Max tree depth (Python default 2).
-        #[arg(long, default_value_t = 2)]
-        depth: usize,
-        /// Keep builtins / trivial accessors in the output.
-        #[arg(long)]
-        all: bool,
-        /// Disambiguate which file defines the symbol.
-        #[arg(long, short = 'f')]
-        file: Option<String>,
-    },
+    Trace(TraceArgs),
+    /// Trace callers of a symbol (reverse blast radius).
+    #[command(alias = "blast")]
+    Callers(TraceArgs),
+    /// Trace callees of a symbol (forward execution flow).
+    Callees(TraceArgs),
     /// One-shot resolved context for a file/module (component + deps + tests).
+    #[command(alias = "slice")]
     Context {
         /// File path or query target.
         target: String,
+        /// Depth of subcomponent resolution (Python's `-d/--depth`, default 1).
+        #[arg(long, short = 'd', default_value_t = 1, value_parser = positive_usize)]
+        depth: usize,
+        /// Target project by registered id or name (Python's `-p/--project`).
+        #[arg(long, short = 'p')]
+        project: Option<String>,
     },
     /// View or edit ~/.imc_config.yaml (LLM url/key/model, embedding model).
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
+}
+
+/// Flags shared by `trace`, `callers`, `callees` and `blast`. Python gives all
+/// four parsers the same options (`main/cli/main.py`), including `-d/--depth`
+/// for depth and the `-r/--callers` / `-b/--both` booleans for direction.
+#[derive(Args, Debug)]
+struct TraceArgs {
+    /// Symbol name, `file::qualified::name`, or a `GET /api/path` route target.
+    target: String,
+    /// Max tree depth (Python default 2).
+    #[arg(long, short = 'd', default_value_t = 2, value_parser = positive_usize)]
+    depth: usize,
+    /// Reverse trace: who calls this symbol (Python's `-r/--callers`).
+    #[arg(long, short = 'r', visible_aliases = ["reverse", "up", "callers"])]
+    callers: bool,
+    /// Trace callees and callers (Python's `-b/--both`).
+    #[arg(long, short = 'b')]
+    both: bool,
+    /// Keep builtins / trivial accessors in the output.
+    #[arg(long, short = 'a')]
+    all: bool,
+    /// Disambiguate which file defines the symbol.
+    #[arg(long, short = 'f')]
+    file: Option<String>,
+    /// Direction spelled out, instead of the booleans above.
+    #[arg(long, value_parser = ["callees", "callers", "both"])]
+    direction: Option<String>,
+    /// Target project by registered id or name (Python's `-p/--project`).
+    #[arg(long, short = 'p')]
+    project: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -220,12 +258,152 @@ fn resolve_root(cfg: &Config, project: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = project {
         return Ok(std::fs::canonicalize(p)?);
     }
+    let cwd = std::env::current_dir()?;
+    // Python resolves the project by walking up from the cwd until a registered
+    // project matches (main/project/manager.py), so running from a subdirectory
+    // still answers for the project that contains it. The active-project
+    // pointer is this port's addition and only decides when nothing matches.
+    let registry = imc_core::config::load_registry(cfg);
+    let mut dir: Option<&std::path::Path> = Some(cwd.as_path());
+    while let Some(d) = dir {
+        if let Some(p) = registry
+            .iter()
+            .find(|p| std::path::Path::new(&p.path) == d)
+            .map(|p| PathBuf::from(&p.path))
+        {
+            return Ok(p);
+        }
+        dir = d.parent();
+    }
     if let Some(p) = cfg.active_project() {
         if p.exists() {
             return Ok(p);
         }
     }
-    Ok(std::env::current_dir()?)
+    Ok(cwd)
+}
+
+/// Python's `positive_int`: argparse rejects `--limit 0` / `--depth 0` with
+/// rc=2, and clap should reject them identically rather than clamp silently.
+fn positive_usize(s: &str) -> std::result::Result<usize, String> {
+    let n: usize = s
+        .parse()
+        .map_err(|_| format!("invalid integer: {s:?}"))?;
+    if n == 0 {
+        return Err("must be at least 1".to_string());
+    }
+    Ok(n)
+}
+
+/// Python's `-p/--project <name_or_id>`: a registered project id or name, or
+/// (as a convenience) a directory path. `base` is the root the global `-C`
+/// resolved to.
+fn root_with_project_ref(cfg: &Config, base: &Path, spec: Option<&str>) -> Result<PathBuf> {
+    let Some(spec) = spec else {
+        return Ok(base.to_path_buf());
+    };
+    if let Some(p) = imc_core::config::load_registry(cfg)
+        .into_iter()
+        .find(|p| p.id == spec || p.name == spec)
+    {
+        return Ok(PathBuf::from(p.path));
+    }
+    let as_path = PathBuf::from(spec);
+    if as_path.is_dir() {
+        return Ok(std::fs::canonicalize(as_path)?);
+    }
+    bail!(
+        "no project {spec:?}: not a registered id/name (see `imc projects`) and not a directory"
+    )
+}
+
+/// `trace`, plus the `callers` / `callees` / `blast` shorthands Python also
+/// ships: they take the same flags and only preset the direction.
+fn run_trace_arm(
+    cfg: &Config,
+    base_root: &Path,
+    args: &TraceArgs,
+    forced_direction: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let root = root_with_project_ref(cfg, base_root, args.project.as_deref())?;
+    let db = cfg.project_db(&root);
+    let indexed = db.exists();
+    let store = if indexed { store::open(&db)? } else { store::open(&cfg.data_dir.join("empty.db"))? };
+    // Python's ASTTracer always builds a bridge for an indexed project
+    // (tracer.py:98); without it `GET /api/x` and frontend call targets
+    // resolve to nothing.
+    let bridge = imc_cli_extra::endpoint_bridge::EndpointRouteBridge::new(&root, Some(&store));
+    let tracer =
+        imc_cli_extra::adapter::ImcTracer::new(&store, &root, indexed).with_bridge(&bridge);
+
+    let mut opts = imc_cli_extra::trace_cmd::TraceOptions::new(args.target.clone());
+    opts.depth = args.depth;
+    opts.show_all = args.all;
+    opts.json_output = json;
+    opts.file_filter = args.file.clone();
+    match forced_direction.or(args.direction.as_deref()) {
+        Some("callers") => opts.callers = true,
+        Some("both") => opts.both = true,
+        _ => {}
+    }
+    if args.callers {
+        opts.callers = true;
+    }
+    if args.both {
+        opts.both = true;
+    }
+
+    match imc_cli_extra::trace_cmd::run_trace(&tracer, &opts) {
+        Ok(out) => {
+            if let Some(js) = out.json {
+                println!("{js}");
+            } else {
+                let text = &out.text;
+                print!("{text}");
+                if !out.text.is_empty() && !out.text.ends_with('\n') {
+                    println!();
+                }
+            }
+        }
+        Err(e) => {
+            for m in e.messages() {
+                eprintln!("{m}");
+            }
+            std::process::exit(e.exit_code());
+        }
+    }
+    Ok(())
+}
+
+/// The human-readable hit listing (`-r/--raw`).
+///
+/// Python printed the chunk plus its `AST Context:` block; the equivalent here
+/// is the `// graph:` evidence the indexer appended, which only `--json`
+/// consumers used to see.
+fn print_hits(hits: &[imc_core::types::SearchHit], query: &str) {
+    for (i, h) in hits.iter().enumerate() {
+        let kind = h.sym_kind.as_deref().unwrap_or("chunk");
+        println!(
+            "\n{}. [{}] {}:{}-{}  (score {:.4})",
+            i + 1,
+            kind,
+            h.file,
+            h.start_line,
+            h.end_line,
+            h.score
+        );
+        if let Some(name) = &h.sym_name {
+            println!("   symbol: {name}");
+        }
+        println!("{}", indent(&h.snippet, "   "));
+        if let Some((_, evidence)) = h.text.split_once("// graph: ") {
+            println!("{}", indent(evidence, "   // graph: "));
+        }
+    }
+    if hits.is_empty() {
+        println!("no matches for {query:?}");
+    }
 }
 
 fn main() -> Result<()> {
@@ -241,7 +419,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::default();
     cfg.ensure_dirs()?;
-    let root = resolve_root(&cfg, cli.project.clone())?;
+    let root = resolve_root(&cfg, cli.root.clone())?;
 
     match &cli.command {
         Command::Index {
@@ -294,7 +472,10 @@ fn main() -> Result<()> {
             query,
             limit,
             no_vector,
+            raw,
+            project,
         } => {
+            let root = root_with_project_ref(&cfg, &root, project.as_deref())?;
             let db = cfg.project_db(&root);
             if !db.exists() {
                 bail!("project {} is not indexed. Run `imc index {}` first", root.display(), root.display());
@@ -319,19 +500,26 @@ fn main() -> Result<()> {
                 vector: !*no_vector,
             };
             let hits = imc_search::search(&store, embedder.as_deref(), &search_query, &opts)?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&hits)?);
-            } else {
-                for (i, h) in hits.iter().enumerate() {
-                    let kind = h.sym_kind.as_deref().unwrap_or("chunk");
-                    println!("\n{}. [{}] {}:{}-{}  (score {:.4})", i + 1, kind, h.file, h.start_line, h.end_line, h.score);
-                    if let Some(name) = &h.sym_name {
-                        println!("   symbol: {name}");
-                    }
-                    println!("{}", indent(&h.snippet, "   "));
+            if cli.json || *raw {
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&hits)?);
+                } else {
+                    print_hits(&hits, query);
                 }
-                if hits.is_empty() {
-                    println!("no matches for {query:?}");
+            } else if hits.is_empty() {
+                // Python prints this (and skips the LLM) when retrieval is empty.
+                println!("No results found.");
+            } else {
+                let context = imc_cli::agentic::context_from_hits(&hits);
+                match imc_cli::agentic::ask(&cfg, &search_query, &context)? {
+                    imc_cli::agentic::AskOutcome::Answer(answer) => {
+                        println!("{answer}");
+                        println!();
+                    }
+                    imc_cli::agentic::AskOutcome::Unavailable(why) => {
+                        eprintln!("[imc search] {why}; showing raw hits (`-r/--raw` to skip the LLM)");
+                        print_hits(&hits, query);
+                    }
                 }
             }
         }
@@ -492,57 +680,25 @@ fn main() -> Result<()> {
             let removed = imc_memory::delete(&store, *id)?;
             println!("memory #{id} deleted: {removed}");
         }
-        Command::Trace {
-            symbol,
-            direction,
-            depth,
-            all,
-            file,
-        } => {
-            let db = cfg.project_db(&root);
-            let indexed = db.exists();
-            let store = if indexed { store::open(&db)? } else { store::open(&cfg.data_dir.join("empty.db"))? };
-            let tracer = imc_cli_extra::adapter::ImcTracer::new(&store, &root, indexed);
-
-            let mut opts = imc_cli_extra::trace_cmd::TraceOptions::new(symbol.clone());
-            opts.depth = *depth;
-            opts.show_all = *all;
-            opts.json_output = cli.json;
-            opts.file_filter = file.clone();
-            match direction.as_str() {
-                "callers" | "caller" | "up" => opts.callers = true,
-                "both" => opts.both = true,
-                _ => {}
-            }
-
-            match imc_cli_extra::trace_cmd::run_trace(&tracer, &opts) {
-                Ok(out) => {
-                    if let Some(js) = out.json {
-                        println!("{js}");
-                    } else {
-                        let text = &out.text;
-                        print!("{text}");
-                        if !out.text.is_empty() && !out.text.ends_with('\n') {
-                            println!();
-                        }
-                    }
-                }
-                Err(e) => {
-                    for m in e.messages() {
-                        eprintln!("{m}");
-                    }
-                    std::process::exit(e.exit_code());
-                }
-            }
-        }
-        Command::Context { target } => {
+        Command::Trace(a) => run_trace_arm(&cfg, &root, a, None, cli.json)?,
+        Command::Callers(a) => run_trace_arm(&cfg, &root, a, Some("callers"), cli.json)?,
+        Command::Callees(a) => run_trace_arm(&cfg, &root, a, Some("callees"), cli.json)?,
+        Command::Context { target, depth, project } => {
+            let root = root_with_project_ref(&cfg, &root, project.as_deref())?;
+            // Python's `get_feature_context(..., depth)` never reads `depth`
+            // (main/cli/commands/context.py:555-681 — only the signature and
+            // the help text mention it), so the flag is accepted and ignored,
+            // exactly like upstream. It is validated (`>= 1`) so a typo cannot
+            // pass silently the way `-d callers` used to.
+            let _ = depth;
             let db = cfg.project_db(&root);
             let store = if db.exists() { Some(store::open(&db)?) } else { None };
             let out = imc_find::context::get_feature_context(target, &root, store.as_ref());
             if out.is_empty() {
                 bail!("no context resolved for {target:?}");
             }
-            print!("{out}");
+            // Python used print(), which terminates the dossier with a newline.
+            println!("{out}");
         }
         Command::Claude { action } => match action {
             ClaudeAction::Setup { force, port } => {
