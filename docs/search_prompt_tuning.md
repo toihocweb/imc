@@ -11,16 +11,29 @@ Scoring was corrected twice during this work; both corrections mattered.
 | prompt | grounded (of 8) | key files (of 13) | invalid citations |
 |---|---|---|---|
 | `main/prompts/imc_search.md` (baseline) | 5.3 | 7.3 | 4.3 |
-| **candidate A — tuned** | **7.0** | **8.3** | 1.7 |
+| candidate A — tuned | 7.0 | 8.3 | 1.7 |
 | candidate C — line-number strict | 6.3 | 8.0 | 1.3 |
 | candidate B — minimal | 8 (n=1) | 7 (n=1) | 0 |
+| **candidate D — A + selective read** | **8.0** | **8.3** | **0.0** |
 
-A wins grounded and key-file coverage; C wins invalid citations by 0.3, which is
-inside noise at n=3. A and C are each clearly better than baseline: baseline's
-invalid range is 3–5, A's is 0–3, and paired across runs A wins every pair on
-both metrics.
+Per-run, for the two that matter:
 
-Candidate A is the recommendation: see `docs/search_prompt_tuned.md`.
+    A   grounded 8,7,6   key 9,8,8   invalid 0,2,3
+    D   grounded 8,8,8   key 9,8,8   invalid 0,0,0
+
+Candidate D dominates A on every metric and holds zero invalid citations across
+all three runs. The difference is a `## If the answer needs more code` section
+that reinstates the original prompt's "Next command" idea — go to
+`imc read <file> --method <name>` instead of reading a 700-line file for one
+method — but with commands that actually exist in this binary.
+
+That block was dropped in candidate A along with the three commands it recommended
+(`imc-read`, `imc callers`, `imc trace --both`), none of which exist. The idea was
+right and the measurements say so: adding it back with real commands took
+grounding from 7.0 to 8.0 and invalid citations from 1.7 to 0.0. A prompt with no
+place to send the model left it to guess line ranges.
+
+Candidate D is the recommendation: see `docs/search_prompt_tuned.md`.
 
 ## What the harness got wrong first
 
