@@ -384,14 +384,23 @@ pub fn search(
             // Token match covers snake_case (`spawn_engine`), but a camelCase
             // query tokenizes into pieces (`taxOn` -> tax, on) and can never
             // equal the symbol name, so also compare the collapsed query.
-            let collapsed: String = query
-                .chars()
-                .filter(|c| c.is_alphanumeric())
-                .collect::<String>()
-                .to_lowercase();
-            if query_tokens(query).iter().any(|t| t.eq_ignore_ascii_case(short))
-                || (!collapsed.is_empty() && collapsed == short.to_lowercase())
-            {
+            // Compare with separators removed on BOTH sides, so the query
+            // matches however the symbol is cased or punctuated:
+            //   `blended_score` -> blendedscore == blendedscore
+            //   `taxOn`         -> taxon        == taxon
+            //   `spawnEngine`   -> spawnengine  == spawnengine
+            let norm = |s: &str| -> String {
+                s.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect()
+            };
+            let collapsed = norm(query);
+            // Both checks matter: a query token that is itself a symbol name
+            // (`... weights for score ...` -> `score`) and a query that *is*
+            // the symbol name in any casing/punctuation.
+            let token_hit = query_tokens(query).iter().any(|t| t.eq_ignore_ascii_case(short));
+            if token_hit || (!collapsed.is_empty() && collapsed == norm(short)) {
                 s += 0.040;
             }
         }
