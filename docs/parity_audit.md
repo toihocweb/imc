@@ -92,6 +92,14 @@ Python indexes them at top level whatever the case, and skips nested ones.
 - i18n keys are also harvested from imported child components, and `.JSON` /
   `.PROPERTIES` (uppercase) translation files are picked up.
 
+## Different shape, same capability
+
+Python's `imc memory` is one command with flags (list by default, `-d <id>`
+delete, `-c` clear, `-g` global, `-p` prune); this port ships them as
+`memory-list`, `memory-delete`, `memory-prune`. Memory search and typed
+`memory-add` are extra here — the Python CLI has no `memory search`. The names
+are what the instruction block teaches, so agents see one spelling only.
+
 ## Cosmetic (no behaviour change)
 
 search 3, 7, 9, 10, 11; trace 14, 15, 16, 18, 19; context 13, 17, 18. Rich vs

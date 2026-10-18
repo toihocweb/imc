@@ -260,7 +260,10 @@ enum ConfigAction {
 
 fn resolve_root(cfg: &Config, project: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = project {
-        return Ok(std::fs::canonicalize(p)?);
+        // A raw `No such file or directory (os error 2)` from `canonicalize`
+        // does not say which argument was wrong.
+        return std::fs::canonicalize(&p)
+            .map_err(|e| anyhow::anyhow!("project root {} does not exist ({e})", p.display()));
     }
     let cwd = std::env::current_dir()?;
     // Python resolves the project by walking up from the cwd until a registered
