@@ -1,0 +1,13 @@
+[package]
+name = "imc-trace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+imc-core = { path = "../imc-core" }
+imc-parser = { path = "../imc-parser" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex = "1"
