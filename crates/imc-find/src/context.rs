@@ -377,11 +377,30 @@ pub fn build_backend_dossier(
 /// identical to the Python output. Prefixes are file-wide, so a matching verb
 /// plus path suffix identifies the decorator uniquely within one file.
 fn decorator_line(lines: &[&str], method: &str, path: &str) -> Option<usize> {
-    let re = Regex::new(r#"@\w+\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#).ok()?;
+    // Flask's `@app.route(path, methods=[...])` declares its verbs in an
+    // argument, so an empty verb group means "match any" and the `methods`
+    // check below decides.
+    let re = Regex::new(
+        r#"@\w+\.(get|post|put|delete|patch|route)\s*\(\s*["']([^"']*)["']"#,
+    )
+    .ok()?;
     for (i, line) in lines.iter().enumerate() {
         let Some(cap) = re.captures(line) else { continue };
-        if !cap[1].eq_ignore_ascii_case(method) {
+        let verb: &str = &cap[1];
+        if !verb.eq_ignore_ascii_case(method) && !verb.eq_ignore_ascii_case("route") {
             continue;
+        }
+        if verb.eq_ignore_ascii_case("route") {
+            // `methods=["POST"]` (or a tuple) must contain the method, else the
+            // route is a different verb on the same path.
+            let lower = line.to_lowercase();
+            if let Some(idx) = lower.find("methods") {
+                if !lower[idx..].contains(&method.to_lowercase()) {
+                    continue;
+                }
+            } else if !method.eq_ignore_ascii_case("get") {
+                continue;
+            }
         }
         let lit = cap[2].trim().trim_start_matches('/');
         if lit.is_empty() {

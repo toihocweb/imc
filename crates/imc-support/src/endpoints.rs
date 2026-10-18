@@ -561,6 +561,14 @@ re!(
     r#"(?:@\w+(?:\([^)]*\))?\s+)*(?:public|protected|private|static|final|abstract)?\s*[\w<>\[\],?]+\s+(\w+)\s*\("#
 );
 re!(re_py_prefix, r#"APIRouter\s*\([^)]*prefix\s*=\s*["']([^"']+)["']"#);
+/// Flask blueprints carry `url_prefix=` instead of `prefix=`.
+re!(re_py_blueprint_prefix, r#"Blueprint\s*\([^)]*url_prefix\s*=\s*["']([^"']+)["']"#);
+/// Flask `@app.route("/x")` / `@bp.route("/x", methods=["GET", "POST"])`.
+re!(
+    re_py_flask_route,
+    r#"@\w+\.route\s*\(\s*["']([^"']*)["']\s*(?:,\s*methods\s*=\s*[\[({]([^\])}]*)[\])}])?"#
+);
+re!(re_py_quoted, r#"["']([A-Za-z]+)["']"#);
 re!(re_py_route, r#"@\w+\.(get|post|put|delete|patch)\s*\(\s*["']([^"']*)["']"#);
 re!(re_py_def, r"\b(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\(");
 re!(re_ctrl_prefix, r#"@Controller\s*\(\s*["']([^"']*)["']"#);
@@ -672,8 +680,10 @@ impl<'a> EndpointBridge<'a> {
 
     /// FastAPI / Flask / Bottle route extraction.
     fn scan_python_routes(&mut self, code: &str, rel_path: &str) {
+        // FastAPI routers use `prefix=`, Flask blueprints `url_prefix=`.
         let prefix = re_py_prefix()
             .captures(code)
+            .or_else(|| re_py_blueprint_prefix().captures(code))
             .map(|m| m.get(1).unwrap().as_str().trim().to_string())
             .unwrap_or_default();
         let prefix = if !prefix.is_empty() && !prefix.starts_with('/') {
@@ -684,6 +694,58 @@ impl<'a> EndpointBridge<'a> {
 
         let lines = splitlines(code);
         for (i, line) in lines.iter().enumerate() {
+            // Flask: `@app.route("/x")` (GET by default) with an optional
+            // `methods=[...]`. FastAPI/Flask in one file both register fine.
+            if let Some(fm) = re_py_flask_route().captures(line) {
+                let sub_path = fm.get(1).unwrap().as_str().trim().to_string();
+                let methods: Vec<String> = match fm.get(2) {
+                    Some(list) => re_py_quoted()
+                        .captures_iter(list.as_str())
+                        .map(|c| c.get(1).unwrap().as_str().to_uppercase())
+                        .collect(),
+                    None => Vec::new(),
+                };
+                let methods = if methods.is_empty() {
+                    vec!["GET".to_string()]
+                } else {
+                    methods
+                };
+                let full_path = if !sub_path.is_empty() {
+                    let sp = if sub_path.starts_with('/') {
+                        sub_path
+                    } else {
+                        format!("/{sub_path}")
+                    };
+                    format!("{}{}", prefix.trim_end_matches('/'), sp)
+                } else if prefix.is_empty() {
+                    "/".to_string()
+                } else {
+                    prefix.clone()
+                };
+                let mut handler_name: Option<String> = None;
+                let mut handler_index = i;
+                for (hi, next_line) in lines.iter().enumerate().skip(i).take(5) {
+                    if let Some(dm) = re_py_def().captures(next_line) {
+                        handler_name = Some(dm.get(1).unwrap().as_str().to_string());
+                        handler_index = hi;
+                        break;
+                    }
+                }
+                let Some(handler_name) = handler_name else { continue };
+                for method in methods {
+                    self.register_route(RouteDefinition {
+                        method,
+                        path: full_path.clone(),
+                        normalized_path: normalize_url_path(&full_path),
+                        file: rel_path.to_string(),
+                        line: handler_index + 1,
+                        handler_name: handler_name.clone(),
+                        handler_node_id: String::new(),
+                    });
+                }
+                continue;
+            }
+
             let Some(m) = re_py_route().captures(line) else { continue };
             let http_method = m.get(1).unwrap().as_str().to_uppercase();
             let sub_path = m.get(2).unwrap().as_str().trim().to_string();
@@ -1186,6 +1248,46 @@ mod bridge_tests {
         assert_eq!(routes[0].handler_name, "get_user");
         assert_eq!(routes[0].normalized_path, "/api/v1/users/*");
         assert_eq!(routes[0].method, "GET");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn flask_route_decorators_are_routes() {
+        // Neither implementation used to read `@app.route`, so a Flask service
+        // was invisible to trace, context and front-end linking.
+        let root = tmpdir("flask");
+        write(
+            &root,
+            "app/views.py",
+            "from flask import Blueprint, Flask\n\n\
+             bp = Blueprint('orders', __name__, url_prefix='/api/orders')\n\n\
+             @bp.route('/list')\n\
+             def list_orders():\n\
+             \x20   return []\n\n\
+             @bp.route('/create', methods=['POST', 'PUT'])\n\
+             def create_order():\n\
+             \x20   return {}\n\n\
+             @bp.route('/health', methods=('GET',))\n\
+             def health():\n\
+             \x20   return 'ok'\n",
+        );
+        let mut b = EndpointBridge::new(&root, None);
+        b.scan();
+
+        let list = b.get_routes_for_target("GET", "/api/orders/list");
+        assert_eq!(list.len(), 1, "{list:?}");
+        assert_eq!(list[0].handler_name, "list_orders");
+        assert_eq!(list[0].path, "/api/orders/list");
+
+        // One route per method in the list.
+        let post = b.get_routes_for_target("POST", "/api/orders/create");
+        assert_eq!(post.len(), 1, "{post:?}");
+        assert_eq!(post[0].handler_name, "create_order");
+        let put = b.get_routes_for_target("PUT", "/api/orders/create");
+        assert_eq!(put.len(), 1, "{put:?}");
+
+        // Default is GET; a tuple literal is accepted too.
+        assert_eq!(b.get_routes_for_target("GET", "/api/orders/health").len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -117,6 +117,10 @@ a name has several definitions.
   handler ← route ← component.
 - **`locate_target_file` semantic fallback** (context 4, above) — needs the
   embedder wired into `imc-find`.
-- **Flask `@app.route("/x", methods=[...])`** is indexed by neither
-  implementation (both read `@router.get`-style decorators). The bridge is the
-  single place to add it; it feeds trace, context and front-end linking.
+- **Flask `@app.route("/x", methods=[...])`** — *resolved this session*: the
+  bridge now reads it (one route per method, GET when `methods` is absent, with
+  `Blueprint(url_prefix=...)` applied like a FastAPI `prefix=`). Neither
+  implementation had it before, so a Flask service was invisible to `trace`,
+  `context` and front-end linking; a unit test covers the decorator, the
+  `methods` list, the tuple form and the default verb, and `/root/imc`'s 39
+  FastAPI routes are still byte-identical to Python's list.
