@@ -23,6 +23,8 @@ fn limit_re() -> &'static Regex {
 pub fn resolve_search_limit(query: &str, directive: &str, explicit_limit: Option<i64>) -> i64 {
     if let Some(n) = explicit_limit {
         if n > 0 {
+            // 1..20 is Python parity (`min(max(explicit_limit, 1), 20)`), not an
+            // arbitrary cap. `-l 50` therefore yields 20 hits — intentional.
             return n.max(1).min(20);
         }
     }

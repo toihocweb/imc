@@ -74,7 +74,10 @@ def check_answers_exist(repo):
 
 
 def run(repo, args, expect_rc=0):
-    p = subprocess.run([str(IMC), *args], cwd=str(repo), capture_output=True, text=True, timeout=300)
+    # -C is explicit: without it resolve_root prefers the globally active
+    # project over cwd, so an unrelated project can answer the query.
+    p = subprocess.run([str(IMC), "-C", str(repo), *args], cwd=str(repo),
+                       capture_output=True, text=True, timeout=300)
     if p.returncode != expect_rc:
         raise RuntimeError(f"rc={p.returncode}: {p.stderr[:300]}")
     return p.stdout
