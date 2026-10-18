@@ -2,4 +2,3 @@
 //! exercise the same indexing path the CLI runs.
 
 pub mod index;
-pub mod mcp;

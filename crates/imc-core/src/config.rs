@@ -4,6 +4,33 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// Embedding provider settings (OpenAI-compatible `/embeddings` endpoint).
+impl EmbedConfig {
+    /// Env vars win, then `~/.indexer_config.yaml` (llm.* / embedding.model).
+    pub fn from_settings(s: &crate::settings::Settings) -> Self {
+        let mut c = EmbedConfig::default();
+        if c.api_key.is_none() {
+            if let Some(k) = s.llm.as_ref().and_then(|l| l.api_key.as_ref()) {
+                if !k.is_empty() {
+                    c.api_key = Some(k.clone());
+                }
+            }
+        }
+        if let Some(b) = s.llm.as_ref().and_then(|l| l.base_url.as_ref()) {
+            if std::env::var("IMC_EMBED_BASE_URL").is_err()
+                && std::env::var("OPENAI_BASE_URL").is_err()
+            {
+                c.base_url = b.clone();
+            }
+        }
+        if let Some(m) = s.embedding.as_ref().and_then(|e| e.model.as_ref()) {
+            if std::env::var("IMC_EMBED_MODEL").is_err() {
+                c.model = m.clone();
+            }
+        }
+        c
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EmbedConfig {
     pub base_url: String,
@@ -49,7 +76,7 @@ impl Default for Config {
                         .unwrap_or_else(|| ".indexmycode-rs".to_string())
                 }),
             ),
-            embedding: EmbedConfig::default(),
+            embedding: EmbedConfig::from_settings(&crate::settings::load()),
             max_file_bytes: std::env::var("IMC_MAX_FILE_BYTES")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -60,6 +87,25 @@ impl Default for Config {
 }
 
 impl Config {
+    /// `llm.base_url` from `~/.indexer_config.yaml` (default matches Python).
+    pub fn llm_base_url(&self) -> String {
+        crate::settings::load()
+            .llm
+            .and_then(|l| l.base_url)
+            .unwrap_or_else(|| "http://localhost:6655/litellm/v1".to_string())
+    }
+
+    pub fn llm_api_key(&self) -> String {
+        crate::settings::load().llm.and_then(|l| l.api_key).unwrap_or_default()
+    }
+
+    pub fn llm_model(&self) -> String {
+        crate::settings::load()
+            .llm
+            .and_then(|l| l.model)
+            .unwrap_or_else(|| "gemini-3.1-flash-lite".to_string())
+    }
+
     pub fn projects_dir(&self) -> PathBuf {
         self.data_dir.join("projects")
     }

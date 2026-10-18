@@ -13,10 +13,13 @@ imc-core = { path = "../imc-core" }
 imc-parser = { path = "../imc-parser" }
 imc-embed = { path = "../imc-embed" }
 imc-memory = { path = "../imc-memory" }
+imc-index = { path = "../imc-index" }
 imc-search = { path = "../imc-search" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
+ureq.workspace = true
 walkdir.workspace = true
 rayon.workspace = true

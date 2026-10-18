@@ -102,6 +102,12 @@ impl Store {
     }
 
     /// Replace every row belonging to a file — the Rust port re-derives per-file state.
+    /// Remove the file row itself (called on deleted paths).
+    pub fn remove_file(&self, rel: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM files WHERE path = ?1", params![rel])?;
+        Ok(())
+    }
+
     pub fn clear_file(&self, rel: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM symbols WHERE file = ?1", params![rel])?;

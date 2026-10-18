@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod hash;
+pub mod settings;
 pub mod ingest;
 pub mod store;
 pub mod types;

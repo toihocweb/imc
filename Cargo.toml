@@ -5,6 +5,11 @@ members = [
     "crates/imc-parser",
     "crates/imc-embed",
     "crates/imc-memory",
+    "crates/imc-index",
+    "crates/imc-support",
+    "crates/imc-trace",
+    "crates/imc-find",
+    "crates/imc-cli-extra",
     "crates/imc-search",
     "crates/imc-cli",
 ]
@@ -33,6 +38,7 @@ rayon = "1"
 md-5 = "0.10"
 ureq = { version = "3", features = ["json"] }
 dirs = "5"
+serde_yaml = "0.9"
 
 [profile.release]
 opt-level = 3

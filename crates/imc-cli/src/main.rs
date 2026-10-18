@@ -1,4 +1,4 @@
-use imc_cli::{index, mcp};
+use imc_cli::index;
 
 use std::path::PathBuf;
 
@@ -55,8 +55,6 @@ enum Command {
     Stats,
     /// List registered projects.
     Projects,
-    /// Run the MCP stdio server.
-    Mcp,
     /// Store a durable project memory.
     #[command(name = "memory-add")]
     MemoryAdd {
@@ -89,6 +87,25 @@ enum Command {
     MemoryDelete { id: i64 },
     /// Extract and store memories from a transcript/markdown file.
     Learn { file: PathBuf },
+    /// View or edit ~/.indexer_config.yaml (LLM url/key/model, embedding model).
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigAction {
+    /// Print the config file path.
+    Path,
+    /// Get a dotted key, e.g. llm.base_url or embedding.model (api_key masked).
+    Get { key: String },
+    /// Set a dotted key: imc config set llm.base_url http://localhost:11434/v1
+    Set { key: String, value: String },
+    /// List all known settings (secrets masked).
+    List,
+    /// Probe the configured endpoint (POST {base_url}/embeddings) and report.
+    Test,
 }
 
 fn resolve_root(cfg: &Config, project: Option<PathBuf>) -> Result<PathBuf> {
@@ -233,7 +250,6 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Command::Mcp => mcp::serve(&cfg)?,
         Command::MemoryAdd {
             content,
             category,
@@ -296,6 +312,106 @@ fn main() -> Result<()> {
             let store = store::open(&db)?;
             let removed = imc_memory::delete(&store, *id)?;
             println!("memory #{id} deleted: {removed}");
+        }
+        Command::Config { action } => {
+            use imc_core::settings as st;
+            match action {
+                ConfigAction::Path => println!("{}", st::path().display()),
+                ConfigAction::Get { key } => {
+                    let s = st::load();
+                    match st::get(&s, &key) {
+                        Some(v) if key.ends_with("api_key") || key.ends_with("token") => {
+                            println!("{}", st::mask(&v))
+                        }
+                        Some(v) => println!("{}", v.as_str().map(String::from).unwrap_or_else(|| format!("{v:?}"))),
+                        None => {
+                            if cli.json {
+                                println!("{{}}");
+                            } else {
+                                println!("(unset) {key}");
+                            }
+                        }
+                    }
+                }
+                ConfigAction::Set { key, value } => {
+                    let mut s = st::load();
+                    st::set(&mut s, &key, &value)?;
+                    st::save(&s)?;
+                    let masked = key.ends_with("api_key") || key.ends_with("token");
+                    if cli.json {
+                        println!(
+                            "{}",
+                            serde_json::json!({"key": key, "value": if masked {"***"} else {&value}, "path": st::path()})
+                        );
+                    } else if masked {
+                        println!("{key} = {} (saved to {})", st::mask(&serde_yaml::Value::String(value.clone())), st::path().display());
+                    } else {
+                        println!("{key} = {value} (saved to {})", st::path().display());
+                    }
+                }
+                ConfigAction::List => {
+                    let s = st::load();
+                    let pairs: Vec<(&str, Option<serde_yaml::Value>)> = vec![
+                        ("llm.base_url", st::get(&s, "llm.base_url")),
+                        ("llm.model", st::get(&s, "llm.model")),
+                        ("llm.api_key", st::get(&s, "llm.api_key")),
+                        ("embedding.model", st::get(&s, "embedding.model")),
+                        ("ingest.ignored_dirs", st::get(&s, "ingest.ignored_dirs")),
+                    ];
+                    if cli.json {
+                        let m: serde_json::Map<String, serde_json::Value> = pairs
+                            .iter()
+                            .map(|(k, v)| {
+                                (
+                                    (*k).to_string(),
+                                    match v {
+                                        Some(y) => serde_json::to_value(
+                                            y.as_str().map(String::from).unwrap_or_else(|| format!("{y:?}")),
+                                        )
+                                        .unwrap_or(serde_json::Value::Null),
+                                        None => serde_json::Value::Null,
+                                    },
+                                )
+                            })
+                            .collect();
+                        println!("{}", serde_json::to_string_pretty(&m)?);
+                    } else {
+                        for (k, v) in pairs {
+                            match v {
+                                None => println!("{k:20} (unset)"),
+                                Some(y) if k.ends_with("api_key") => {
+                                    println!("{k:20} {}", st::mask(&y))
+                                }
+                                Some(y) => println!(
+                                    "{k:20} {}",
+                                    y.as_str().map(String::from).unwrap_or_else(|| format!("{y:?}"))
+                                ),
+                            }
+                        }
+                        println!("\nfile: {}", st::path().display());
+                    }
+                }
+                ConfigAction::Test => {
+                    let cfg2 = imc_core::config::Config::default();
+                    let base = cfg2.llm_base_url();
+                    let key = cfg2.llm_api_key();
+                    let url = format!("{}/embeddings", base.trim_end_matches('/'));
+                    let body = serde_json::json!({"model": cfg2.embedding.model, "input": ["ping"]});
+                    let agent = ureq::Agent::new_with_defaults();
+                    let resp = agent
+                        .post(&url)
+                        .header("Authorization", format!("Bearer {}", if key.is_empty() { "dummy-key" } else { &key }))
+                        .header("Content-Type", "application/json")
+                        .send_json(body);
+                    match resp {
+                        Ok(r) => println!("OK  {url}  status={}", r.status()),
+                        Err(e) => {
+                            println!("FAIL  {url}\n  {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
         }
         Command::Learn { file } => {
             let db = cfg.project_db(&root);
