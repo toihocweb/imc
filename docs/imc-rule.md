@@ -21,6 +21,12 @@ callers, or trace HTTP routes.
 - `imc trace "<GET /api/path>"` — HTTP route → backend handler.
 - `imc graph <symbol>` — definition site and kind.
 - `imc memory-search "<topic>"` — conventions/decisions recorded for this repo.
+- `imc search "<q>" --on-miss` — if search returns nothing, the query is saved
+  to memory so the next agentic pass can surface it.
+- `imc trace "<symbol>" --callers` — if blast radius is large, a business_rule
+  is auto-recorded to warn future editors.
+- `imc ccr tune` — analyze compression store stats and suggest MIN_SAVINGS
+  adjustments per content kind.
 - `imc pack "<query>"` — assemble retrieval + graph + memory under a token
   budget. Shortened items carry an `imc retrieve <id>` handle.
 - `imc list` — registered projects (files, symbols, edges, chunks, memories,
