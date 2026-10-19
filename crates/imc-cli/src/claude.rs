@@ -352,6 +352,77 @@ pub fn setup_and_start(
     Ok(log)
 }
 
+/// Run the `claude` binary directly, passing all args through.
+/// Spawns detached so the process survives terminal close (setsid,
+/// stdin/stdout/stderr redirected to a log file under the data dir).
+pub fn run_claude_bin(args: &[String]) -> Result<()> {
+    let exe = which_claude_bin()?;
+    let exe_disp = exe.display().to_string();
+
+    let log_dir = imc_core::settings::path()
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("claude_sessions");
+    std::fs::create_dir_all(&log_dir)
+        .with_context(|| format!("create {}", log_dir.display()))?;
+    let log = std::fs::File::create(log_dir.join("claude.log"))
+        .with_context(|| format!("create {}", log_dir.join("claude.log").display()))?;
+    let err = log.try_clone()?;
+
+    // Build the command with detached flags so it survives terminal close.
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(log))
+        .stderr(std::process::Stdio::from(err));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0); // new process group, survives terminal close
+    }
+
+    let child = cmd.spawn().with_context(|| format!("spawn `{exe_disp}`"))?;
+    let pid = child.id();
+
+    // Do not wait — return immediately. The child keeps running.
+    std::mem::forget(child);
+
+    println!("claude started: pid={} (background, survives terminal close)", pid);
+    Ok(())
+}
+
+/// Locate the `claude` binary: check `IMC_CLAUDE_BIN` env, then PATH.
+fn which_claude_bin() -> Result<PathBuf> {
+    if let Ok(p) = std::env::var("IMC_CLAUDE_BIN") {
+        if !p.is_empty() {
+            return Ok(PathBuf::from(p));
+        }
+    }
+    // Search PATH.
+    if let Some(p) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&p) {
+            let cand = dir.join("claude");
+            if cand.exists() && cand.is_file() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = cand.metadata() {
+                        if meta.permissions().mode() & 0o111 != 0 {
+                            return Ok(cand);
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    return Ok(cand);
+                }
+            }
+        }
+    }
+    bail!("claude binary not found — set IMC_CLAUDE_BIN or install Claude Code and add it to PATH")
+}
+
 /// Unix seconds; keeps state files human-comparable.
 pub fn chrono_now() -> u64 {
     std::time::SystemTime::now()

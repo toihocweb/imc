@@ -9,6 +9,7 @@ use clap::{Args, Parser, Subcommand};
 use imc_core::config::{upsert_project, Config, ProjectMeta};
 use imc_core::hash::md5_hex;
 use imc_core::store;
+use imc_memory;
 
 
 #[derive(Parser, Debug)]
@@ -61,6 +62,11 @@ enum Command {
         /// Target project by registered id or name (Python's `-p/--project`).
         #[arg(long, short = 'p')]
         project: Option<String>,
+        /// When search returns no hits, automatically record the query as a
+        /// project memory (work_fact / search_fail) so the next agentic pass
+        /// can surface it. Follow up with `imc memory-add` to refine the rule.
+        #[arg(long)]
+        on_miss: bool,
     },
     /// Show definitions/callees/callers for a symbol.
     Graph { symbol: String },
@@ -283,6 +289,12 @@ enum ClaudeAction {
     Stop,
     /// Show proxy status.
     Status,
+    /// Run the `claude` binary directly, passing all args through.
+    /// `imc claude` with no subcommand falls through to this.
+    Run {
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -563,6 +575,7 @@ fn main() -> Result<()> {
             no_vector,
             raw,
             project,
+            on_miss,
         } => {
             let root = root_with_project_ref(&cfg, &root, project.as_deref())?;
             let db = cfg.project_db(&root);
@@ -598,6 +611,25 @@ fn main() -> Result<()> {
             } else if hits.is_empty() {
                 // Python prints this (and skips the LLM) when retrieval is empty.
                 println!("No results found.");
+                if *on_miss {
+                    // Auto-record the failed query as a project memory so the
+                    // next agentic pass can surface it. The user should follow
+                    // up with `imc memory-add` to refine the rule.
+                    let meta = imc_core::config::ProjectMeta {
+                        id: imc_core::hash::md5_hex(root.to_string_lossy().as_bytes())[..16].to_string(),
+                        name: root
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "root".into()),
+                        path: root.to_string_lossy().to_string(),
+                        indexed_at: Some(imc_cli::claude::chrono_now()),
+                        file_count: None,
+                    };
+                    imc_core::config::upsert_project(&cfg, meta)?;
+                    let db = cfg.project_db(&root);
+                    let mut store = imc_core::store::open(&db)?;
+                    imc_memory::add(&mut store, &query, "work_fact", &[], &[], 0.5, "search_fail")?;
+                }
             } else {
                 let context = imc_cli::agentic::context_from_hits(&hits);
                 match imc_cli::agentic::ask(&cfg, &search_query, &context)? {
@@ -1060,15 +1092,13 @@ fn main() -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
                 } else {
                     match s {
-                        Some(v) => println!(
-                            "proxy: {} (pid={}, port={})",
-                            if v["running"] == true { "RUNNING" } else { "NOT REACHABLE" },
-                            v["state"]["pid"],
-                            v["state"]["port"]
-                        ),
+                        Some(v) => println!("proxy: {} (pid={}, port={})", if v["running"] == true { "RUNNING" } else { "NOT REACHABLE" }, v["state"]["pid"], v["state"]["port"]),
                         None => println!("proxy: not started"),
                     }
                 }
+            }
+            ClaudeAction::Run { args } => {
+                imc_cli::claude::run_claude_bin(&args)?;
             }
         },
         Command::Proxy { action } => match action {
