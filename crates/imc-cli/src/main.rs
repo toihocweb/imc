@@ -10,6 +10,7 @@ use imc_core::config::{upsert_project, Config, ProjectMeta};
 use imc_core::hash::md5_hex;
 use imc_core::store;
 use imc_proxy::compression::compress;
+use std::io::Read;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -593,10 +594,10 @@ fn main() -> Result<()> {
         }
         Command::Compress { text, raw } => {
             let input: String = match text {
-                Some(t) => t.to_string(),
+                Some(t) => t.clone(),
                 None => {
                     let mut stdin = String::new();
-                    std::io::stdin().read_line(&mut stdin).unwrap();
+                    std::io::stdin().read_to_string(&mut stdin).unwrap();
                     stdin.trim_end().to_string()
                 }
             };
