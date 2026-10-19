@@ -1,4 +1,20 @@
-# Session handoff — 2026-10-18/19
+## Super tool: `imc pack` (added 2026-10-19)
+
+`imc pack "<query>"` assembles what an agent actually needs under a token budget, in one call:
+
+- `imc_search::search` — hybrid retrieval (BM25 + optional vector + graph boost).
+- `store.callees` / `store.callers` — graph neighbourhood per hit symbol, with its own budget slice so it never crowds out code.
+- `imc_memory::recall` — project memories matching the query, capped share of the budget.
+- `compression::compress` — each hit text compressed independently; originals parked in CCR store, handle emitted.
+- Renders markdown (with correct code fence language + a “Shortened” handle summary) or JSON for tool-calling agents.
+
+Empty bundles say “no matches” with a hint instead of printing a blank heading. Tight budget keeps the top hit and reports truncation rather than dropping everything.
+
+Files: `crates/imc-cli/src/pack.rs`, `imc-cli/src/main.rs` (Command::Pack + `--budget/--candidates/--no-vector/--no-memories/--graph/--project`).
+
+Unit tests added in pack.rs: remaining never negative, markdown provenance + fenced language + Shortened section, fence-lang guessing, JSON round-trip. E2E `e2e/pack_e2e.py` seeds a real project, indexes it hermetically, and asserts file:line provenance, graph facts, memory inclusion, budget compliance, CCR handle round-trip, JSON keys, unmatched-query degradation, and --no-vector.
+
+## Session handoff — 2026-10-18/19
 
 Continues from the previous handoff (which is now history; see `docs/parity_audit.md`
 for the parity analysis this session produced). Everything below was verified by

@@ -77,6 +77,31 @@ enum Command {
         #[arg(long)]
         store: bool,
     },
+    /// Assemble the context an agent needs: retrieval + graph + memory,
+    /// compressed to a token budget.
+    #[command(name = "pack")]
+    Pack {
+        /// What the agent wants to know or do.
+        query: String,
+        /// Token budget for the whole bundle.
+        #[arg(long, default_value_t = 6000)]
+        budget: usize,
+        /// Candidate chunks considered before the budget is applied.
+        #[arg(long, default_value_t = 12)]
+        candidates: usize,
+        /// Disable the vector leg (BM25 + graph only).
+        #[arg(long)]
+        no_vector: bool,
+        /// Leave project memories out.
+        #[arg(long)]
+        no_memories: bool,
+        /// Graph facts attached per symbol (0 disables).
+        #[arg(long = "graph", default_value_t = 4)]
+        graph_facts: usize,
+        /// Target project by registered id or name.
+        #[arg(long, short = 'p')]
+        project: Option<String>,
+    },
     /// Print the original behind a compression handle.
     #[command(name = "retrieve")]
     Retrieve {
@@ -677,6 +702,49 @@ fn main() -> Result<()> {
                     v["id"] = serde_json::json!(id);
                 }
                 println!("{}", serde_json::to_string(&v)?);
+            }
+        }
+        Command::Pack {
+            query,
+            budget,
+            candidates,
+            no_vector,
+            no_memories,
+            graph_facts,
+            project,
+        } => {
+            let root = root_with_project_ref(&cfg, &root, project.as_deref())?;
+            let db = cfg.project_db(&root);
+            if !db.exists() {
+                bail!(
+                    "project {} is not indexed. Run `imc {}` first",
+                    root.display(),
+                    root.display()
+                );
+            }
+            let store = store::open(&db)?;
+            let embedder = imc_embed::build(&cfg.embedding);
+            let opts = imc_cli::pack::PackOptions {
+                budget: *budget,
+                candidates: *candidates,
+                vector: !*no_vector,
+                memories: !*no_memories,
+                graph_facts: *graph_facts,
+            };
+            let pack = imc_cli::pack::build(
+                &store,
+                embedder.as_deref(),
+                query,
+                &opts,
+                Some(&imc_proxy::compression::context::ccr_db_path()),
+            )?;
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&imc_cli::pack::render_json(&pack, &root))?
+                );
+            } else {
+                print!("{}", imc_cli::pack::render_markdown(&pack, &root));
             }
         }
         Command::Retrieve { id, compressed } => {

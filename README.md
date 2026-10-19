@@ -66,6 +66,7 @@ imc context main/api/routers/git.py
 | `imc graph <symbol>` | Quick definitions / callees / callers dump. |
 | `imc memory-add/-search/-list/-delete`, `imc learn <file>` | Project memory (rules, decisions). |
 | `imc stats`, `imc list` | Index statistics, registered projects (files, symbols, edges, chunks, memories, DB size). |
+| `imc pack "<query>" [--budget N] [--candidates N] [--no-vector] [--no-memories] [--graph N]` | Assemble an agent's context: retrieval + graph neighbourhood + project memories, compressed to a token budget; shortened items carry an `imc retrieve <id>` handle. |
 | `imc compress [--text T] [--raw] [--store]` | Compress content by detected kind. Reads stdin when `--text` is absent. `--raw` prints the compressed text only; `--store` keeps the original and prints its id. |
 | `imc retrieve <id> [--compressed]` | Print the original behind a compression handle (`--compressed` for the short form). |
 | `imc ccr stats\|list\|clear\|prune` | Inspect the compression store: totals, recent records, drop everything, or expire old ones. |

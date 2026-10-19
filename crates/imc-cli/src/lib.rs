@@ -4,3 +4,4 @@
 pub mod agentic;
 pub mod claude;
 pub mod index;
+pub mod pack;
