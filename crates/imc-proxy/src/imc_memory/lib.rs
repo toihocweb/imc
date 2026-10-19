@@ -1383,7 +1383,7 @@ pub fn get_project_learned_memories(
     ));
     let embed_ref = embedder.as_deref();
 
-    let hits = match ::imc_memory::retrieve(&store, embed_ref, &query, &[], (limit.max(6)) * 3) {
+    let hits = match ::imc_memory::retrieve(&store, embed_ref, &query, &[], None, None, (limit.max(6)) * 3) {
         Ok(h) => h,
         Err(e) => {
             log.debug(&format!(

@@ -363,9 +363,11 @@ pub fn recall(
     embedder: Option<&dyn imc_embed::Embedder>,
     query: &str,
     active_paths: &[String],
+    mem_type: Option<&str>,
+    scene: Option<&str>,
     limit: usize,
 ) -> Result<Vec<MemoryHit>> {
-    let hits = retrieve(store, embedder, query, active_paths, limit)?;
+    let hits = retrieve(store, embedder, query, active_paths, mem_type, scene, limit)?;
     for h in &hits {
         reinforce(store, h.memory.id)?;
     }
@@ -485,6 +487,8 @@ pub fn retrieve(
     embedder: Option<&dyn imc_embed::Embedder>,
     query: &str,
     active_paths: &[String],
+    mem_type: Option<&str>,
+    scene: Option<&str>,
     limit: usize,
 ) -> Result<Vec<MemoryHit>> {
     ensure_schema(store)?;
@@ -548,6 +552,19 @@ pub fn retrieve(
             .cloned()
             .collect();
 
+        // Type / scene filter: skip memories that don't match the requested
+        // work-memory type or working scene.
+        if let Some(mt) = mem_type {
+            if m.mem_type.as_str() != mt {
+                continue;
+            }
+        }
+        if let Some(sc) = scene {
+            if m.scene != sc {
+                continue;
+            }
+        }
+
         // Relevance gate, not a magic score threshold: keep a memory only when
         // it actually matched the query (lexical, vector above the floor, or
         // it tracks a file in the caller's context).
@@ -599,10 +616,6 @@ pub fn embed_and_store(
         buf.extend_from_slice(&f.to_le_bytes());
     }
     store.conn.execute(
-        "CREATE TABLE IF NOT EXISTS memory_vectors (mem_id INTEGER PRIMARY KEY, dim INTEGER, vec BLOB)",
-        [],
-    )?;
-    store.conn.execute(
         "INSERT OR REPLACE INTO memory_vectors(mem_id, dim, vec) VALUES (?1,?2,?3)",
         params![id, v.len() as i64, buf],
     )?;
@@ -652,11 +665,21 @@ pub fn extract_candidates(text: &str, active_paths: &[String]) -> Vec<MemoryCand
     // Convention lines: "Rule: ...", "Note: ...", "Convention: ...", "TODO: ..."
     for line in text.lines() {
         let t = line.trim();
-        for prefix in ["RULE:", "Rule:", "NOTE:", "Note:", "CONVENTION:", "Convention:", "ALWAYS:", "Always:"] {
-            if let Some(rest) = t.strip_prefix(prefix) {
-                if rest.len() > 20 {
-                    push(rest.trim().to_string(), "rule", "auto");
-                }
+        if let Some(rest) = t.strip_prefix("RULE:").or_else(|| t.strip_prefix("Rule:")) {
+            if rest.len() > 20 {
+                push(rest.trim().to_string(), "rule", "auto");
+            }
+        } else if let Some(rest) = t.strip_prefix("NOTE:").or_else(|| t.strip_prefix("Note:")) {
+            if rest.len() > 20 {
+                push(rest.trim().to_string(), "note", "auto");
+            }
+        } else if let Some(rest) = t.strip_prefix("CONVENTION:").or_else(|| t.strip_prefix("Convention:")) {
+            if rest.len() > 20 {
+                push(rest.trim().to_string(), "convention", "auto");
+            }
+        } else if let Some(rest) = t.strip_prefix("ALWAYS:").or_else(|| t.strip_prefix("Always:")) {
+            if rest.len() > 20 {
+                push(rest.trim().to_string(), "rule", "auto");
             }
         }
     }

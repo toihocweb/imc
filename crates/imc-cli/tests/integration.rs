@@ -172,7 +172,7 @@ fn memory_crud_and_dedup() {
     .unwrap();
     assert!(dup.is_none(), "duplicate should be rejected");
 
-    let hits = imc_memory::retrieve(&store, Some(&embedder), "indexing FileIngester", &["src/m.py".to_string()], 5).unwrap();
+    let hits = imc_memory::retrieve(&store, Some(&embedder), "indexing FileIngester", &["src/m.py".to_string()], None, None, 5).unwrap();
     assert!(!hits.is_empty(), "expected memory recall");
     assert!(imc_memory::delete(&store, id).unwrap());
     assert!(imc_memory::list(&store, 5).unwrap().is_empty());
@@ -236,7 +236,7 @@ fn low_importance_memory_is_still_retrievable() {
     .unwrap()
     .expect("inserted");
 
-    let hits = imc_memory::retrieve(&store, None, "zebra migration", &[], 5).unwrap();
+    let hits = imc_memory::retrieve(&store, None, "zebra migration", &[], None, None, 5).unwrap();
     assert!(
         hits.first().map(|h| h.memory.id) == Some(id),
         "exact match must rank first despite 0.01 importance: {:?}",
@@ -265,7 +265,7 @@ fn nonsense_query_returns_nothing() {
         )
         .unwrap();
     }
-    let hits = imc_memory::retrieve(&store, None, "quantum banana teleport protocol", &[], 5).unwrap();
+    let hits = imc_memory::retrieve(&store, None, "quantum banana teleport protocol", &[], None, None, 5).unwrap();
     assert!(hits.is_empty(), "unrelated query must not match: {hits:?}");
 }
 
@@ -281,7 +281,7 @@ fn recall_reinforces_returned_memories() {
         .unwrap();
 
     assert_eq!(imc_memory::get(&store, id).unwrap().unwrap().use_count, 0);
-    imc_memory::recall(&store, None, "deploy pipeline rustfmt", &[], 5).unwrap();
+    imc_memory::recall(&store, None, "deploy pipeline rustfmt", &[], None, None, 5).unwrap();
     let after = imc_memory::get(&store, id).unwrap().unwrap();
     assert_eq!(after.use_count, 1, "recall must bump use_count");
     assert!(after.last_used > 0, "recall must stamp last_used");
@@ -309,7 +309,7 @@ fn context_path_overlap_boosts() {
     .unwrap()
     .unwrap();
 
-    let hits = imc_memory::retrieve(&store, None, "shared keyword", &["src/a.py".to_string()], 5).unwrap();
+    let hits = imc_memory::retrieve(&store, None, "shared keyword", &["src/a.py".to_string()], None, None, 5).unwrap();
     assert_eq!(hits.first().map(|h| h.memory.id), Some(tracked), "overlap must win: {hits:?}");
     assert!(hits[0].matched_paths.contains(&"src/a.py".to_string()));
 }
@@ -364,7 +364,7 @@ fn cosine_below_floor_is_rejected() {
     .unwrap();
 
     // Same topic -> cosine 1.0 -> accepted.
-    let hits = imc_memory::retrieve(&store, Some(&FakeEmbedder), "zebra migration", &[], 5).unwrap();
+    let hits = imc_memory::retrieve(&store, Some(&FakeEmbedder), "zebra migration", &[], None, None, 5).unwrap();
     assert!(!hits.is_empty(), "same-topic must pass the floor");
 
     // Unrelated topic -> cosine 0.0 -> rejected even though importance is 0.5.
@@ -373,6 +373,8 @@ fn cosine_below_floor_is_rejected() {
         Some(&FakeEmbedder),
         "total gibberish query",
         &[],
+        None,
+        None,
         5,
     )
     .unwrap();

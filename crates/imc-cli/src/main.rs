@@ -102,6 +102,12 @@ enum Command {
         /// 0.10 overlap boost from Python's `_blended_score`.
         #[arg(long, short = 'p')]
         path: Vec<String>,
+        /// Filter by work-memory type: work_fact|work_task|work_method|work_artifact|business_rule.
+        #[arg(long)]
+        mem_type: Option<String>,
+        /// Filter by working scene this memory belongs to.
+        #[arg(long)]
+        scene: Option<String>,
     },
     /// List stored memories.
     #[command(name = "memory-list")]
@@ -637,11 +643,19 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Command::MemorySearch { query, limit, path } => {
+        Command::MemorySearch { query, limit, path, mem_type, scene } => {
             let db = cfg.project_db(&root);
             let store = store::open(&db)?;
             let embedder = imc_embed::build(&cfg.embedding);
-            let hits = imc_memory::recall(&store, embedder.as_deref(), query, path, *limit)?;
+            let hits = imc_memory::recall(
+                &store,
+                embedder.as_deref(),
+                query,
+                path,
+                mem_type.as_deref(),
+                scene.as_deref(),
+                *limit,
+            )?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
@@ -987,7 +1001,8 @@ saved to {}", st::path().display());
             let store = store::open(&db)?;
             let embedder = imc_embed::build(&cfg.embedding);
             let text = std::fs::read_to_string(file)?;
-            let candidates = imc_memory::extract_candidates(&text, &[]);
+            let active = vec![file.to_string_lossy().to_string()];
+            let candidates = imc_memory::extract_candidates(&text, &active);
             let mut stored = 0;
             let summary: Vec<serde_json::Value> = candidates
                 .iter()
