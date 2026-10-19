@@ -329,6 +329,8 @@ enum CcrAction {
         #[arg(long, default_value_t = 30)]
         days: i64,
     },
+    /// Analyze CCR stats and suggest compression threshold adjustments.
+    Tune,
 }
 
 #[derive(Subcommand, Debug)]
@@ -906,6 +908,52 @@ fn main() -> Result<()> {
                         - days * 86_400;
                     let n = store.prune_before(cutoff)?;
                     println!("pruned {n} record(s) older than {days} day(s)");
+                }
+                CcrAction::Tune => {
+                    let entries = store.list(None, 10_000)?;
+                    let total_orig: i64 = entries.iter().map(|e| e.orig_tokens).sum();
+                    let total_comp: i64 = entries.iter().map(|e| e.comp_tokens).sum();
+                    let total_saved = total_orig - total_comp;
+                    let overall_ratio = if total_orig > 0 {
+                        total_comp as f64 / total_orig as f64
+                    } else {
+                        1.0
+                    };
+
+                    // Group by kind
+                    use std::collections::HashMap;
+                    let mut by_kind: HashMap<String, (i64, i64)> = HashMap::new();
+                    for e in &entries {
+                        let entry = by_kind.entry(e.kind.clone()).or_insert((0, 0));
+                        entry.0 += e.orig_tokens;
+                        entry.1 += e.comp_tokens;
+                    }
+
+                    println!("=== CCR tune recommendations ===");
+                    println!("overall: {} -> {} tokens (saved {}, ratio {:.3})", total_orig, total_comp, total_saved, overall_ratio);
+                    println!();
+                    println!("per-kind:");
+                    let mut kinds: Vec<_> = by_kind.into_iter().collect();
+                    kinds.sort_by(|a, b| {
+                        let ratio_a = if a.1 .0 > 0 { a.1 .1 as f64 / a.1 .0 as f64 } else { 1.0 };
+                        let ratio_b = if b.1 .0 > 0 { b.1 .1 as f64 / b.1 .0 as f64 } else { 1.0 };
+                        ratio_a.partial_cmp(&ratio_b).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    for (kind, (orig, comp)) in &kinds {
+                        let saved = orig - comp;
+                        let ratio = if *orig > 0 { *comp as f64 / *orig as f64 } else { 1.0 };
+                        let current_min_savings = 0.20;
+                        let suggestion = if ratio > 0.80 {
+                            format!("  → raise MIN_SAVINGS from 0.20 to {:.2} (kind barely compresses)", ratio.min(0.90))
+                        } else if ratio < 0.30 {
+                            format!("  → lower MIN_SAVINGS from 0.20 to {:.2} (kind compresses well)", (ratio * 0.7).max(0.10))
+                        } else {
+                            "  → keep current threshold".to_string()
+                        };
+                        println!("  {}: {} -> {} tokens (saved {}, ratio {:.3}){}", kind, orig, comp, saved, ratio, suggestion);
+                    }
+                    println!();
+                    println!("edit crates/imc-proxy/src/compression/mod.rs MIN_SAVINGS and rebuild.");
                 }
             }
         }
