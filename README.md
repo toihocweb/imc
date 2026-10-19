@@ -57,7 +57,7 @@ imc context main/api/routers/git.py
 |---|---|
 | `imc [path]` / `imc index [path] [-i <glob>] [--force]` | Incremental index. Unchanged files skipped by MD5. `imc .` is a shortcut for `imc index .`. |
 | `imc search "<query>"` | Retrieve (BM25 + vector + graph boosts), then answer with the LLM. `-r/--raw` prints ranked hits only, `--json` emits hits, `-l N`/`-n N` override count, `--no-vector` forces BM25. |
-| `imc trace <target> [-d N] [-r/--callers] [-b/--both] [-a/--all] [-f file]` | Call tree / blast radius, also for `GET /api/path` route targets. `imc callers` / `callees` / `blast` are shorthands. |
+| `imc trace <target> [-d N] [--callers] [--callees] [-b/--both] [-a/--all] [-f file]` | Call tree / blast radius, also for `GET /api/path` route targets. Defaults to callees; `--callers` reverses, `--both` shows both directions. |
 | `imc read <file> [--symbols] [--method NAME] [--offset N] [--limit N] [--raw]` | Token-optimised reader: blank-line strip, JSON smart-strip, auto-truncate with summary header. |
 | `imc context <target>` | One-shot resolved context for a file/module (outline, deps, tests). |
 | `imc claude setup\|wire\|start\|stop\|status` | Claude Code integration (see below). |
@@ -65,7 +65,7 @@ imc context main/api/routers/git.py
 | `imc proxy serve\|status\|stop` | The LLM proxy Claude Code talks to. |
 | `imc graph <symbol>` | Quick definitions / callees / callers dump. |
 | `imc memory-add/-search/-list/-delete`, `imc learn <file>` | Project memory (rules, decisions). |
-| `imc stats`, `imc list` | Index statistics, registered projects (files, symbols, edges, chunks, memories, DB size). |
+| `imc list` | Registered projects (files, symbols, edges, chunks, memories, DB size). |
 | `imc pack "<query>" [--budget N] [--candidates N] [--no-vector] [--no-memories] [--graph N]` | Assemble an agent's context: retrieval + graph neighbourhood + project memories, compressed to a token budget; shortened items carry an `imc retrieve <id>` handle. |
 | `imc compress [--text T] [--raw] [--store]` | Compress content by detected kind. Reads stdin when `--text` is absent. `--raw` prints the compressed text only; `--store` keeps the original and prints its id. |
 | `imc retrieve <id> [--compressed]` | Print the original behind a compression handle (`--compressed` for the short form). |

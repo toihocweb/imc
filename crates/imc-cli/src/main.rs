@@ -117,11 +117,8 @@ enum Command {
         #[command(subcommand)]
         action: CcrAction,
     },
-    /// Print index statistics (Python's `imc status`).
-    #[command(alias = "status")]
-    Stats,
     /// List stored projects (Python's `imc list`).
-    #[command(name = "list", aliases = ["projects"])]
+    #[command(name = "list", aliases = ["projects", "status"])]
     List,
     /// Store a durable project memory.
     #[command(name = "memory-add")]
@@ -210,11 +207,6 @@ enum Command {
     },
     /// Call-hierarchy tracer: callees (what it calls) or callers (blast radius).
     Trace(TraceArgs),
-    /// Trace callers of a symbol (reverse blast radius).
-    #[command(alias = "blast")]
-    Callers(TraceArgs),
-    /// Trace callees of a symbol (forward execution flow).
-    Callees(TraceArgs),
     /// One-shot resolved context for a file/module (component + deps + tests).
     #[command(alias = "slice")]
     Context {
@@ -247,6 +239,9 @@ struct TraceArgs {
     /// Reverse trace: who calls this symbol (Python's `-r/--callers`).
     #[arg(long, short = 'r', visible_aliases = ["reverse", "up", "callers"])]
     callers: bool,
+    /// Trace callees of this symbol (forward execution flow, the default).
+    #[arg(long, short = 'c')]
+    callees: bool,
     /// Trace callees and callers (Python's `-b/--both`).
     #[arg(long, short = 'b')]
     both: bool,
@@ -415,7 +410,6 @@ fn run_trace_arm(
     cfg: &Config,
     base_root: &Path,
     args: &TraceArgs,
-    forced_direction: Option<&str>,
     json: bool,
 ) -> Result<()> {
     let root = root_with_project_ref(cfg, base_root, args.project.as_deref())?;
@@ -434,16 +428,11 @@ fn run_trace_arm(
     opts.show_all = args.all;
     opts.json_output = json;
     opts.file_filter = args.file.clone();
-    match forced_direction.or(args.direction.as_deref()) {
-        Some("callers") => opts.callers = true,
-        Some("both") => opts.both = true,
-        _ => {}
-    }
-    if args.callers {
-        opts.callers = true;
-    }
+    // Direction: --both wins, then --callers, then --callees (the default).
     if args.both {
         opts.both = true;
+    } else if args.callers {
+        opts.callers = true;
     }
 
     match imc_cli_extra::trace_cmd::run_trace(&tracer, &opts) {
@@ -849,22 +838,6 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Command::Stats => {
-            let db = cfg.project_db(&root);
-            let store = store::open(&db)?;
-            let rows = store.stats();
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "root": root.display().to_string(), "db": db.display().to_string(), "counts": rows.iter().map(|(k,v)| serde_json::json!({k.clone(): v})).collect::<Vec<_>>()
-                }))?);
-            } else {
-                println!("project: {}", root.display());
-                println!("db:      {}", db.display());
-                for (k, v) in rows {
-                    println!("{k:>10}: {v}");
-                }
-            }
-        }
         Command::List => {
             let projects = imc_core::config::load_registry(&cfg);
             if cli.json {
@@ -1034,9 +1007,7 @@ fn main() -> Result<()> {
             let removed = imc_memory::delete(&store, *id)?;
             println!("memory #{id} deleted: {removed}");
         }
-        Command::Trace(a) => run_trace_arm(&cfg, &root, a, None, cli.json)?,
-        Command::Callers(a) => run_trace_arm(&cfg, &root, a, Some("callers"), cli.json)?,
-        Command::Callees(a) => run_trace_arm(&cfg, &root, a, Some("callees"), cli.json)?,
+        Command::Trace(a) => run_trace_arm(&cfg, &root, a, cli.json)?,
         Command::Context { target, depth, project } => {
             let root = root_with_project_ref(&cfg, &root, project.as_deref())?;
             // Python's `get_feature_context(..., depth)` never reads `depth`

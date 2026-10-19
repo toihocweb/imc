@@ -14,7 +14,8 @@ Files: `crates/imc-cli/src/pack.rs`, `imc-cli/src/main.rs` (Command::Pack + `--b
 
 Unit tests added in pack.rs: remaining never negative, markdown provenance + fenced language + Shortened section, fence-lang guessing, JSON round-trip. E2E `e2e/pack_e2e.py` seeds a real project, indexes it hermetically, and asserts file:line provenance, graph facts, memory inclusion, budget compliance, CCR handle round-trip, JSON keys, unmatched-query degradation, and --no-vector.
 
-## Session handoff — 2026-10-18/19
+- `trace` now takes `--callers` / `--callees` / `--both` flags instead of separate `callers`/`callees`/`blast` subcommands (fewer entry points, same capability).
+- `stats` removed (`list` already shows files/symbols/edges/chunks/memories/DB size per project).
 
 Continues from the previous handoff (which is now history; see `docs/parity_audit.md`
 for the parity analysis this session produced). Everything below was verified by

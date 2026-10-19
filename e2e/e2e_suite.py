@@ -774,7 +774,7 @@ def suite_json(root, data):
         ["index", "."],
         ["search", "invoice tax", "-l", "3"],
         ["trace", "generate_invoice", "--callers"],
-        ["stats"],
+        ["list"],
         ["projects"],
         ["config", "list"],
         ["memory-list"],
