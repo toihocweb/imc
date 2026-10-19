@@ -9,6 +9,7 @@ use clap::{Args, Parser, Subcommand};
 use imc_core::config::{upsert_project, Config, ProjectMeta};
 use imc_core::hash::md5_hex;
 use imc_core::store;
+use imc_proxy::compression::compress;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -63,6 +64,16 @@ enum Command {
     },
     /// Show definitions/callees/callers for a symbol.
     Graph { symbol: String },
+    /// Compress text using the proxy compression engine (BM25/graph/CCR).
+    #[command(name = "compress")]
+    Compress {
+        /// Text to compress (read from stdin if omitted).
+        #[arg(short, long)]
+        text: Option<String>,
+        /// Print only the compressed text (no JSON metadata).
+        #[arg(long, short = 'r')]
+        raw: bool,
+    },
     /// Print index statistics (Python's `imc status`).
     #[command(alias = "status")]
     Stats,
@@ -578,6 +589,22 @@ fn main() -> Result<()> {
                         println!("  ← called by: {}", short.join(", "));
                     }
                 }
+            }
+        }
+        Command::Compress { text, raw } => {
+            let input: String = match text {
+                Some(t) => t.to_string(),
+                None => {
+                    let mut stdin = String::new();
+                    std::io::stdin().read_line(&mut stdin).unwrap();
+                    stdin.trim_end().to_string()
+                }
+            };
+            let result = imc_proxy::compression::compress(&input);
+            if *raw {
+                print!("{}", result.compressed);
+            } else {
+                println!("{}", serde_json::to_string(&result).unwrap());
             }
         }
         Command::Stats => {

@@ -28,3 +28,4 @@ eventsource-stream = "0.2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "charset", "http2"] }
 regex = "1"
 dirs.workspace = true
+rusqlite = "0.32"

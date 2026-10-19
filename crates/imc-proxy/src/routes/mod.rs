@@ -1,6 +1,7 @@
 //! HTTP routing for the proxy. Port target: `main/proxy/main.py` + `routes/*`.
 //! `serve` is called by `imc_proxy::run` and by `imc claude`.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -11,6 +12,7 @@ use axum::Router;
 use futures::StreamExt;
 
 pub mod chat;
+pub use crate::compression;
 pub mod messages;
 pub mod models;
 pub mod system;
@@ -170,12 +172,13 @@ pub(crate) fn collect_sse_data(raw: &[u8]) -> Vec<serde_json::Value> {
 /// The router served by [`serve`] — every route from `routes/*` plus CORS/trace
 /// middleware (Python's FastAPI exception handlers map to explicit error
 /// responses inside each handler).
-pub fn app() -> Router {
+pub fn app(db_path: PathBuf) -> Router {
     Router::new()
         .merge(system::router())
         .merge(models::router())
         .merge(messages::router())
         .merge(chat::router())
+        .merge(crate::compression::router::router(db_path.clone()))
         .layer(
             tower_http::trace::TraceLayer::new_for_http().make_span_with(
                 tower_http::trace::DefaultMakeSpan::new().include_headers(false),
@@ -218,7 +221,11 @@ pub fn serve(port: u16) -> Result<()> {
             let log = imc_proxy_types::logger::create_handler_logger("main");
             log.info(&format!("Starting up proxy application on {addr}..."));
             startup().await;
-            let app = app();
+            let data_dir = imc_core::settings::path()
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("proxy_ccr.db");
+            let app = app(data_dir);
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;

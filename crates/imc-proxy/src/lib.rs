@@ -2,6 +2,7 @@
 //! intercepts Anthropic/OpenAI traffic from Claude Code, injects imc search
 //! context (system_reminder) and filters noisy tool results.
 
+pub mod compression;
 pub mod github;
 pub mod hyperspace;
 pub mod imc_memory;
