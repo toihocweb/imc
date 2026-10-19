@@ -73,6 +73,9 @@ da4d76c endpoints: read Flask's @app.route, which neither implementation saw
 <NEW> parser/search byte-slice panics on non-ASCII, fixed + regression tests
 <NEW> gitignore honoring via `ignore` crate; `.egg-info` pollution out of the index
 <NEW> graph not-found rc=1; settings mask / models `strip_trailing_date` non-ASCII fixes
+<NEW> `imc config setup` (interactive URL/token/models -> ~/.imc_config.yaml)
+<NEW> `imc claude setup` writes `.claude/rules/imc-rule.md` instead of CLAUDE.md
+<NEW> docs/imc-rule.md — the rule file content
 <NEW> docs/real_repo_verification.md — the full sweep report
 ```
 
