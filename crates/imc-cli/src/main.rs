@@ -230,6 +230,8 @@ enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Diagnose environment, config, proxy, and project state; print fix commands.
+    Doctor,
 }
 
 /// Flags shared by `trace`, `callers`, `callees` and `blast`. Python gives all
@@ -330,7 +332,11 @@ enum CcrAction {
         days: i64,
     },
     /// Analyze CCR stats and suggest compression threshold adjustments.
-    Tune,
+    Tune {
+        /// Automatically write the recommended min_savings to config.
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -909,7 +915,7 @@ fn main() -> Result<()> {
                     let n = store.prune_before(cutoff)?;
                     println!("pruned {n} record(s) older than {days} day(s)");
                 }
-                CcrAction::Tune => {
+                CcrAction::Tune { apply } => {
                     let entries = store.list(None, 10_000)?;
                     let total_orig: i64 = entries.iter().map(|e| e.orig_tokens).sum();
                     let total_comp: i64 = entries.iter().map(|e| e.comp_tokens).sum();
@@ -929,8 +935,11 @@ fn main() -> Result<()> {
                         entry.1 += e.comp_tokens;
                     }
 
-                    println!("=== CCR tune recommendations ===");
-                    println!("overall: {} -> {} tokens (saved {}, ratio {:.3})", total_orig, total_comp, total_saved, overall_ratio);
+                    println!("=== CCR tune ===");
+                    println!(
+                        "overall: {} -> {} tokens (saved {}, ratio {:.3})",
+                        total_orig, total_comp, total_saved, overall_ratio
+                    );
                     println!();
                     println!("per-kind:");
                     let mut kinds: Vec<_> = by_kind.into_iter().collect();
@@ -942,18 +951,55 @@ fn main() -> Result<()> {
                     for (kind, (orig, comp)) in &kinds {
                         let saved = orig - comp;
                         let ratio = if *orig > 0 { *comp as f64 / *orig as f64 } else { 1.0 };
-                        let current_min_savings = 0.20;
                         let suggestion = if ratio > 0.80 {
-                            format!("  → raise MIN_SAVINGS from 0.20 to {:.2} (kind barely compresses)", ratio.min(0.90))
+                            format!(
+                                "  → raise min_savings from 0.20 to {:.2} (kind barely compresses)",
+                                ratio.min(0.90)
+                            )
                         } else if ratio < 0.30 {
-                            format!("  → lower MIN_SAVINGS from 0.20 to {:.2} (kind compresses well)", (ratio * 0.7).max(0.10))
+                            format!(
+                                "  → lower min_savings from 0.20 to {:.2} (kind compresses well)",
+                                (ratio * 0.7).max(0.10)
+                            )
                         } else {
                             "  → keep current threshold".to_string()
                         };
-                        println!("  {}: {} -> {} tokens (saved {}, ratio {:.3}){}", kind, orig, comp, saved, ratio, suggestion);
+                        println!(
+                            "  {}: {} -> {} tokens (saved {}, ratio {:.3}){}",
+                            kind, orig, comp, saved, ratio, suggestion
+                        );
                     }
-                    println!();
-                    println!("edit crates/imc-proxy/src/compression/mod.rs MIN_SAVINGS and rebuild.");
+
+                    if *apply {
+                        let recommended = if overall_ratio > 0.80 {
+                            overall_ratio.min(0.90)
+                        } else if overall_ratio < 0.30 {
+                            (overall_ratio * 0.7).max(0.10)
+                        } else {
+                            0.20
+                        };
+                        let mut s = imc_core::settings::load();
+                        imc_core::settings::set(
+                            &mut s,
+                            "compression.min_savings",
+                            &recommended.to_string(),
+                        )?;
+                        imc_core::settings::save(&s)?;
+                        println!();
+                        println!(
+                            "applied compression.min_savings = {:.3} to {}",
+                            recommended,
+                            imc_core::settings::path().display()
+                        );
+                        println!(
+                            "restart the proxy (`imc proxy stop && imc proxy serve`) to take effect."
+                        );
+                    } else {
+                        println!();
+                        println!(
+                            "run `imc ccr tune --apply` to write the recommended min_savings to config."
+                        );
+                    }
                 }
             }
         }
@@ -1185,7 +1231,7 @@ fn main() -> Result<()> {
                 }
             }
             ClaudeAction::Run { args } => {
-                imc_cli::claude::run_claude_bin(&args)?;
+                imc_cli::claude::run_claude_bin(&cfg, &root, &args)?;
             }
         },
         Command::Proxy { action } => match action {
@@ -1412,6 +1458,9 @@ saved to {}", st::path().display());
                     }
                 }
             }
+        }
+        Command::Doctor => {
+            imc_cli::doctor::run_doctor(&cfg, &root)?;
         }
         Command::Learn { file } => {
             let db = cfg.project_db(&root);

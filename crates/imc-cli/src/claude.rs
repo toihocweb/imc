@@ -353,9 +353,23 @@ pub fn setup_and_start(
 }
 
 /// Run the `claude` binary directly, passing all args through.
-/// Spawns detached so the process survives terminal close (setsid,
-/// stdin/stdout/stderr redirected to a log file under the data dir).
-pub fn run_claude_bin(args: &[String]) -> Result<()> {
+/// Ensures the imc proxy is running first (starts it on port 12345 if needed),
+/// then spawns `claude` detached so it survives terminal close.
+pub fn run_claude_bin(cfg: &Config, _root: &Path, args: &[String]) -> Result<()> {
+    // Ensure the proxy is running so Claude Code talks to our compression
+    // proxy instead of hitting the upstream LLM directly.
+    if !proxy_is_running(cfg) {
+        let port = 12345u16;
+        let state = start_proxy(cfg, port)
+            .with_context(|| format!("start imc proxy on port {port}"))?;
+        println!(
+            "proxy auto-started: pid={} http://127.0.0.1:{}",
+            state["pid"], state["port"]
+        );
+    } else {
+        println!("proxy already running on http://127.0.0.1:12345");
+    }
+
     let exe = which_claude_bin()?;
     let exe_disp = exe.display().to_string();
 
@@ -390,6 +404,13 @@ pub fn run_claude_bin(args: &[String]) -> Result<()> {
 
     println!("claude started: pid={} (background, survives terminal close)", pid);
     Ok(())
+}
+
+/// Check whether the imc proxy is currently reachable on port 12345.
+pub fn proxy_is_running(cfg: &Config) -> bool {
+    proxy_status(cfg).map_or(false, |s| {
+        s.get("running").and_then(|v| v.as_bool()).unwrap_or(false)
+    })
 }
 
 /// Locate the `claude` binary: check `IMC_CLAUDE_BIN` env, then PATH.

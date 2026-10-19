@@ -34,6 +34,14 @@ pub struct IngestSettings {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompressionSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_savings: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_tokens: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm: Option<LlmSettings>,
@@ -41,6 +49,8 @@ pub struct Settings {
     pub embedding: Option<EmbeddingSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ingest: Option<IngestSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression: Option<CompressionSettings>,
     /// Pass-through for keys we do not model (jira, confluence, ...).
     #[serde(flatten)]
     pub extra: std::collections::BTreeMap<String, serde_yaml::Value>,
@@ -149,6 +159,17 @@ pub fn get(s: &Settings, key: &str) -> Option<serde_yaml::Value> {
             .map(|v| {
                 serde_yaml::Value::Sequence(v.into_iter().map(serde_yaml::Value::String).collect())
             }),
+        ("compression", None) => serde_yaml::to_value(s.compression.as_ref()?).ok(),
+        ("compression", Some("min_savings")) => s
+            .compression
+            .as_ref()?
+            .min_savings
+            .map(|v| serde_yaml::Value::Number(serde_yaml::Number::from(v))),
+        ("compression", Some("min_tokens")) => s
+            .compression
+            .as_ref()?
+            .min_tokens
+            .map(|v| serde_yaml::Value::Number(serde_yaml::Number::from(v))),
         _ => s.extra.get(head).cloned().map(|v| match tail {
             None => v,
             Some(t) => v.get(t).cloned().unwrap_or(serde_yaml::Value::Null),
@@ -178,6 +199,15 @@ pub fn set(s: &mut Settings, key: &str, value: &str) -> Result<()> {
             let dirs: Vec<String> = value.split(',').map(|v| v.trim().to_string()).collect();
             s.ingest.get_or_insert_default().ignored_dirs = Some(dirs);
         }
+        ("compression", Some("min_savings")) => {
+            let v: f64 = value.parse().context("invalid min_savings value")?;
+            s.compression.get_or_insert_default().min_savings = Some(v);
+        }
+        ("compression", Some("min_tokens")) => {
+            let v: usize = value.parse().context("invalid min_tokens value")?;
+            s.compression.get_or_insert_default().min_tokens = Some(v);
+        }
+        ("compression", None) => anyhow::bail!("use compression.min_savings | compression.min_tokens"),
         _ => {
             let v = match tail {
                 Some(t) => {

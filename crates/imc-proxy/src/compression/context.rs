@@ -19,6 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
+use imc_core::settings;
 use imc_proxy_types::types::anthropic::{
     AnthropicInputMessage, AnthropicToolResultContentBlock, AnthropicUserContentBlock,
     StringOrBlocks,
@@ -120,7 +121,13 @@ fn maybe_shrink(text: &mut String, store: &mut CcrStore, report: &mut Compressio
         return;
     }
     let saved = result.saved_tokens as f64 / result.original_tokens as f64;
-    if saved < MIN_SAVINGS {
+    // Read min_savings from config, fall back to the compile-time default.
+    let min_savings = settings::load()
+        .compression
+        .as_ref()
+        .and_then(|c| c.min_savings)
+        .unwrap_or(MIN_SAVINGS);
+    if saved < min_savings {
         return;
     }
 

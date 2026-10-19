@@ -3,5 +3,6 @@
 
 pub mod agentic;
 pub mod claude;
+pub mod doctor;
 pub mod index;
 pub mod pack;
