@@ -1032,6 +1032,7 @@ dependencies = [
  "imc-trace",
  "libc",
  "rayon",
+ "rusqlite",
  "serde",
  "serde_json",
  "serde_yaml",

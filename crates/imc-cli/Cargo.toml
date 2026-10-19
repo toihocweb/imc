@@ -28,3 +28,4 @@ ureq.workspace = true
 walkdir.workspace = true
 rayon.workspace = true
 libc = "0.2"
+rusqlite = "0.32" 

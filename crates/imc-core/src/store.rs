@@ -311,6 +311,10 @@ impl Store {
         rows
     }
 
+    pub fn memory_count(&self) -> Result<i64> {
+        Ok(self.conn.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get::<usize, i64>(0usize))?)
+    }
+
     pub fn stats(&self) -> Vec<(String, i64)> {
         let mut out = Vec::new();
         for t in ["files", "symbols", "edges", "chunks", "embeddings"] {

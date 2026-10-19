@@ -66,9 +66,9 @@ enum Command {
     /// Print index statistics (Python's `imc status`).
     #[command(alias = "status")]
     Stats,
-    /// List registered projects (Python's `imc list`).
-    #[command(alias = "list")]
-    Projects,
+    /// List stored projects (Python's `imc list`).
+    #[command(name = "list", aliases = ["projects"])]
+    List,
     /// Store a durable project memory.
     #[command(name = "memory-add")]
     MemoryAdd {
@@ -588,17 +588,69 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Command::Projects => {
+        Command::List => {
             let projects = imc_core::config::load_registry(&cfg);
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&projects)?);
+                let mut out = Vec::new();
+                for p in &projects {
+                    let mut entry = serde_json::json!({
+                        "id": p.id,
+                        "name": p.name,
+                        "path": p.path,
+                    });
+                    if let Ok(store) = store::open(&cfg.project_db(std::path::Path::new(&p.path))) {
+                        let rows = store.stats();
+                        let mut counts = serde_json::Map::new();
+                        for (k, v) in rows {
+                            counts.insert(k, serde_json::json!(v));
+                        }
+                        entry["counts"] = serde_json::Value::Object(counts);
+                        // Disk size of the index DB file.
+                        let db_path = cfg.project_db(std::path::Path::new(&p.path));
+                        if let Ok(meta) = std::fs::metadata(&db_path) {
+                            entry["db_size_mb"] = serde_json::json!(meta.len() as f64 / 1_048_576.0);
+                        }
+                    }
+                    out.push(entry);
+                }
+                println!("{}", serde_json::to_string_pretty(&out)?);
             } else {
+                println!("{:<36} {:<48} {:>6} {:>7} {:>8} {:>10} {:>8}", "id", "path", "files", "symbols", "edges", "chunks", "memories");
                 for p in projects {
+                    let mut files = "-".to_string();
+                    let mut symbols = "-".to_string();
+                    let mut edges = "-".to_string();
+                    let mut chunks = "-".to_string();
+                    let mut memories = "-".to_string();
+                    let mut db_mb = 0.0;
+                    if let Ok(store) = store::open(&cfg.project_db(std::path::Path::new(&p.path))) {
+                        for (k, v) in store.stats() {
+                            match k.as_str() {
+                                "files" => files = v.to_string(),
+                                "symbols" => symbols = v.to_string(),
+                                "edges" => edges = v.to_string(),
+                                "chunks" => chunks = v.to_string(),
+                                _ => {}
+                            }
+                        }
+                        // Memory count: count rows in memories table if present.
+                        if let Ok(n) = store.memory_count() {
+                        memories = n.to_string();
+                    }
+                    }
+                    if let Ok(meta) = std::fs::metadata(cfg.project_db(std::path::Path::new(&p.path))) {
+                        db_mb = meta.len() as f64 / 1_048_576.0;
+                    }
                     println!(
-                        "{}  {:<24}  files={}",
+                        "{:<36} {:<48} {:>6} {:>7} {:>8} {:>10} {:>8} {:>7.2}MB",
                         p.id,
                         p.path,
-                        p.file_count.map(|c| c.to_string()).unwrap_or_else(|| "-".into())
+                        files,
+                        symbols,
+                        edges,
+                        chunks,
+                        memories,
+                        db_mb,
                     );
                 }
             }
