@@ -16,11 +16,15 @@ callers, or trace HTTP routes.
 - `imc read <file> --symbols` — outline; then read only the lines you need.
 - `imc context <file>` — whole feature around a file: deps, endpoints, tests.
 - `imc trace <symbol> --callers --depth 3` — blast radius; run *before* you
-  rename or delete anything. `imc callers <symbol>` / `imc blast <symbol>`.
+  rename or delete anything.
 - `imc trace "<symbol>"` — what it calls (forward). `--both` both directions.
-- `imc trace "GET /api/path"` — HTTP route → backend handler.
+- `imc trace "<GET /api/path>"` — HTTP route → backend handler.
 - `imc graph <symbol>` — definition site and kind.
 - `imc memory-search "<topic>"` — conventions/decisions recorded for this repo.
+- `imc pack "<query>"` — assemble retrieval + graph + memory under a token
+  budget. Shortened items carry an `imc retrieve <id>` handle.
+- `imc list` — registered projects (files, symbols, edges, chunks, memories,
+  DB size).
 
 ## Rules
 
