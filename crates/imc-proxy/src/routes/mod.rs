@@ -221,11 +221,11 @@ pub fn serve(port: u16) -> Result<()> {
             let log = imc_proxy_types::logger::create_handler_logger("main");
             log.info(&format!("Starting up proxy application on {addr}..."));
             startup().await;
-            let data_dir = imc_core::settings::path()
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join("proxy_ccr.db");
-            let app = app(data_dir);
+            // Both the request-path compressor and the /v1/retrieve endpoint
+            // must open the same file, or a handle written during compression
+            // cannot be resolved afterwards.
+            let ccr_db = crate::compression::context::ccr_db_path();
+            let app = app(ccr_db);
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;

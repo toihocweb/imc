@@ -28,7 +28,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --defaul
 git clone https://github.com/toihocweb/imc.git
 cd imc
 cargo build --release
-cargo test --release        # 325 tests, 0 failures
+cargo test --release        # 373 tests, 0 failures
 binaries: target/release/imc  (CLI)
 ```
 
@@ -66,6 +66,7 @@ imc context main/api/routers/git.py
 | `imc graph <symbol>` | Quick definitions / callees / callers dump. |
 | `imc memory-add/-search/-list/-delete`, `imc learn <file>` | Project memory (rules, decisions). |
 | `imc stats`, `imc list` | Index statistics, registered projects (files, symbols, edges, chunks, memories, DB size). |
+| `imc compress [--text T] [--raw]` | Compress content by detected kind. Reads stdin when `--text` is absent. `--raw` prints the compressed text only. |
 
 Global flags: `-C/--root <dir>` (defaults to the active project) and `--json`
 (every command emits machine-readable JSON). `search`/`trace`/`context` also take
@@ -89,6 +90,64 @@ One command that:
 5. prints `✓` per step, then tells you to just run `claude`.
 
 `imc claude wire` does only steps 2–3 (no indexing). `imc claude stop` kills the daemon.
+
+## Context compression
+
+The proxy sits between the agent and the model, so it sees every tool result
+about to be re-read. Big ones are compressed on the way through and the
+original is kept in a CCR store, so nothing is lost — the model gets a handle
+and can pull the full text back verbatim.
+
+Detection is automatic, by content not by filename:
+
+| Kind | What it does |
+|---|---|
+| `json_array` | Collapses runs of identical items, elides a string field that duplicates a sibling (`text` vs `snippet`), windows fields over 1.5 KB to head+tail. Short arrays of distinct items are returned intact. |
+| `build_log` | Keeps every `ERROR` / `WARN` / failure line and the diagnostic gutters; drops routine progress output. |
+| `git_diff` | Dedupes identical file sections, elides the commit-message body, drops `index <hash>` lines, trims long unchanged runs. **Every changed line is preserved.** |
+| `source_code` | String-literal-aware comment stripping (a `//` inside `"..."` is code), block-level repeat collapse, blank-line runs. |
+| `plain_text` | Drops redundant sentences, keeps the first, the last, and the keyword-dense middle. |
+
+Two invariants hold across all of them: **output is never larger than input**,
+and an elision is always announced in place with a count.
+
+### In the proxy
+
+`/v1/messages` compresses tool results before forwarding. A result is only
+touched when it is over 400 tokens **and** the compressor saves at least 20%;
+`is_error` results are never touched, because the error text is the answer.
+
+```
+POST /v1/compress   {"content": "..."}          -> {id, kind, compressed, tokens, ratio}
+POST /v1/retrieve   {"id": "..."}               -> {id, original, compressed}
+GET  /v1/stats                                   -> totals + overall ratio
+```
+
+The store is `<data dir>/proxy_ccr.db` (`IMC_CCR_DB` overrides).
+
+### Benchmarks
+
+Both run against real data from this repo, and check **signal retention**
+alongside the ratio — a compression number means nothing if the answer was in
+what got dropped.
+
+```bash
+python3 e2e/compression_bench.py              # ratio + retention, real fixtures
+python3 e2e/compression_proxy_e2e.py URL      # HTTP surface, byte-exact round-trip
+python3 e2e/compression_request_path_e2e.py   # proxy compresses before forwarding
+```
+
+Measured on this repo:
+
+```
+json_array (20 real search hits)  31565 -> 9815 tokens   68.9%   20/20 items kept
+source_code (imc-search/lib.rs)    7495 -> 5293 tokens   29.4%    0 code lines lost
+build_log (real cargo output)       409 ->   68 tokens   83.4%    every ERROR kept
+git_diff (real commit)             9253 -> 8852 tokens    4.3%    489/489 changed lines
+```
+
+A real diff is mostly changed lines. Anything much above ~5% there would mean
+dropping the answer, so the number is low on purpose.
 
 ## Config
 
@@ -122,6 +181,7 @@ imc config setup         # interactive walkthrough
 | `IMC_EMBED_BASE_URL` | from `llm.base_url` | Embeddings endpoint |
 | `IMC_EMBED_MODEL` | `text-embedding-3-small` | Embedding model |
 | `IMC_MAX_FILE_BYTES` | `1048576` | Skip files larger than this |
+| `IMC_CCR_DB` | `<data dir>/proxy_ccr.db` | Compression store (originals for retrieval) |
 
 Per-project DB: `$IMC_DATA_DIR/projects/<md5(path)[:16]>/index.db`.
 
@@ -139,7 +199,8 @@ crates/
   imc-support     prompt library, endpoint bridge, context packing, search-limit policy
   imc-memory      project memory: CRUD, dedup, retrieval, extraction
   imc-cli         the `imc` binary
-  imc-proxy       transparent LLM proxy: routes, upstream providers, context injection
+  imc-proxy       transparent LLM proxy: routes, upstream providers, context injection,
+                  tool-result compression + CCR store
   imc-proxy-types wire types + provider config (Anthropic / OpenAI / Copilot)
   imc-proxy-copilot  Anthropic ⇄ Responses ⇄ Chat Completions translation
 ```

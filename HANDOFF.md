@@ -4,6 +4,48 @@ Continues from the previous handoff (which is now history; see `docs/parity_audi
 for the parity analysis this session produced). Everything below was verified by
 running the tool, not read off the code.
 
+## Compression (added 2026-10-19)
+
+The proxy now compresses oversized tool results in the request path and keeps
+the original in a CCR store, so the model can retrieve it verbatim.
+
+- `crates/imc-proxy/src/compression/` — `mod.rs` (detection + `compress()`),
+  `json_compressor`, `code_compressor`, `git_diff_compressor`, `log_compressor`,
+  `text_compressor`, `ccr_store`, `context` (request-path pass), `router` (HTTP).
+- `messages.rs` step 3b calls `context::compress_tool_results` before forwarding.
+- `serve()` and the compressor both use `context::ccr_db_path()`
+  (`IMC_CCR_DB`, else `<data dir>/proxy_ccr.db`). They *must* agree: when they
+  did not, compression worked but the handle could not be resolved.
+- Guards: only results over 400 tokens and only when the win is ≥ 20%; `is_error`
+  results are never touched; `compress()` never returns more than it was given.
+
+### Benchmarks (real repo data, not synthetic)
+
+```
+json_array (20 real search hits)  31565 -> 9815 tokens   68.9%   20/20 items kept
+source_code (imc-search/lib.rs)    7495 -> 5293 tokens   29.4%    0 code lines lost
+build_log (real cargo output)       409 ->   68 tokens   83.4%    every ERROR kept
+git_diff (real commit e1001a3)     9253 -> 8852 tokens    4.3%   489/489 changed lines
+```
+
+`git_diff` is low on purpose — a real diff is mostly changed lines.
+
+### Traps that cost time here
+
+- **Detection order is load-bearing.** The old substring scan classified any
+  file mentioning `error` as a build log, and the log compressor *drops lines*:
+  a real diff lost 433 of 489 changed lines. Detect strongest signal first, and
+  anchor log matching to line prefixes.
+- **`//` inside a string literal is not a comment.** The naive
+  `line.find("//")` cut `format!("\n// graph: {}", …)` in half and produced
+  corrupt source. `strip_line_comment` now tracks quote state.
+- **Greedy compression needs a floor.** Windowing a 20 KB chunk is right;
+  sampling down a 20-item result set is not. Small distinct arrays are returned
+  intact.
+- **Never inflate.** Markers cost bytes; on tiny inputs the candidate can be
+  larger than the original, so `compress()` keeps the original unless the
+  candidate is strictly smaller.
+
 ## Repos
 
 - `/root/imc` — the **Python original**, source of truth for behaviour.
@@ -14,8 +56,11 @@ running the tool, not read off the code.
 ## Verified state (end of session)
 
 ```
-unit tests   315 passed, 0 failed   (cargo test --release, whole workspace)
-e2e suite     64 passed             (python3 e2e/e2e_suite.py) — was 49
+unit tests   373 passed, 0 failed   (cargo test --release, whole workspace)
+e2e suite     64 passed             (python3 e2e/e2e_suite.py)
+compression   2 suites passed       (e2e/compression_bench.py,
+                                     e2e/compression_proxy_e2e.py,
+                                     e2e/compression_request_path_e2e.py)
 build         0 errors
 ```
 

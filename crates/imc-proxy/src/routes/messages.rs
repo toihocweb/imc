@@ -335,6 +335,23 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
     if is_context_filters_enabled() {
         process_context_filters(&mut payload);
     }
+
+    // 3b. Shrink oversized tool results before they go upstream. The original
+    // stays in the CCR store; the model gets a retrieval handle.
+    let compression = crate::compression::context::compress_tool_results(
+        &mut payload.messages,
+        &crate::compression::context::ccr_db_path(),
+    );
+    if !compression.is_empty() {
+        log.info(&format!(
+            "[Compress] {} tool result(s): {} -> {} tokens (saved {})",
+            compression.compressed,
+            compression.original_tokens,
+            compression.compressed_tokens,
+            compression.saved_tokens()
+        ));
+    }
+
     injection = apply_prompts_and_memories(&mut payload, session_id.as_deref());
     if !injection.user_text.is_empty() {
         log.info(&format!("[USER] {}", injection.user_text));

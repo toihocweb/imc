@@ -14,6 +14,7 @@ use serde_json::Value;
 
 pub mod ccr_store;
 pub mod code_compressor;
+pub mod context;
 pub mod git_diff_compressor;
 pub mod json_compressor;
 pub mod log_compressor;
@@ -198,6 +199,20 @@ fn is_code_line(line: &str) -> bool {
         }
     }
     false
+}
+
+/// Stable snake_case name for a content kind, used in the CCR store and in
+/// HTTP responses.
+pub fn kind_slug(kind: ContentKind) -> &'static str {
+    match kind {
+        ContentKind::JsonArray => "json_array",
+        ContentKind::JsonObject => "json_object",
+        ContentKind::SourceCode => "source_code",
+        ContentKind::BuildLog => "build_log",
+        ContentKind::GitDiff => "git_diff",
+        ContentKind::PlainText => "plain_text",
+        ContentKind::Unknown => "unknown",
+    }
 }
 
 /// Very rough token estimate (≈ 4 chars per token). Good enough for ratio math.
