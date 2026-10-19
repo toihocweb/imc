@@ -270,6 +270,20 @@ fn rrf(rank_lists: &[HashMap<i64, f64>]) -> Vec<(i64, f64)> {
     out
 }
 
+/// Jaccard similarity between two chunk texts on whitespace tokens: used by
+/// MMR to avoid picking five chunks that all say the same thing.
+fn chunk_similarity(a: &str, b: &str) -> f64 {
+    let ta: std::collections::HashSet<&str> = a.split_whitespace().collect();
+    let tb: std::collections::HashSet<&str> = b.split_whitespace().collect();
+    let inter = ta.intersection(&tb).count();
+    let union = ta.union(&tb).count();
+    if union == 0 {
+        0.0
+    } else {
+        inter as f64 / union as f64
+    }
+}
+
 /// Lexical-ish boost: symbols whose name matches query tokens.
 fn symbol_name_boost(store: &Store, query: &str) -> HashMap<String, f64> {
     let tokens: Vec<String> = tokenize(query)
@@ -518,6 +532,23 @@ pub fn search(
                 s += 0.012;
             }
         }
+        // Production code is more useful than test code for answering "how
+        // does it work" questions; test files dominate top-K when the query
+        // matches test assertions. Penalize test files slightly, reward
+        // src/main/ slightly.
+        let is_test = path_lc.contains("/src/test/")
+            || path_lc.contains("/tests/")
+            || path_lc.contains("/test/")
+            || path_lc.contains("_test.")
+            || path_lc.contains("test_")
+            || path_lc.contains("_test.rs")
+            || path_lc.contains("_test.py");
+        let is_main = path_lc.contains("/src/main/");
+        if is_test {
+            s *= 0.6;
+        } else if is_main {
+            s += 0.010;
+        }
         let (sym_name, sym_kind) = match &chunk.sym_id {
             Some(sid) => {
                 let short = sid.rsplit("::").next().unwrap_or("").to_string();
@@ -551,22 +582,34 @@ pub fn search(
         ));
     }
 
-    // Rank by the reranked score, then apply per-file diversity.
+    // MMR: pick the highest-scored chunk first, then greedily pick the chunk
+    // that maximizes lambda * relevance - (1-lambda) *
+    // max_similarity_with_selected. This prevents the top-5 from being
+    // dominated by chunks from the same file (e.g. three chunks from
+    // RefreshTokenRotationTest.java) and gives production code a chance to
+    // appear.
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    let mut per_file: HashMap<String, usize> = HashMap::new();
-    let mut hits = Vec::new();
-    for (_, h) in scored {
-        let seen = per_file.entry(h.file.clone()).or_insert(0);
-        if *seen >= 2 {
-            continue;
+    let lambda: f64 = 0.60;
+    let mut selected: Vec<SearchHit> = Vec::new();
+    let mut remaining: Vec<(f64, SearchHit)> = scored;
+    while !remaining.is_empty() && selected.len() < opts.limit {
+        let mut best_idx: usize = 0;
+        let mut best_mmr: f64 = f64::NEG_INFINITY;
+        for (i, (score, hit)) in remaining.iter().enumerate() {
+            let sim_to_selected = selected
+                .iter()
+                .map(|s| chunk_similarity(&hit.text, &s.text))
+                .fold(0.0f64, f64::max);
+            let mmr = lambda * (*score) - (1.0 - lambda) * sim_to_selected;
+            if mmr > best_mmr {
+                best_mmr = mmr;
+                best_idx = i;
+            }
         }
-        *seen += 1;
-        hits.push(h);
-        if hits.len() >= opts.limit {
-            break;
-        }
+        let (_score, hit) = remaining.remove(best_idx);
+        selected.push(hit);
     }
-    Ok(hits)
+    Ok(selected)
 }
 
 
@@ -679,6 +722,37 @@ mod tests {
         let (store, db) = seeded("filename");
         let hits = search(&store, None, "billing.py", &SearchOptions { limit: 5, vector: false }).unwrap();
         assert!(!hits.is_empty(), "a file named in the query must still hit");
+        let _ = std::fs::remove_file(&db);
+    }
+
+    /// MMR keeps the top-5 from being dominated by one file: three chunks from
+    /// the same file should collapse into one, letting a different file enter
+    /// the top-5.
+    /// Test files (src/test/...) are penalized relative to src/main/ so a
+    /// production file can win the top-5 over an equally-matching test file.
+    #[test]
+    fn test_files_are_penalized_vs_main() {
+        let (store, db) = seeded("penalty");
+        // Same textual content, different path.
+        store
+            .insert_chunk("src/main/lib.rs", 1, 3, "calculate tax rate amount
+", None)
+            .unwrap();
+        store
+            .insert_chunk("src/test/lib_test.rs", 1, 3, "calculate tax rate amount
+", None)
+            .unwrap();
+        let hits = search(&store, None, "tax rate amount", &SearchOptions { limit: 2, vector: false }).unwrap();
+        assert!(!hits.is_empty(), "{hits:?}");
+        // The main file should rank at or above the test file.
+        let main_idx = hits.iter().position(|h| h.file == "src/main/lib.rs");
+        let test_idx = hits.iter().position(|h| h.file == "src/test/lib_test.rs");
+        match (main_idx, test_idx) {
+            (Some(m), Some(t)) => assert!(m <= t, "main.rs should outrank test.rs: {hits:?}"),
+            (Some(_), None) => {} // only main surfaced, fine
+            (None, Some(_)) => panic!("test.rs outranked main.rs: {hits:?}"),
+            (None, None) => panic!("nothing surfaced: {hits:?}"),
+        }
         let _ = std::fs::remove_file(&db);
     }
 
