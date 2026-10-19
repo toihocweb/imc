@@ -427,7 +427,7 @@ fn run_trace_arm(
     let root = root_with_project_ref(cfg, base_root, args.project.as_deref())?;
     let db = cfg.project_db(&root);
     let indexed = db.exists();
-    let store = if indexed { store::open(&db)? } else { store::open(&cfg.data_dir.join("empty.db"))? };
+    let mut store = if indexed { store::open(&db)? } else { store::open(&cfg.data_dir.join("empty.db"))? };
     // Python's ASTTracer always builds a bridge for an indexed project
     // (tracer.py:98); without it `GET /api/x` and frontend call targets
     // resolve to nothing.
@@ -456,6 +456,45 @@ fn run_trace_arm(
                 print!("{text}");
                 if !out.text.is_empty() && !out.text.ends_with('\n') {
                     println!();
+                }
+            }
+
+            // Vòng 2: nếu trace --callers và số caller vượt ngưỡng, tự ghi
+            // business_rule vào memory để lần sau imc pack đưa ra cảnh báo.
+            if opts.callers {
+                let threshold: usize = std::env::var("IMC_TRACE_BUSINESS_RULE_THRESHOLD")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(5);
+                let callers = store.callers(&args.target);
+                if callers.len() >= threshold {
+                    let meta = imc_core::config::ProjectMeta {
+                        id: imc_core::hash::md5_hex(root.to_string_lossy().as_bytes())[..16]
+                            .to_string(),
+                        name: root
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "root".into()),
+                        path: root.to_string_lossy().to_string(),
+                        indexed_at: Some(imc_cli::claude::chrono_now()),
+                        file_count: None,
+                    };
+                    let _ = imc_core::config::upsert_project(&cfg, meta);
+                    let content = format!(
+                        "blast radius: {} has {} callers — run `imc trace {} --callers` before editing",
+                        args.target,
+                        callers.len(),
+                        args.target
+                    );
+                    let _ = imc_memory::add(
+                        &mut store,
+                        &content,
+                        "business_rule",
+                        &[],
+                        &[],
+                        0.7,
+                        "trace_blast_radius",
+                    );
                 }
             }
         }
