@@ -73,6 +73,24 @@ enum Command {
         /// Print only the compressed text (no JSON metadata).
         #[arg(long, short = 'r')]
         raw: bool,
+        /// Store the original in the CCR store and print its retrieval id.
+        #[arg(long)]
+        store: bool,
+    },
+    /// Print the original behind a compression handle.
+    #[command(name = "retrieve")]
+    Retrieve {
+        /// Handle id printed by `imc compress --store` or the proxy.
+        id: String,
+        /// Print the compressed form instead of the original.
+        #[arg(long)]
+        compressed: bool,
+    },
+    /// Inspect the compression store (originals kept for retrieval).
+    #[command(name = "ccr")]
+    Ccr {
+        #[command(subcommand)]
+        action: CcrAction,
     },
     /// Print index statistics (Python's `imc status`).
     #[command(alias = "status")]
@@ -258,6 +276,27 @@ enum ProxyAction {
     Status,
     /// Stop the background proxy.
     Stop,
+}
+
+#[derive(Subcommand, Debug)]
+enum CcrAction {
+    /// Totals: records, tokens in/out, overall ratio, DB size.
+    Stats,
+    /// Recent records, newest first.
+    List {
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+        /// Filter by kind: json_array|source_code|build_log|git_diff|plain_text.
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    /// Delete everything (the originals are gone, handles stop resolving).
+    Clear,
+    /// Drop records older than N days.
+    Prune {
+        #[arg(long, default_value_t = 30)]
+        days: i64,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -591,7 +630,7 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Command::Compress { text, raw } => {
+        Command::Compress { text, raw, store } => {
             let input: String = match text {
                 Some(t) => t.clone(),
                 None => {
@@ -603,10 +642,143 @@ fn main() -> Result<()> {
                 }
             };
             let result = imc_proxy::compression::compress(&input);
+            let ccr_id = if *store {
+                let db = imc_proxy::compression::context::ccr_db_path();
+                match imc_proxy::compression::ccr_store::CcrStore::open(&db) {
+                    Ok(mut s) => match s.store(
+                        imc_proxy::compression::kind_slug(result.kind),
+                        &result.original,
+                        &result.compressed,
+                        result.original_tokens as i64,
+                        result.compressed_tokens as i64,
+                    ) {
+                        Ok(id) => Some(id),
+                        Err(e) => {
+                            eprintln!("could not store original: {e}");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("could not open ccr store: {e}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             if *raw {
                 print!("{}", result.compressed);
+                if let Some(id) = &ccr_id {
+                    eprintln!("\n[imc] original stored as {id}");
+                }
             } else {
-                println!("{}", serde_json::to_string(&result).unwrap());
+                let mut v = serde_json::to_value(&result)?;
+                if let Some(id) = &ccr_id {
+                    v["id"] = serde_json::json!(id);
+                }
+                println!("{}", serde_json::to_string(&v)?);
+            }
+        }
+        Command::Retrieve { id, compressed } => {
+            let db = imc_proxy::compression::context::ccr_db_path();
+            let store = imc_proxy::compression::ccr_store::CcrStore::open(&db)?;
+            let row = store.conn.query_row(
+                "SELECT original, compressed FROM ccr_originals WHERE id = ?1",
+                [id.as_str()],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            );
+            match row {
+                Ok((original, comp)) => print!("{}", if *compressed { comp } else { original }),
+                Err(_) => {
+                    bail!(
+                        "no compression record with id `{id}` in {} (handles expire when the store is pruned)",
+                        db.display()
+                    );
+                }
+            }
+        }
+        Command::Ccr { action } => {
+            let db = imc_proxy::compression::context::ccr_db_path();
+            let mut store = imc_proxy::compression::ccr_store::CcrStore::open(&db)?;
+            match action {
+                CcrAction::Stats => {
+                    let entries = store.list(None, usize::MAX.min(1_000_000))?;
+                    let total_orig: i64 = entries.iter().map(|e| e.orig_tokens).sum();
+                    let total_comp: i64 = entries.iter().map(|e| e.comp_tokens).sum();
+                    let ratio = if total_orig > 0 {
+                        total_comp as f64 / total_orig as f64
+                    } else {
+                        1.0
+                    };
+                    let size = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
+                    if cli.json {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&serde_json::json!({
+                                "db": db.display().to_string(),
+                                "records": entries.len(),
+                                "original_tokens": total_orig,
+                                "compressed_tokens": total_comp,
+                                "saved_tokens": total_orig - total_comp,
+                                "compression_ratio": ratio,
+                                "db_bytes": size,
+                            }))?
+                        );
+                    } else {
+                        println!("ccr:       {}", db.display());
+                        println!("records:   {}", entries.len());
+                        println!("tokens:    {total_orig} -> {total_comp} (saved {})", total_orig - total_comp);
+                        println!("ratio:     {:.3}", ratio);
+                        println!("db size:   {:.1} MB", size as f64 / 1_048_576.0);
+                    }
+                }
+                CcrAction::List { limit, kind } => {
+                    let entries = store.list(kind.as_deref(), *limit)?;
+                    if cli.json {
+                        let rows: Vec<_> = entries
+                            .iter()
+                            .map(|e| {
+                                serde_json::json!({
+                                    "id": e.id, "kind": e.kind,
+                                    "orig_tokens": e.orig_tokens,
+                                    "comp_tokens": e.comp_tokens,
+                                    "created_at": e.created_at,
+                                })
+                            })
+                            .collect();
+                        println!("{}", serde_json::to_string(&rows)?);
+                    } else {
+                        println!("{:<18} {:<12} {:>8} {:>8} {:>7}", "id", "kind", "in", "out", "saved");
+                        for e in &entries {
+                            println!(
+                                "{:<18} {:<12} {:>8} {:>8} {:>6.0}%",
+                                e.id,
+                                e.kind,
+                                e.orig_tokens,
+                                e.comp_tokens,
+                                if e.orig_tokens > 0 {
+                                    (e.orig_tokens - e.comp_tokens) as f64 / e.orig_tokens as f64 * 100.0
+                                } else {
+                                    0.0
+                                }
+                            );
+                        }
+                    }
+                }
+                CcrAction::Clear => {
+                    let n = store.count()?;
+                    store.conn.execute("DELETE FROM ccr_originals", [])?;
+                    println!("cleared {n} record(s) from {}", db.display());
+                }
+                CcrAction::Prune { days } => {
+                    let cutoff = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64
+                        - days * 86_400;
+                    let n = store.prune_before(cutoff)?;
+                    println!("pruned {n} record(s) older than {days} day(s)");
+                }
             }
         }
         Command::Stats => {

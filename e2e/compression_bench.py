@@ -157,6 +157,66 @@ def main() -> int:
         print(f"  [{'PASS' if ok else 'FAIL'}] {name:<46} {detail}")
         if not ok:
             failures.append(name)
+    retention_checks = len(checks)
+
+    # ---- CCR CLI round-trip ------------------------------------------------
+    print()
+    print("CCR CLI (compress --store -> retrieve -> ccr stats/list)")
+    print("-" * 96)
+    import os
+    import tempfile
+
+    ccr_dir = tempfile.mkdtemp(prefix="imc-ccr-")
+    env = dict(os.environ, IMC_CCR_DB=os.path.join(ccr_dir, "test.db"))
+    sample = load("build_log_real.txt") or "x"
+
+    stored = subprocess.run(
+        [str(IMC), "compress", "--store", "--raw"],
+        input=sample, capture_output=True, text=True, env=env, timeout=60,
+    )
+    checks.append(
+        ("imc compress --store exits 0", stored.returncode == 0, stored.stderr[:60].strip())
+    )
+
+    listing = subprocess.run(
+        [str(IMC), "ccr", "list", "--json"], capture_output=True, text=True, env=env, timeout=60,
+    )
+    try:
+        rows = json.loads(listing.stdout)
+        rid = rows[0]["id"] if rows else ""
+    except Exception:
+        rid = ""
+    checks.append(("imc ccr list sees the record", bool(rid), rid[:16]))
+
+    if rid:
+        back = subprocess.run(
+            [str(IMC), "retrieve", rid], capture_output=True, text=True, env=env, timeout=60,
+        )
+        checks.append(
+            ("imc retrieve returns the exact original",
+             back.returncode == 0 and back.stdout == sample,
+             f"{len(back.stdout)} vs {len(sample)}"),
+        )
+
+    stats = subprocess.run(
+        [str(IMC), "ccr", "stats", "--json"], capture_output=True, text=True, env=env, timeout=60,
+    )
+    try:
+        s = json.loads(stats.stdout)
+        ok = s["records"] >= 1 and s["saved_tokens"] == s["original_tokens"] - s["compressed_tokens"]
+    except Exception:
+        ok = False
+    checks.append(("imc ccr stats reconciles", ok, ""))
+
+    missing = subprocess.run(
+        [str(IMC), "retrieve", "deadbeefdeadbeef"], capture_output=True, text=True, env=env, timeout=60,
+    )
+    checks.append(("imc retrieve on an unknown id exits non-zero", missing.returncode != 0, f"rc={missing.returncode}"))
+
+    for name, ok, detail in checks[retention_checks:]:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name:<46} {detail}")
+        if not ok:
+            failures.append(name)
 
     # ---- CCR round-trip ----------------------------------------------------
     print()

@@ -66,7 +66,9 @@ imc context main/api/routers/git.py
 | `imc graph <symbol>` | Quick definitions / callees / callers dump. |
 | `imc memory-add/-search/-list/-delete`, `imc learn <file>` | Project memory (rules, decisions). |
 | `imc stats`, `imc list` | Index statistics, registered projects (files, symbols, edges, chunks, memories, DB size). |
-| `imc compress [--text T] [--raw]` | Compress content by detected kind. Reads stdin when `--text` is absent. `--raw` prints the compressed text only. |
+| `imc compress [--text T] [--raw] [--store]` | Compress content by detected kind. Reads stdin when `--text` is absent. `--raw` prints the compressed text only; `--store` keeps the original and prints its id. |
+| `imc retrieve <id> [--compressed]` | Print the original behind a compression handle (`--compressed` for the short form). |
+| `imc ccr stats\|list\|clear\|prune` | Inspect the compression store: totals, recent records, drop everything, or expire old ones. |
 
 Global flags: `-C/--root <dir>` (defaults to the active project) and `--json`
 (every command emits machine-readable JSON). `search`/`trace`/`context` also take
@@ -123,7 +125,17 @@ POST /v1/retrieve   {"id": "..."}               -> {id, original, compressed}
 GET  /v1/stats                                   -> totals + overall ratio
 ```
 
-The store is `<data dir>/proxy_ccr.db` (`IMC_CCR_DB` overrides).
+The store is `<data dir>/proxy_ccr.db` (`IMC_CCR_DB` overrides). The same store
+is reachable from the terminal, so a handle in a log or a transcript is
+actionable:
+
+```bash
+imc compress --text "$(cat build.log)" --store   # -> id 3139ac0529...
+imc retrieve 3139ac052928fd49                     # exact original bytes
+imc ccr stats                                     # totals + overall ratio
+imc ccr list -l 10 --kind build_log
+imc ccr prune --days 30                           # expire old handles
+```
 
 ### Benchmarks
 
