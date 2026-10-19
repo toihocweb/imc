@@ -69,7 +69,7 @@ pub fn run(cfg: &Config, root: &Path, extra_ignores: &[String], force: bool) -> 
         .par_iter()
         .map(|f| -> Result<(String, Vec<imc_core::types::Symbol>, Vec<imc_core::types::Edge>, Vec<RawChunk>)> {
             let text = read_text(&f.path)?;
-            let (mut symbols, mut edges, mut chunks) = match imc_parser::parse(&f.rel, &text) {
+            let (symbols, edges, mut chunks) = match imc_parser::parse(&f.rel, &text) {
                 Some(p) => (p.symbols, p.edges, p.chunks),
                 None => (Vec::new(), Vec::new(), Vec::new()),
             };

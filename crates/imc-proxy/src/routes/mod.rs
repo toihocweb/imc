@@ -248,8 +248,9 @@ mod tests {
     async fn serve_app() -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let db_path = std::path::PathBuf::from("/tmp/test_ccr.db");
         let handle = tokio::spawn(async move {
-            let _ = axum::serve(listener, app()).await;
+            let _ = axum::serve(listener, app(db_path)).await;
         });
         (format!("http://{addr}"), handle)
     }

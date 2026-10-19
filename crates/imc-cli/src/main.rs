@@ -1,6 +1,6 @@
 use imc_cli::index;
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
@@ -9,8 +9,7 @@ use clap::{Args, Parser, Subcommand};
 use imc_core::config::{upsert_project, Config, ProjectMeta};
 use imc_core::hash::md5_hex;
 use imc_core::store;
-use imc_proxy::compression::compress;
-use std::io::Read;
+
 
 #[derive(Parser, Debug)]
 #[command(
@@ -598,7 +597,9 @@ fn main() -> Result<()> {
                 None => {
                     let mut stdin = String::new();
                     std::io::stdin().read_to_string(&mut stdin).unwrap();
-                    stdin.trim_end().to_string()
+                    // Preserve the input byte-for-byte: the CCR store must be
+                    // able to hand back exactly what came in.
+                    stdin
                 }
             };
             let result = imc_proxy::compression::compress(&input);

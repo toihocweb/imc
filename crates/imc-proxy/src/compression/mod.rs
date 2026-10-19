@@ -1,4 +1,4 @@
-//! Compression layer for the imc proxy — port of Headroom's context optimization.
+//! Compression layer for the imc proxy — context optimization.
 //!
 //! Content coming *into* the proxy (tool outputs, logs, RAG chunks, file reads,
 //! API responses) is compressed before it reaches the LLM. Originals are kept
@@ -11,9 +11,10 @@
 //! classification redundancy removal.
 
 use serde_json::Value;
-use std::collections::HashMap;
 
 pub mod ccr_store;
+pub mod code_compressor;
+pub mod git_diff_compressor;
 pub mod json_compressor;
 pub mod log_compressor;
 pub mod router;
@@ -53,16 +54,23 @@ pub struct CompressionResult {
 pub fn compress(content: &str) -> CompressionResult {
     let kind = detect_kind(content);
     let original_tokens = estimate_tokens(content);
-    let compressed = match kind {
+    let candidate = match kind {
         ContentKind::JsonArray => json_compressor::compress(content),
-        ContentKind::SourceCode => code_compressor_placeholder(content),
+        ContentKind::SourceCode => code_compressor::compress(content),
         ContentKind::BuildLog => log_compressor::compress(content),
-        ContentKind::GitDiff => git_diff_compressor_placeholder(content),
+        ContentKind::GitDiff => git_diff_compressor::compress(content),
         ContentKind::PlainText | ContentKind::JsonObject | ContentKind::Unknown => {
             text_compressor::compress(content)
         }
     };
-    let compressed_tokens = estimate_tokens(&compressed);
+    // Never inflate: markers and framing can cost more than they save on small
+    // inputs, in which case the original is strictly better.
+    let candidate_tokens = estimate_tokens(&candidate);
+    let (compressed, compressed_tokens) = if candidate_tokens < original_tokens {
+        (candidate, candidate_tokens)
+    } else {
+        (content.to_string(), original_tokens)
+    };
     let saved_tokens = original_tokens.saturating_sub(compressed_tokens);
     let ratio = if original_tokens > 0 {
         compressed_tokens as f64 / original_tokens as f64
@@ -82,60 +90,119 @@ pub fn compress(content: &str) -> CompressionResult {
 
 /// Detect content kind from the raw text. Zero-config — no caller annotation
 /// required.
+///
+/// Order matters: the strongest, least ambiguous signals are tested first.
+/// Diff/log detection used to be a substring scan, which misclassified source
+/// files that merely *mention* `error` — and a misclassified file gets the
+/// wrong compressor, which destroys it.
 pub fn detect_kind(content: &str) -> ContentKind {
     let trimmed = content.trim_start();
+
+    // JSON: unambiguous when it actually parses.
     if trimmed.starts_with('[') {
-        return ContentKind::JsonArray;
+        if let Ok(Value::Array(_)) = serde_json::from_str::<Value>(content) {
+            return ContentKind::JsonArray;
+        }
     }
-    if trimmed.starts_with('{') {
+    if trimmed.starts_with('{') && serde_json::from_str::<Value>(content).is_ok() {
         return ContentKind::JsonObject;
     }
-    // Build logs usually contain timestamps / log levels / severity.
-    if content.lines().any(|l| {
-        l.contains("ERROR")
-            || l.contains("WARN")
-            || l.contains("INFO")
-            || l.contains("DEBUG")
-            || l.contains("FAIL")
-            || l.contains("panic")
-            || l.contains("error:")
-    }) {
-        return ContentKind::BuildLog;
-    }
-    // Git diffs start with `diff --git` or contain `+++`/`---` hunks.
-    if content.contains("diff --git")
-        || content.lines().any(|l| l.starts_with("+++ ") || l.starts_with("--- "))
-    {
+
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len().max(1);
+
+    // Git diff: a `diff --git` header is decisive, `git show` output included.
+    if content.contains("diff --git ") {
         return ContentKind::GitDiff;
     }
-    // Source code heuristics: braces, semicolons, `fn`/`def`/`class`/`import`.
-    if content.contains('{')
-        && content.contains(';')
-        || content.contains("fn ")
-        || content.contains("def ")
-        || content.contains("class ")
-        || content.contains("import ")
-        || content.contains("const ")
-    {
+    let hunks = lines.iter().filter(|l| l.starts_with("@@ ")).count();
+    let file_headers = lines
+        .iter()
+        .filter(|l| l.starts_with("+++ ") || l.starts_with("--- "))
+        .count();
+    if hunks > 0 && file_headers >= 2 {
+        return ContentKind::GitDiff;
+    }
+
+    // Build log vs source code: count lines that *begin* like a log record
+    // against lines that *look* like statements. Prefix-anchored matching is
+    // what keeps `// handle error:` inside a source file from looking like a
+    // log.
+    let log_lines = lines.iter().filter(|l| is_log_line(l)).count();
+    let code_lines = lines.iter().filter(|l| is_code_line(l)).count();
+
+    if log_lines * 2 >= total && log_lines > code_lines {
+        return ContentKind::BuildLog;
+    }
+    if code_lines > 0 {
         return ContentKind::SourceCode;
     }
     ContentKind::PlainText
 }
 
+/// A line that starts like a build/test log record.
+fn is_log_line(line: &str) -> bool {
+    let t = line.trim_start();
+    // Compiler / toolchain verbs.
+    for verb in [
+        "Compiling ", "Finished ", "Running ", "Building ", "Downloaded ", "Downloading ",
+        "Checking ", "Blocking ", "Fresh ", "warning: ", "error: ", "error[", "note: ",
+        "help: ", "--> ", "= note:", "= help:", "test result: ", "FAILED ", "ok ",
+        "FAIL ", "PASS ", "panic: ",
+    ] {
+        if t.starts_with(verb) {
+            return true;
+        }
+    }
+    // Bare pipe / caret gutter lines that only appear in diagnostics.
+    if t == "|" || t.starts_with("| ") || t.starts_with("^") {
+        return true;
+    }
+    // `LEVEL message` with an uppercase level word.
+    for level in ["ERROR", "WARN", "INFO", "DEBUG", "TRACE", "FATAL", "NOTICE"] {
+        if t.starts_with(level) || t.starts_with(&format!("[{level}]")) {
+            return true;
+        }
+        // `2026-10-19 10:00:01 ERROR ...` — level right after a timestamp.
+        if let Some(idx) = t.find(level) {
+            if idx > 0 && idx < 32 {
+                let before = t[..idx].trim_end();
+                if before.ends_with(|c: char| c.is_ascii_digit() || c == 'T' || c == 'Z') {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// A line that looks like a source statement rather than prose.
+fn is_code_line(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if t.starts_with("//") || t.starts_with('#') || t.starts_with("/*") || t.starts_with('*') {
+        return true;
+    }
+    if t.ends_with(';') || t.ends_with('{') || t.ends_with('}') || t == "}" || t == "{" {
+        return true;
+    }
+    for kw in [
+        "fn ", "let ", "pub ", "impl ", "use ", "mod ", "struct ", "enum ", "trait ",
+        "match ", "if ", "else ", "for ", "while ", "return ", "def ", "class ",
+        "import ", "from ", "const ", "var ", "function ", "=>", "->", "::",
+    ] {
+        if t.starts_with(kw) || t.contains(kw) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Very rough token estimate (≈ 4 chars per token). Good enough for ratio math.
 pub fn estimate_tokens(text: &str) -> usize {
     text.len().max(1) / 4
-}
-
-/// Placeholder: AST-aware code compression is wired to tree-sitter in a later
-/// pass. For now it falls back to text compression.
-fn code_compressor_placeholder(content: &str) -> String {
-    text_compressor::compress(content)
-}
-
-/// Placeholder: git diff hunk preservation.
-fn git_diff_compressor_placeholder(content: &str) -> String {
-    text_compressor::compress(content)
 }
 
 #[cfg(test)]

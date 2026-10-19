@@ -14,8 +14,6 @@ pub fn compress(content: &str) -> String {
     if sentences.len() <= 3 {
         return content.to_string();
     }
-    let keep_first = 1;
-    let keep_last = 1;
     let mut keep: HashSet<usize> = HashSet::new();
     keep.insert(0);
     keep.insert(sentences.len() - 1);

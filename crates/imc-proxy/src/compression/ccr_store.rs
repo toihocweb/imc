@@ -2,7 +2,7 @@
 //!
 //! Original (pre-compression) content is stored here so nothing is lost when
 //! the proxy sends a compressed summary to the LLM. The model can later ask
-//! for the full original via the `headroom_retrieve`-style endpoint.
+//! for the full original via the retrieve-style endpoint.
 //!
 //! Stored in the project's SQLite DB alongside imc-core's tables.
 
@@ -11,7 +11,6 @@ use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
-use serde_json::Value;
 
 pub struct CcrStore {
     pub conn: Connection,
@@ -89,7 +88,7 @@ impl CcrStore {
                 "SELECT id, kind, original, compressed, orig_tokens, comp_tokens, created_at
                  FROM ccr_originals WHERE kind = ?1 ORDER BY created_at DESC LIMIT ?2"
                     .to_string(),
-                rusqlite::params![k.clone(), limit as i64],
+                rusqlite::params![k.to_string(), limit as i64],
             ),
             None => (
                 "SELECT id, kind, original, compressed, orig_tokens, comp_tokens, created_at

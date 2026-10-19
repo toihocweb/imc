@@ -2,7 +2,7 @@
 
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::response::{Json, Response};
+use axum::response::Json;
 use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
