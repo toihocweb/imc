@@ -72,6 +72,66 @@ code. Every command below is verified to exist in this binary.
     )
 }
 
+/// Rule file for Claude Code: project-local rules that tell Claude how to use
+/// imc. Written to `.claude/rules/imc-rule.md` by `imc claude setup` (and
+/// `imc config setup` on request) instead of being stuffed into CLAUDE.md.
+pub fn imc_rule_md() -> &'static str {
+    r#"# imc — code-intelligence rules for this repo
+
+You have access to the `imc` CLI (Rust port of IndexMyCode) in this repo.
+Prefer `imc` over blind Read/Grep when you need to understand code, find
+callers, or trace HTTP routes.
+
+## Commands you should use
+
+- `imc search "<3-7 words>"` — LLM answer from indexed chunks, with `path:line`
+  citations. Needs `llm.base_url` configured. Without an LLM endpoint it prints
+  ranked hits instead.
+- `imc search "<q>" --raw` — raw ranked chunks, no LLM. Always read top 5,
+  never stop at hit 1.
+- `imc search "<exact symbol>"` — exact symbol lookup (case & `_`/camelCase
+  normalized). Use when you know the name.
+- `imc read <file> --symbols` — outline; then read only the lines you need.
+- `imc context <file>` — whole feature around a file: deps, endpoints, tests.
+- `imc trace <symbol> --callers --depth 3` — blast radius; run *before* you
+  rename or delete anything. `imc callers <symbol>` / `imc blast <symbol>`.
+- `imc trace "<symbol>"` — what it calls (forward). `--both` both directions.
+- `imc trace "GET /api/path"` — HTTP route → backend handler.
+- `imc graph <symbol>` — definition site and kind.
+- `imc memory-search "<topic>"` — conventions/decisions recorded for this repo.
+
+## Rules
+
+1. **Search before you edit.** Never invent an API, path, or line number.
+2. **Cite `path/to/file:L10-L25`** when answering. Never cite a range you did
+   not see in an imc output.
+3. **`imc trace` has no relevance floor.** A junk query still returns hits.
+   Hits are ranked evidence, not proof — open the file before relying on it.
+4. **If search misses repeatedly, fall back to Read/Grep.** An empty result
+   means "not in the index", not "does not exist".
+5. **Use `-C <project-root>`** (or `-p <id>`) when the cwd may not be the
+   project; otherwise imc answers for the globally active project.
+
+## Setup
+
+- `imc config setup` — interactive setup of LLM URL, API key, models.
+- `imc config test` — verify the embedding/chat endpoint.
+- `imc claude setup` — index, wire `.claude/settings.local.json`, add this
+  rule file, and start the proxy.
+
+"#
+}
+
+/// Write `.claude/rules/imc-rule.md` — the project-local imc rules.
+pub fn write_imc_rule(project_root: &Path) -> Result<PathBuf> {
+    let rules_dir = project_root.join(".claude").join("rules");
+    std::fs::create_dir_all(&rules_dir)
+        .with_context(|| format!("create {}", rules_dir.display()))?;
+    let path = rules_dir.join("imc-rule.md");
+    std::fs::write(&path, imc_rule_md().to_string()).with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
 /// Write `.claude/settings.local.json` so Claude Code talks to our proxy.
 /// Port of `_setup_claude_code` (index.py) — env values kept identical so a
 /// user's existing Claude setup keeps working.
@@ -272,6 +332,8 @@ pub fn setup_and_start(
         if changed { "updated" } else { "wrote" },
         md.display()
     ));
+    let rule = write_imc_rule(root)?;
+    log.push(format!("wrote {}", rule.display()));
 
     // 4. Proxy.
     let key = cfg.llm_api_key();

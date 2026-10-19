@@ -1,5 +1,6 @@
 use imc_cli::index;
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
@@ -256,6 +257,9 @@ enum ConfigAction {
     List,
     /// Probe the configured endpoint (POST {base_url}/embeddings) and report.
     Test,
+    /// Interactive setup: prompt for llm.base_url, llm.api_key, llm.model and
+    /// embedding.model, then write ~/.imc_config.yaml.
+    Setup,
 }
 
 fn resolve_root(cfg: &Config, project: Option<PathBuf>) -> Result<PathBuf> {
@@ -899,6 +903,62 @@ fn main() -> Result<()> {
                         }
                         println!("\nfile: {}", st::active_path().display());
                     }
+                }
+                ConfigAction::Setup => {
+                    use imc_core::settings as st;
+                    let mut s = st::load();
+                    println!("
+=== imc interactive setup ===");
+                    println!("Config file: {}", st::path().display());
+                    println!("Leave blank to keep current value.
+");
+
+                    // llm.base_url
+                    let cur = st::get(&s, "llm.base_url").and_then(|v| v.as_str().map(String::from)).unwrap_or_default();
+                    print!("LLM base URL [{cur}]: ");
+                    std::io::stdout().flush().ok();
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line).ok();
+                    let v = line.trim();
+                    if !v.is_empty() { st::set(&mut s, "llm.base_url", v)?; }
+
+                    // llm.api_key
+                    let cur = st::get(&s, "llm.api_key").and_then(|v| v.as_str().map(String::from)).unwrap_or_default();
+                    let masked = if cur.is_empty() { "(unset)".to_string() } else { st::mask(&serde_yaml::Value::String(cur.clone())) };
+                    print!("LLM API key [{masked}]: ");
+                    std::io::stdout().flush().ok();
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line).ok();
+                    let v = line.trim();
+                    if !v.is_empty() { st::set(&mut s, "llm.api_key", v)?; }
+
+                    // llm.model (cheap model for imc search)
+                    let cur = st::get(&s, "llm.model").and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "claude-haiku-4.5".to_string());
+                    print!("LLM model for imc search (cheap) [{cur}]: ");
+                    std::io::stdout().flush().ok();
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line).ok();
+                    let v = line.trim();
+                    if !v.is_empty() { st::set(&mut s, "llm.model", v)?; } else if cur.is_empty() {
+                        st::set(&mut s, "llm.model", "claude-haiku-4.5")?;
+                    }
+
+                    // embedding.model (default text-embedding-3-small)
+                    let cur = st::get(&s, "embedding.model").and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "text-embedding-3-small".to_string());
+                    print!("Embedding model [{cur}]: ");
+                    std::io::stdout().flush().ok();
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line).ok();
+                    let v = line.trim();
+                    if !v.is_empty() { st::set(&mut s, "embedding.model", v)?; } else if cur.is_empty() {
+                        st::set(&mut s, "embedding.model", "text-embedding-3-small")?;
+                    }
+
+                    st::save(&s)?;
+                    println!("
+saved to {}", st::path().display());
+                    println!("Now run: imc config test  (to verify the endpoint)");
+                    println!("Then:  imc claude setup   (to wire a project for Claude Code)");
                 }
                 ConfigAction::Test => {
                     let cfg2 = imc_core::config::Config::default();
