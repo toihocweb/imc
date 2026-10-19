@@ -77,6 +77,11 @@ da4d76c endpoints: read Flask's @app.route, which neither implementation saw
 <NEW> `imc claude setup` writes `.claude/rules/imc-rule.md` instead of CLAUDE.md
 <NEW> docs/imc-rule.md — the rule file content
 <NEW> docs/real_repo_verification.md — the full sweep report
+<NEW> memory: `--mem-type`/`--scene` filters on `memory-search`
+<NEW> memory: `imc learn` passes active_paths for overlap boost
+<NEW> memory: `extract_candidates` assigns correct categories (rule/note/convention)
+<NEW> memory: removed duplicate `memory_vectors` table creation
+<NEW> memory: 9 new unit tests (6 retrieval + 3 extraction)
 ```
 
 The two items the last handoff listed as pending are both done: prefixed-router
