@@ -433,7 +433,15 @@ fn main() -> Result<()> {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 
-    let cli = Cli::parse();
+    // Allow `imc <path>` as a shortcut for `imc index <path>`.
+    let mut args: Vec<String> = std::env::args().collect();
+    if args.len() == 2 {
+        let p = &args[1];
+        if !p.starts_with('-') && std::path::Path::new(p).exists() {
+            args.insert(1, "index".to_string());
+        }
+    }
+    let cli = Cli::parse_from(&args);
     let cfg = Config::default();
     cfg.ensure_dirs()?;
     let root = resolve_root(&cfg, cli.root.clone())?;
