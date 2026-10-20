@@ -20,6 +20,7 @@ imc-trace = { path = "../imc-trace" }
 imc-support = { path = "../imc-support" }
 imc-cli-extra = { path = "../imc-cli-extra" }
 imc-proxy = { path = "../imc-proxy" }
+imc-mcp = { path = "../imc-mcp" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

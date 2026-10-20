@@ -1025,6 +1025,7 @@ dependencies = [
  "imc-embed",
  "imc-find",
  "imc-index",
+ "imc-mcp",
  "imc-memory",
  "imc-parser",
  "imc-proxy",
@@ -1107,6 +1108,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "imc-mcp"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+]
+
+[[package]]
 name = "imc-memory"
 version = "0.2.0"
 dependencies = [
@@ -1145,6 +1154,7 @@ dependencies = [
  "futures",
  "imc-core",
  "imc-embed",
+ "imc-mcp",
  "imc-memory",
  "imc-proxy-copilot",
  "imc-proxy-types",

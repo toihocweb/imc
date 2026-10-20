@@ -92,6 +92,58 @@ fn systemctl(args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+/// Where the dashboard state lives (pid + the build it was started from).
+fn state_path() -> PathBuf {
+    imc_core::config::Config::default()
+        .data_dir
+        .join("dashboard_state.json")
+}
+
+/// The id of the build that is currently on disk.
+fn current_build_id(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join(".next/BUILD_ID"))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// The dashboard that is running was started from an older build.
+///
+/// A `next start` keeps serving the build it was started with, so after a
+/// `git pull` the API routes the browser talks to are the previous commit's —
+/// and every call can fail while the page looks fine.
+fn running_dashboard_is_stale(dir: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(state_path()) else {
+        return false;
+    };
+    let Ok(state) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let recorded = state
+        .get("build_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let current = current_build_id(dir);
+    !current.is_empty() && !recorded.is_empty() && recorded != current
+}
+
+/// Stop the dashboard that `imc` started earlier.
+fn stop_recorded_dashboard() {
+    let Ok(raw) = std::fs::read_to_string(state_path()) else {
+        return;
+    };
+    let Ok(state) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return;
+    };
+    if let Some(pid) = state.get("pid").and_then(|v| v.as_i64()) {
+        let _ = Command::new("kill")
+            .arg(pid.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    std::fs::remove_file(state_path()).ok();
+}
+
 /// Try to bring the dashboard up. Returns a human-readable description of what
 /// started it, or an error when no strategy worked.
 fn start(port: u16) -> Result<String> {
@@ -137,8 +189,11 @@ fn start(port: u16) -> Result<String> {
     }
     let node = which("node").ok_or_else(|| anyhow!("`node` not found on PATH"))?;
     let log = std::env::temp_dir().join("imc-web.log");
+    let pid_file = std::env::temp_dir().join(format!("imc-web-{port}.pid"));
+    // `exec` replaces the shell, so the pid file holds the node process.
     let cmd = format!(
-        "nohup {} {} start -p {} -H 0.0.0.0 >> {} 2>&1 &",
+        "nohup sh -c 'echo $$ > {}; exec {} {} start -p {} -H 0.0.0.0 >> {} 2>&1' &",
+        shell_quote(&pid_file.to_string_lossy()),
         shell_quote(&node.to_string_lossy()),
         shell_quote(&next_bin.to_string_lossy()),
         port,
@@ -154,6 +209,28 @@ fn start(port: u16) -> Result<String> {
         .spawn();
 
     if wait_up(port, Duration::from_secs(30)) {
+        // Remember what is running, so a later `imc web` can tell whether it
+        // is still the current build.
+        let pid = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|s| s.trim().parse::<i64>().ok());
+        let mut state = serde_json::json!({
+            "pid": pid,
+            "port": port,
+            "build_id": current_build_id(&dir),
+            "dir": dir.to_string_lossy(),
+            "started_at": crate::claude::chrono_now(),
+        });
+        if let Some(obj) = state.as_object_mut() {
+            obj.insert("pid".to_string(), serde_json::json!(pid));
+        }
+        let _ = std::fs::create_dir_all(
+            imc_core::config::Config::default().data_dir.clone(),
+        );
+        let _ = std::fs::write(
+            state_path(),
+            serde_json::to_vec_pretty(&state).unwrap_or_default(),
+        );
         Ok(format!("started `next start` from {}", dir.display()))
     } else {
         Err(anyhow!(
@@ -323,6 +400,24 @@ pub fn open_in_browser(url: &str) -> bool {
 
 /// Entry point for `imc web`.
 pub fn run(port: u16, no_open: bool, url: Option<String>) -> Result<()> {
+    // A dashboard from an older build keeps serving the old API routes, so it
+    // is replaced instead of reused.
+    if is_up(port) {
+        if let Some(dir) = candidate_dirs().into_iter().next() {
+            if running_dashboard_is_stale(&dir) {
+                eprintln!(
+                    "[imc web] the running dashboard is an older build — replacing it…"
+                );
+                stop_recorded_dashboard();
+                for _ in 0..20 {
+                    if !is_up(port) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+            }
+        }
+    }
     let started = if is_up(port) {
         None
     } else {

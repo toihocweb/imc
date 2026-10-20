@@ -216,27 +216,11 @@ fn state_path(cfg: &Config) -> PathBuf {
     cfg.data_dir.join("proxy_state.json")
 }
 
-/// Path to the proxy daemon binary (sits next to the `imc` binary).
+/// The proxy runs inside the `imc` binary (`imc proxy serve`), so there is no
+/// second executable to look for. The binary itself is what gets spawned in
+/// the background.
 pub fn proxy_bin() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("locate imc binary")?;
-    let cand = exe.with_file_name("imc-proxyd");
-    if cand.exists() {
-        return Ok(cand);
-    }
-    // `cargo run` puts it in target/{debug,release}/ alongside `imc`; a global
-    // install puts it in the same bin dir. Also look it up on PATH.
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let cand = dir.join("imc-proxyd");
-            if cand.is_file() {
-                return Ok(cand);
-            }
-        }
-    }
-    anyhow::bail!(
-        "imc-proxyd not found next to {} — build it first: cargo build --release --bin imc-proxyd",
-        exe.display()
-    )
+    std::env::current_exe().context("locate imc binary")
 }
 
 /// The daemon's file modification time, in seconds since the epoch.
@@ -250,9 +234,9 @@ fn file_mtime_secs(path: &std::path::Path) -> Option<u64> {
 
 /// Spawn the proxy in the background and record pid/port.
 ///
-/// A daemon that is already running keeps serving the code it was started
-/// with, and the request-path fixes live in the daemon — not in `imc`. So a
-/// daemon older than the binary on disk is replaced instead of reused.
+/// The proxy keeps serving the code it was started with, and the
+/// request-path fixes live in the proxy — not in the CLI. So a server older
+/// than the binary on disk is replaced instead of reused.
 pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
     let exe = proxy_bin()?;
     if daemon_is_stale(cfg, &exe) {
@@ -266,19 +250,19 @@ pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
         .with_context(|| format!("create {}", log_dir.join("proxy.log").display()))?;
     let err = log.try_clone()?;
     let child = std::process::Command::new(&exe)
-        .args(["--port", &port.to_string()])
+        .args(["proxy", "serve", "--port", &port.to_string()])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
         .stderr(std::process::Stdio::from(err))
         .spawn()
-        .with_context(|| format!("spawn `{exe_disp} --port {port}`"))?;
+        .with_context(|| format!("spawn `{exe_disp} proxy serve --port {port}`"))?;
     let pid = child.id();
     let state = json!({
         "pid": pid,
         "port": port,
         "started_at": chrono_now(),
-        "daemon_path": exe_disp,
-        "daemon_mtime": file_mtime_secs(&exe),
+        "server_path": exe_disp,
+        "server_mtime": file_mtime_secs(&exe),
         "upstream": {
             "base_url": cfg.llm_base_url(),
             "model": cfg.llm_model(),
@@ -290,7 +274,7 @@ pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
     Ok(state)
 }
 
-/// True when a running daemon was started from an older build.
+/// True when the running proxy was started from an older build.
 fn daemon_is_stale(cfg: &Config, exe: &std::path::Path) -> bool {
     let Some(status) = proxy_status(cfg) else {
         return false;
@@ -304,7 +288,7 @@ fn daemon_is_stale(cfg: &Config, exe: &std::path::Path) -> bool {
     }
     let recorded = status
         .get("state")
-        .and_then(|s| s.get("daemon_mtime"))
+        .and_then(|s| s.get("server_mtime"))
         .and_then(|v| v.as_u64());
     let current = file_mtime_secs(exe);
     match (recorded, current) {
@@ -410,7 +394,9 @@ pub fn setup_and_start(
     let rule = write_imc_rule(root)?;
     log.push(format!("wrote {}", rule.display()));
 
-    // MCP discovery: .mcp.json lets any MCP client see the imc tools.
+    // MCP discovery: .mcp.json lets any MCP client see the imc tools. The
+    // running proxy serves the same server over HTTP at
+    // http://127.0.0.1:12345/mcp.
     let mcp = crate::mcp::install(root, None)?;
     log.push(format!(
         "wrote {} (MCP tools: search, ask, trace, read, context, memory_search, pack)",

@@ -40,7 +40,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 IMC = ROOT / "target" / "release" / "imc"
-PROXYD = ROOT / "target" / "release" / "imc-proxyd"
+PROXY = ROOT / "target" / "release" / "imc"
 
 PASS = []
 FAIL = []
@@ -728,8 +728,8 @@ def suite_config():
 
 # -- H. proxy lifecycle --------------------------------------------------------
 def suite_proxy(root, data):
-    if not PROXYD.exists():
-        skip("H1 proxy start/status/stop", f"{PROXYD.name} not built")
+    if not PROXY.exists():
+        skip("H1 proxy start/status/stop", f"{PROXY.name} not built")
         return
 
     def lifecycle():

@@ -12,6 +12,7 @@ members = [
     "crates/imc-cli-extra",
     "crates/imc-search",
     "crates/imc-cli",
+    "crates/imc-mcp",
     "crates/imc-proxy-types",
     "crates/imc-proxy-copilot",
     "crates/imc-proxy",

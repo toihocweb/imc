@@ -13,6 +13,7 @@ use futures::StreamExt;
 
 pub mod chat;
 pub use crate::compression;
+pub mod mcp;
 pub mod messages;
 pub mod models;
 pub mod system;
@@ -176,6 +177,7 @@ pub fn app(db_path: PathBuf) -> Router {
     Router::new()
         .merge(system::router())
         .merge(models::router())
+        .merge(mcp::router())
         .merge(messages::router())
         .merge(chat::router())
         .merge(crate::compression::router::router(db_path.clone()))

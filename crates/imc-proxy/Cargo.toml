@@ -4,12 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "imc-proxyd"
-path = "src/bin/imc_proxyd.rs"
 
 [dependencies]
 imc-proxy-types = { path = "../imc-proxy-types" }
+imc-mcp = { path = "../imc-mcp" }
 imc-proxy-copilot = { path = "../imc-proxy-copilot" }
 imc-core = { path = "../imc-core" }
 imc-search = { path = "../imc-search" }

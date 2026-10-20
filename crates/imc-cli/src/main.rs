@@ -752,7 +752,10 @@ fn main() -> Result<()> {
     cfg.ensure_dirs()?;
     // `imc index` decides its own root (see the Index arm), so it must not
     // print the "using the active project" notice.
-    let notify_active = !matches!(&cli.command, Command::Index { .. });
+    let notify_active = !matches!(
+        &cli.command,
+        Command::Index { .. } | Command::Proxy { .. }
+    );
     let root = resolve_root_with(&cfg, cli.root.clone(), true, notify_active)?;
 
     match &cli.command {
@@ -1464,12 +1467,11 @@ fn main() -> Result<()> {
         },
         Command::Proxy { action } => match action {
             ProxyAction::Serve { port } => {
-                let bin = imc_cli::claude::proxy_bin()?;
-                let status = std::process::Command::new(bin)
-                    .args(["--port", &port.to_string()])
-                    .status()?;
-                if !status.success() {
-                    std::process::exit(status.code().unwrap_or(1));
+                // The proxy runs in this process — there is no separate
+                // daemon binary any more.
+                if let Err(e) = imc_proxy::run(*port) {
+                    eprintln!("[imc proxy] {e:#}");
+                    std::process::exit(1);
                 }
             }
             ProxyAction::Status => {
@@ -1892,7 +1894,7 @@ saved to {}", st::path().display());
                     }
                     Err(e) => {
                         println!("proxy    → not started: {e}");
-                        println!("           build it with: cargo build --release --bin imc-proxyd");
+                        println!("           the proxy runs as `imc proxy serve` — nothing else to build");
                     }
                 }
                 wire_claude_to_proxy(&cfg, &root, proxy_port);
@@ -2063,7 +2065,12 @@ saved to {}", st::path().display());
     // Tell the user when a newer release exists. The check itself is cached
     // (<data dir>/update_check.json) and refreshed by a detached background
     // process, so the hot path is a file read, not a network call.
-    if !cli.json && !matches!(&cli.command, Command::Update { .. }) {
+    if !cli.json
+        && !matches!(
+            &cli.command,
+            Command::Update { .. } | Command::Proxy { .. }
+        )
+    {
         imc_cli::update::maybe_notify();
     }
     Ok(())
@@ -2092,7 +2099,10 @@ fn wire_claude_to_proxy(cfg: &Config, root: &Path, port: u16) {
         .unwrap_or(false);
     if !wired {
         match imc_cli::claude::write_claude_settings(root, port) {
-            Ok(p) => println!("wiring   → {} (Claude Code now goes through the proxy)", p.display()),
+            Ok(p) => {
+                println!("wiring   → {} (Claude Code now goes through the proxy)", p.display());
+                println!("           restart Claude Code for this to take effect");
+            }
             Err(e) => println!("wiring   → skipped: {e}"),
         }
     }

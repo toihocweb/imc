@@ -169,6 +169,7 @@ no shell quoting, no guessing flags.
 ```bash
 imc mcp install     # writes .mcp.json for this project
 imc mcp             # serve over stdio
+# or, with the proxy running: POST http://127.0.0.1:12345/mcp  (MCP over HTTP)
 ```
 
 Tools: `search`, `ask`, `trace`, `read`, `context`, `memory_search`, `pack`. Every call is
@@ -377,7 +378,7 @@ Per-project database: `$IMC_DATA_DIR/projects/<md5(path)[:16]>/index.db`.
 | `imc learn <file>` | Extract memories from a transcript or markdown file. |
 | `imc claude setup\|wire\|start\|stop\|status` | Claude Code integration. |
 | `imc proxy serve\|status\|stop` | The LLM proxy. |
-| `imc mcp [install]` | MCP server; `install` writes `.mcp.json` for the project. |
+| `imc mcp [install]` | MCP server; `install` writes `.mcp.json` for the project. The running proxy serves the same server over HTTP at `POST http://127.0.0.1:12345/mcp` (streamable HTTP) — add the `x-imc-root` header to pick the project. |
 | `imc capture status\|on\|off\|list\|show\|rm\|clear` | Capture the prompts the proxy sends upstream. |
 | `imc config get\|set\|list\|path\|test\|models\|migrate\|setup` | View and edit the configuration. |
 | `imc config model-map [set\|rm]` | Model mappings the proxy applies: the model a client asks for → the model the upstream serves. Also editable on the dashboard's **Model map** page. |
