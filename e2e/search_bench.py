@@ -103,7 +103,10 @@ def main():
 
     check_answers_exist(repo)
 
-    stats = json.loads(run(repo, ["--json", "stats"]))
+    # `stats` was folded into `list`: find the project row for this repo.
+    listing = json.loads(run(repo, ["--json", "list"]))
+    stats = next((p for p in listing if p.get("path") == str(repo)), {})
+    stats = {**stats, **(stats.get("counts") or {})}
     print(f"repo: {repo}")
     print(f"indexed: {stats.get('files')} files, {stats.get('symbols')} symbols, "
           f"{stats.get('chunks')} chunks, {stats.get('edges', '?')} edges")

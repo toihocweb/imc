@@ -136,3 +136,52 @@ were fixed.
   `context` and front-end linking; a unit test covers the decorator, the
   `methods` list, the tuple form and the default verb, and `/root/imc`'s 39
   FastAPI routes are still byte-identical to Python's list.
+
+## Proxy + context injection parity (re-checked)
+
+**HTTP surface — parity.** Python's proxy exposes exactly six routes
+(`main/proxy/routes/`): `/health`, `/v1/quota`, `/v1/models`,
+`/v1/hyperspace-models`, `/v1/chat/completions`, `/v1/messages`. The port
+serves the same six (`crates/imc-proxy/src/routes/{system,models,chat,messages}.rs`)
+plus three Rust-only compression routes (`/v1/compress`, `/v1/retrieve`,
+`/v1/stats`) — class B, not a divergence. The Copilot flow is ported as its own
+crate (`imc-proxy-copilot`), matching `main/proxy/services/copilot/`.
+
+**Context injection — parity.** Python's `main/proxy/lib/imc_memory.py`
+(1385 lines) ports to `crates/imc-proxy/src/imc_memory/lib.rs`. Every function
+Python actually *calls* has a Rust counterpart:
+
+| Python | Rust |
+|---|---|
+| `extract_workspace`, `get_system_text`, `get_conversation_user_query`, `get_last_user_text`, `get_all_session_text`, `extract_session_id` | same names |
+| `inject_memories_into_system` (prepends `<codebase-context>`) | same, idempotent (refuses a second block) |
+| `get_session_project` / `set_session_project` | same (session cache) |
+| `detect_project` / `detect_subagent_info` | same, 7 detection sources |
+| `apply_system_reminder_template` | same (prepend / override / no-op-when-disabled) |
+| `attach_memory_to_message` (migrates `cache_control`) | same |
+| `get_project_learned_memories` + `append_learned_memories_to_payload` | same, called from `routes/messages.rs:280` |
+| `process_tool_outcomes`, `process_user_correction` | same, called from `routes/messages.rs:268-269` |
+| `log_interaction_for_project` (writes `recent_interaction_logs.jsonl`) | same, called from `routes/messages.rs:884` |
+| `get_auto_learning_context` | same |
+| `is_main_request` | same — deliberately always `true` on both sides so injection does not depend on `cache_control` markers |
+
+**Three Python functions have no Rust twin — and they are dead code in Python
+too** (definition only, zero callers, checked with
+`grep -rn "<fn>(" main/`): `recall_memories`, `_reinforce_memories_async`,
+`bg_extract`. Not a regression; deliberately not ported.
+
+**One behavioural difference (D).** Python caches a project's memories keyed by
+the mtime of `memory_index/docstore.json` and drops the cache through
+`invalidate_memory_caches()` when the memory API mutates a memory. The port
+reads memories fresh from SQLite instead, so it can never serve stale
+injections; the cost is a read per request. `invalidate_memory_caches` has no
+Rust twin because the port ships no REST memory API.
+
+**The real gap is the API server, not the proxy.** Python's `main/api/routers/`
+exposes 115 REST routes (git 30, prompts 18, copilot 14, mcp 12, memory 12,
+indexing 7, jira 7, kb 6, system 6, projects 3). The port ships no FastAPI
+equivalent: agent access is provided by `imc mcp` (7 tools) and the web
+dashboard instead. Class D, deliberate, but it is the one area where the two
+implementations are not interchangeable.
+
+Proxy test suite: 133/0, of which 40 cover memory/injection behaviour.
