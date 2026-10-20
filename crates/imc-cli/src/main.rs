@@ -1619,20 +1619,17 @@ saved to {}", st::path().display());
                                     .or_else(|| v.get("name").and_then(|i| i.as_str()).map(str::to_string))
                                     .unwrap_or_default();
                                 let lower = id.to_lowercase();
-                                if lower.contains("embed")
+                                // Name only. The metadata a gateway returns is not
+                                // a reliable signal: this endpoint reports
+                                // `context: 0` and per-request-only pricing for
+                                // plenty of chat models (GLM-5.3, gemini-flash-high,
+                                // qwen-image-max, grok-voice), so pricing would put
+                                // ~90 chat models in the embedding list.
+                                lower.contains("embed")
                                     || lower.contains("bge-")
                                     || lower.contains("gte-")
                                     || lower.starts_with("e5-")
                                     || lower.contains("retrieval")
-                                {
-                                    return true;
-                                }
-                                match v.get("pricing") {
-                                    Some(p) if p.is_object() => {
-                                        p.get("completion").is_none() && p.get("output").is_none()
-                                    }
-                                    _ => false,
-                                }
                             };
                             let mut chat: Vec<String> = Vec::new();
                             let mut embedding: Vec<String> = Vec::new();

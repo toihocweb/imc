@@ -273,7 +273,10 @@ export async function configTest(): Promise<string> {
 
 export interface ModelList {
   url: string;
+  /** Chat models (the default selection of `imc config models`). */
   models: string[];
+  chat_models?: string[];
+  embedding_models?: string[];
 }
 
 /**
@@ -282,5 +285,10 @@ export interface ModelList {
  */
 export async function fetchModels(): Promise<ModelList> {
   const raw = JSON.parse(await runImc(["--json", "config", "models"]));
-  return { url: raw.url || "", models: Array.isArray(raw.models) ? raw.models : [] };
+  return {
+    url: raw.url || "",
+    models: Array.isArray(raw.models) ? raw.models : [],
+    chat_models: Array.isArray(raw.chat_models) ? raw.chat_models : undefined,
+    embedding_models: Array.isArray(raw.embedding_models) ? raw.embedding_models : undefined,
+  };
 }

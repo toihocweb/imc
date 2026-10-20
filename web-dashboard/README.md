@@ -16,7 +16,7 @@ Built with Next.js 16 (App Router) + shadcn/ui components (hand-written, no CLI)
 | `/trace` | Call-hierarchy tracer: callees / callers / both, rendered as an indented tree |
 | `/memory` | List and add project memories (category, work-memory type, scene) |
 | `/compression` | CCR totals, recent records with savings %, and an interactive compress box |
-| `/settings` | LLM endpoint / API key / model / embedding model, with a live status card and a "Save & test" probe |
+| `/settings` | LLM endpoint / API key / model, with a live status card and a "Save & test" probe. The model is picked from the endpoint's own list (searchable dropdown); the embedding model is fixed and shown read-only. |
 | `/captures` | Toggle prompt capture, browse the captured payloads and read them in full |
 
 ## API routes

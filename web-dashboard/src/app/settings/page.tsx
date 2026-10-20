@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { Combobox } from "@/components/ui/combobox";
 
 interface ConfigStatus {
   base_url: string;
@@ -23,7 +23,6 @@ export default function SettingsPage() {
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [embeddingModel, setEmbeddingModel] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -44,7 +43,6 @@ export default function SettingsPage() {
       setStatus(d as ConfigStatus);
       setBaseUrl(d.base_url || "");
       setModel(d.model || "");
-      setEmbeddingModel(d.embedding_model || "");
     } catch (e: any) {
       setError(e.message);
     }
@@ -100,7 +98,6 @@ export default function SettingsPage() {
         body: JSON.stringify({
           base_url: baseUrl,
           model,
-          embedding_model: embeddingModel,
           api_key: apiKey || undefined,
           test: withTest,
         }),
@@ -116,7 +113,6 @@ export default function SettingsPage() {
         setStatus(d.status);
         setBaseUrl(d.status.base_url || "");
         setModel(d.status.model || "");
-        setEmbeddingModel(d.status.embedding_model || "");
       }
     } catch (e: any) {
       setError(e.message);
@@ -197,17 +193,18 @@ export default function SettingsPage() {
                 {fetchingModels ? "Fetching..." : "Fetch models"}
               </Button>
             </div>
-            <Input
+            <Combobox
+              id="imc-model"
               value={model}
-              onChange={(e) => setModel(e.target.value)}
+              onChange={setModel}
+              options={models}
               placeholder="claude-haiku-4.5"
-              list="imc-model-list"
+              emptyLabel={
+                models.length === 0
+                  ? "Chưa có danh sách — bấm Fetch models"
+                  : "Không có model khớp"
+              }
             />
-            <datalist id="imc-model-list">
-              {models.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
             <p className="text-xs text-muted-foreground">
               {models.length > 0 ? (
                 <>
@@ -220,20 +217,6 @@ export default function SettingsPage() {
                   lỗi 404 &quot;model is not available&quot;.
                 </>
               )}
-            </p>
-          </div>
-
-          <Separator />
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Embedding model</label>
-            <Input
-              value={embeddingModel}
-              onChange={(e) => setEmbeddingModel(e.target.value)}
-              placeholder="text-embedding-3-small"
-            />
-            <p className="text-xs text-muted-foreground">
-              Dùng cho chân vector của search. Đổi model này cần index lại (`imc . --force`).
             </p>
           </div>
 
@@ -288,7 +271,10 @@ export default function SettingsPage() {
           </div>
           <div className="flex justify-between gap-4">
             <span className="text-muted-foreground">Embedding model</span>
-            <span className="font-mono text-xs text-right">{status?.embedding_model || "—"}</span>
+            <span className="font-mono text-xs text-right">
+              {status?.embedding_model || "text-embedding-3-small"}
+              <span className="ml-2 text-[10px] uppercase text-muted-foreground">fixed</span>
+            </span>
           </div>
           <div className="flex justify-between gap-4">
             <span className="text-muted-foreground">Ready for LLM answers</span>
