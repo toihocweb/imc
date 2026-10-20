@@ -65,9 +65,10 @@ enum Command {
         /// When search returns no hits, automatically record the query as a
         /// project memory (work_fact / search_fail) so the next agentic pass
         /// can surface it. Follow up with `imc memory-add` to refine the rule.
-        #[arg(long)]
-        on_miss: bool,
-    },
+        /// Use --no-on-miss to disable.
+        #[arg(long = "no-on-miss")]
+        no_on_miss: bool,
+        },
     /// Show definitions/callees/callers for a symbol.
     Graph { symbol: String },
     /// Compress text using the proxy compression engine (BM25/graph/CCR).
@@ -668,7 +669,7 @@ fn main() -> Result<()> {
             no_vector,
             raw,
             project,
-            on_miss,
+            no_on_miss,
         } => {
             let root = root_with_project_ref(&cfg, &root, project.as_deref())?;
             let db = cfg.project_db(&root);
@@ -704,7 +705,7 @@ fn main() -> Result<()> {
             } else if hits.is_empty() {
                 // Python prints this (and skips the LLM) when retrieval is empty.
                 println!("No results found.");
-                if *on_miss {
+                if !*no_on_miss {
                     // Auto-record the failed query as a project memory so the
                     // next agentic pass can surface it. The user should follow
                     // up with `imc memory-add` to refine the rule.

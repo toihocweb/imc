@@ -164,6 +164,23 @@ git_diff (real commit)             9253 -> 8852 tokens    4.3%    489/489 change
 A real diff is mostly changed lines. Anything much above ~5% there would mean
 dropping the answer, so the number is low on purpose.
 
+## Web dashboard
+
+A shadcn/ui dashboard lives in `web-dashboard/` and exposes the CLI over HTTP:
+project overview, hybrid search, call-graph tracing, memories, and CCR statistics.
+
+```bash
+cd web-dashboard
+npm install
+npm run dev                     # http://localhost:3000
+# or against a system-wide binary
+IMC_BIN=$(command -v imc) npm run build && IMC_BIN=$(command -v imc) npm run start -- -p 4789
+```
+
+Pages: `/` overview, `/projects`, `/projects/[id]` (search + trace + memory tabs),
+`/search`, `/trace`, `/memory`, `/compression`. See `web-dashboard/README.md` for the
+API surface.
+
 ## Config
 
 `~/.imc_config.yaml` (`IMC_CONFIG` overrides the path; `imc config migrate` copies
