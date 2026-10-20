@@ -20,6 +20,7 @@ pub fn tools() -> Vec<Value> {
                 "properties": {
                     "query": {"type": "string", "description": "Search query (3-7 words)"},
                     "limit": {"type": "number", "description": "Max hits, default 10"},
+                    "offset": {"type": "number", "description": "Skip this many hits to page through a result set"},
                     "no_vector": {"type": "boolean", "description": "Disable the vector leg (BM25 + graph only)"}
                 },
                 "required": ["query"]
@@ -115,6 +116,7 @@ fn build_argv(name: &str, a: &Value) -> Result<Vec<String>> {
             v.push(req_str(a, "query")?);
             v.push("--json".into());
             push_num(&mut v, a, "limit", "-l");
+            push_num(&mut v, a, "offset", "--offset");
             if opt_bool(a, "no_vector") {
                 v.push("--no-vector".into());
             }
@@ -236,6 +238,26 @@ pub fn initialize(params: Option<&Value>) -> Value {
     })
 }
 
+
+/// A truncated result set must say so, otherwise the agent reads "10 hits"
+/// as "there are 10 hits" and stops looking.
+fn steer_note(name: &str, args: &Value, text: &str) -> Option<String> {
+    if name != "search" {
+        return None;
+    }
+    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
+    let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let parsed: Value = serde_json::from_str(text).ok()?;
+    let arr = parsed.as_array()?;
+    if arr.len() < limit {
+        return None;
+    }
+    Some(format!(
+        "_[more matches may exist: narrow the query, or page with `offset` (next page starts at {})]_",
+        offset + arr.len()
+    ))
+}
+
 /// `tools/call` always answers with a content array, even on failure, so the
 /// client sees the error text instead of a transport error.
 pub fn call_tool(root: &Path, params: Option<&Value>) -> Value {
@@ -259,10 +281,18 @@ pub fn call_tool(root: &Path, params: Option<&Value>) -> Value {
     };
 
     match run_imc(root, &argv) {
-        Ok(text) => json!({
-            "content": [{"type": "text", "text": text}],
-            "isError": false
-        }),
+        Ok(text) => {
+            // The steer note goes into its own content block: the first block
+            // stays pure JSON for anything that parses it.
+            let mut content = vec![json!({"type": "text", "text": text})];
+            if let Some(note) = steer_note(name, &args, &text) {
+                content.push(json!({"type": "text", "text": note}));
+            }
+            json!({
+                "content": content,
+                "isError": false
+            })
+        }
         Err(e) => json!({
             "content": [{"type": "text", "text": format!("{e:#}")}],
             "isError": true

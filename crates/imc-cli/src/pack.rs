@@ -23,7 +23,37 @@ use imc_core::types::SearchHit;
 /// facts are cheap but high-value, so they are reserved up front rather than
 /// competing with code for the same space.
 const MEMORY_SHARE: f64 = 0.15;
+/// A hit below this fraction of the best hit's score is not worth the budget.
+const RELEVANCE_FLOOR_RATIO: f64 = 0.25;
 const GRAPH_SHARE: f64 = 0.10;
+
+/// Two items are near-duplicates above this Jaccard similarity of their
+/// token sets. Retrieval returns the same code under several queries (a
+/// function and the docstring chunk that mentions it), and a bundle that
+/// repeats itself spends the budget twice.
+const NEAR_DUP_JACCARD: f64 = 0.75;
+
+/// Jaccard similarity over lowercase word tokens.
+fn jaccard(a: &str, b: &str) -> f64 {
+    let tokens = |s: &str| -> std::collections::HashSet<String> {
+        s.split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_lowercase())
+            .collect()
+    };
+    let ta = tokens(a);
+    let tb = tokens(b);
+    if ta.is_empty() || tb.is_empty() {
+        return 0.0;
+    }
+    let inter = ta.intersection(&tb).count() as f64;
+    let union = ta.union(&tb).count() as f64;
+    if union == 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
+}
 
 /// A packed item, ready to render.
 #[derive(Debug, Clone)]
@@ -157,11 +187,23 @@ pub fn build(
         None => None,
     };
 
+    // Relevance floor: a bundle padded with weak matches makes the agent
+    // read noise. The threshold is relative to the best hit, so it adapts to
+    // the query instead of depending on the absolute score scale.
+    let top_score = hits.first().map(|h| h.score).unwrap_or(0.0);
+    let floor = top_score * RELEVANCE_FLOOR_RATIO;
+
+    let mut kept_texts: Vec<String> = Vec::new();
     for (rank, hit) in hits.iter().enumerate() {
+        if rank > 0 && hit.score < floor {
+            truncated = true;
+            continue;
+        }
         let mut text = hit.snippet.clone();
         if text.trim().is_empty() {
             text = hit.text.clone();
         }
+
 
         // Compress each candidate on its own so the budget is spent on
         // information, not on repeated boilerplate inside one snippet.
@@ -182,6 +224,15 @@ pub fn build(
             }
         }
 
+        // Cross-source dedup, after compression: the same code can arrive as
+        // a symbol chunk and as a mention chunk, and compression can make two
+        // different chunks read the same — so the comparison has to happen on
+        // the text that is actually shipped.
+        if kept_texts.iter().any(|t| jaccard(t, &text) >= NEAR_DUP_JACCARD) {
+            continue;
+        }
+        kept_texts.push(text.clone());
+
         let mut tokens = imc_proxy::compression::estimate_tokens(&text);
 
         // Graph facts: what this symbol calls and who calls it. Half the value
@@ -199,27 +250,26 @@ pub fn build(
                 );
                 let callers = store.callers(name);
                 let mut parts: Vec<String> = Vec::new();
+                // The same name can appear several times (a symbol calling
+                // itself, an overload): "calls cb, cb, cb, cb" is noise.
+                let unique = |names: Vec<String>| -> Vec<String> {
+                    let mut out: Vec<String> = Vec::new();
+                    for n in names {
+                        if !out.contains(&n) {
+                            out.push(n);
+                        }
+                    }
+                    out
+                };
                 if !callees.is_empty() {
-                    parts.push(format!(
-                        "calls {}",
-                        callees
-                            .iter()
-                            .take(opts.graph_facts)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
+                    let mut names = unique(callees.clone());
+                    names.truncate(opts.graph_facts);
+                    parts.push(format!("calls {}", names.join(", ")));
                 }
                 if !callers.is_empty() {
-                    parts.push(format!(
-                        "called by {}",
-                        callers
-                            .iter()
-                            .take(opts.graph_facts)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
+                    let mut names = unique(callers.clone());
+                    names.truncate(opts.graph_facts);
+                    parts.push(format!("called by {}", names.join(", ")));
                 }
                 if !parts.is_empty() {
                     let note = format!("graph: {}", parts.join(" | "));

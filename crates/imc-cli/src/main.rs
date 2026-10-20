@@ -86,6 +86,10 @@ enum Command {
         /// Disable the vector leg (BM25 + graph only).
         #[arg(long)]
         no_vector: bool,
+        /// Skip this many hits — page through a result set deliberately
+        /// instead of re-running a broad query.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
         /// Raw hits only: skip the LLM answer (Python's `-r/--raw`).
         #[arg(long, short = 'r')]
         raw: bool,
@@ -843,6 +847,7 @@ fn main() -> Result<()> {
             query,
             limit,
             no_vector,
+            offset,
             raw,
             project,
             no_on_miss,
@@ -867,16 +872,29 @@ fn main() -> Result<()> {
                 limit.map(|v| v as i64),
             )
             .clamp(1, 20) as usize;
+            let want = effective.clamp(1, 50);
+            // One extra hit tells us whether there is more, so the output can
+            // steer the caller instead of silently slicing the result set.
             let opts = imc_search::SearchOptions {
-                limit: effective.clamp(1, 50),
+                limit: want + offset + 1,
                 vector: !*no_vector,
             };
-            let hits = imc_search::search(&store, embedder.as_deref(), &search_query, &opts)?;
+            let mut hits = imc_search::search(&store, embedder.as_deref(), &search_query, &opts)?;
+            let has_more = hits.len() > want + offset;
+            hits.truncate(want + offset);
+            let skipped = (*offset).min(hits.len());
+            hits.drain(0..skipped);
             if cli.json || *raw {
                 if cli.json {
                     println!("{}", serde_json::to_string_pretty(&hits)?);
                 } else {
                     print_hits(&hits, query);
+                    if has_more {
+                        println!(
+                            "\nmore matches exist — narrow the query, or page with --offset {}",
+                            skipped + hits.len()
+                        );
+                    }
                 }
             } else if hits.is_empty() {
                 // Python prints this (and skips the LLM) when retrieval is empty.
