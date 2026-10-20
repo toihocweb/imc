@@ -1192,6 +1192,38 @@ def suite_mcp(root, data):
 
         check("N8 mcp resources/read answers with the content", read_resource)
 
+        def server_instructions():
+            r = rpc("initialize", {"protocolVersion": "2025-06-18"}, 10)
+            instr = r["result"].get("instructions")
+            assert isinstance(instr, str) and len(instr) > 100, r["result"]
+            # The first 512 characters have to stand on their own.
+            head = instr[:512]
+            assert "search" in head.lower(), head
+            return f"{len(instr)} chars of instructions"
+
+        check("N9 mcp initialize carries server instructions", server_instructions)
+
+        def tool_annotations():
+            r = rpc("tools/list", None, 11)
+            for t in r["result"]["tools"]:
+                ann = t.get("annotations")
+                assert ann, f"{t['name']} has no annotations"
+                assert ann.get("readOnlyHint") is True, t["name"]
+                assert ann.get("destructiveHint") is False, t["name"]
+            return f"{len(r['result']['tools'])} tools annotated read-only"
+
+        check("N10 mcp tools declare read-only annotations", tool_annotations)
+
+        def structured_content():
+            r = rpc("tools/call",
+                    {"name": "search", "arguments": {"query": "invoice tax", "limit": 3}}, 12)
+            sc = r["result"].get("structuredContent")
+            assert isinstance(sc, list) and sc, r["result"]
+            assert "file" in sc[0], sc[0]
+            return f"structuredContent with {len(sc)} hits"
+
+        check("N11 mcp tools/call returns structuredContent", structured_content)
+
         def bad_tool():
             r = rpc("tools/call", {"name": "nope", "arguments": {}}, 4)
             assert r["result"]["isError"] is True, r

@@ -10,8 +10,34 @@ use std::env;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+/// Server-level instructions, returned by `initialize`.
+///
+/// The first 512 characters have to stand on their own: some clients show only
+/// that much. The cross-cutting rules live here, not only in
+/// `docs/imc-rule.md`, which an MCP client never reads.
+const INSTRUCTIONS: &str = "\
+imc searches and explains an indexed codebase. Order: search for the chunks, \
+read or context for the file around them, trace for the call graph, pack when \
+you need a whole bundle under a token budget. Search output is evidence, not \
+proof — check the cited path:line before trusting it. A miss means the index \
+does not hold it, not that the code does not exist. Always read the top 5 \
+hits, never stop at hit 1. The index holds one project; the root is pinned by \
+the client. Read-only tools: search, ask, trace, read, context, \
+memory_search, pack.";
+
+/// Annotations for a read-only tool: the client may auto-approve it and retry
+/// it without asking the user.
+fn read_only() -> Value {
+    json!({
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+    })
+}
+
 pub fn tools() -> Vec<Value> {
-    vec![
+    let mut list = vec![
         json!({
             "name": "search",
             "description": "Hybrid search over the project index (BM25 + graph + vector). Returns ranked hits with file, line range, score, symbol and source.",
@@ -21,6 +47,7 @@ pub fn tools() -> Vec<Value> {
                     "query": {"type": "string", "description": "Search query (3-7 words)"},
                     "limit": {"type": "number", "description": "Max hits, default 10"},
                     "offset": {"type": "number", "description": "Skip this many hits to page through a result set"},
+                    "response_format": {"type": "string", "enum": ["detailed", "concise"], "description": "concise: one line per hit (location, symbol, score). detailed (default): the full hits."},
                     "no_vector": {"type": "boolean", "description": "Disable the vector leg (BM25 + graph only)"}
                 },
                 "required": ["query"]
@@ -104,7 +131,12 @@ pub fn tools() -> Vec<Value> {
                 "required": ["query"]
             }
         }),
-    ]
+    ];
+    // Every tool here only reads the index.
+    for t in list.iter_mut() {
+        t["annotations"] = read_only();
+    }
+    list
 }
 
 /// MCP server loop. Blocks until stdin closes.
@@ -114,7 +146,15 @@ fn build_argv(name: &str, a: &Value) -> Result<Vec<String>> {
         "search" => {
             v.push("search".into());
             v.push(req_str(a, "query")?);
-            v.push("--json".into());
+            // `concise` returns one line per hit instead of the full chunks —
+            // the agent can read the file for the rest. The default stays the
+            // JSON array, which carries the snippets.
+            if opt_str(a, "response_format").as_deref() == Some("concise") {
+                v.push("--raw".into());
+                v.push("--concise".into());
+            } else {
+                v.push("--json".into());
+            }
             push_num(&mut v, a, "limit", "-l");
             push_num(&mut v, a, "offset", "--offset");
             if opt_bool(a, "no_vector") {
@@ -237,7 +277,8 @@ pub fn initialize(params: Option<&Value>) -> Value {
             "tools": { "listChanged": false },
             "resources": { "listChanged": false }
         },
-        "serverInfo": { "name": "imc", "version": env!("CARGO_PKG_VERSION") }
+        "serverInfo": { "name": "imc", "version": env!("CARGO_PKG_VERSION") },
+        "instructions": INSTRUCTIONS
     })
 }
 
@@ -291,10 +332,17 @@ pub fn call_tool(root: &Path, params: Option<&Value>) -> Value {
             if let Some(note) = steer_note(name, &args, &text) {
                 content.push(json!({"type": "text", "text": note}));
             }
-            json!({
+            // The same value, structured: a client that understands
+            // `structuredContent` does not have to parse a JSON string out of
+            // a text block.
+            let mut result = json!({
                 "content": content,
                 "isError": false
-            })
+            });
+            if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                result["structuredContent"] = value;
+            }
+            result
         }
         Err(e) => json!({
             "content": [{"type": "text", "text": format!("{e:#}")}],

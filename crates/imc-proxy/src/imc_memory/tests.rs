@@ -605,7 +605,7 @@ fn memory_lands_in_the_last_genuine_user_turn() {
     let idx = find_last_genuine_user_index(&messages);
     assert_eq!(idx, Some(2), "the last genuine user turn");
 
-    // The earlier turn is untouched.
+    // The helper only touches its target.
     let mut payload = payload_with("sys", messages.clone());
     let before = payload.messages[0].clone();
     let memory_text = build_memory_block("a fact");
@@ -614,7 +614,7 @@ fn memory_lands_in_the_last_genuine_user_turn() {
     assert_eq!(
         format!("{before:?}"),
         format!("{after:?}"),
-        "the first turn must not change"
+        "the helper must not touch the other turns"
     );
 
     // The block is in the last turn.

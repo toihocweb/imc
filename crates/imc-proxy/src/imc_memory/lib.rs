@@ -1546,14 +1546,40 @@ pub fn append_learned_memories_to_payload(
         session_id = Some(format!("fallback_{hex}"));
     }
 
-    // The block goes into the most recent genuine user turn. The earlier
-    // turns are left alone on purpose: rewriting them would change the cached
-    // prompt prefix whenever the memory set changes.
+    // The block goes into the most recent genuine user turn — the same turn
+    // Python picks (it scans the messages backwards), and the turn where the
+    // model resumes, so the memory sits next to the query.
     let target_idx = find_last_genuine_user_index(&payload.messages)
         .or_else(|| find_user_query_message_index(&payload.messages));
     let memory_session_key = session_id
         .as_ref()
         .map(|s| (s.clone(), project_id.to_string()));
+
+    // Step 1: re-hydrate the earlier turns of this session. The client resends
+    // the whole conversation every time, so a turn that carried a memory block
+    // must still carry the same bytes — otherwise the cached prompt prefix
+    // changes and the cache is lost from that point on. The text comes from
+    // the session's turn map, so it is byte-identical to what was cached.
+    if let Some(key) = &memory_session_key {
+        let turns = session_turn_memories()
+            .lock()
+            .ok()
+            .and_then(|m| m.get(key).cloned())
+            .unwrap_or_default();
+        if !turns.is_empty() {
+            for (idx, msg) in payload.messages.iter_mut().enumerate() {
+                if Some(idx) == target_idx {
+                    continue;
+                }
+                let past = extract_clean_user_prompt(msg);
+                if !past.is_empty() {
+                    if let Some(text) = turns.get(&past) {
+                        attach_memory_to_message(msg, text);
+                    }
+                }
+            }
+        }
+    }
 
     // Step 2: per-(session, project, query) cache, so repeated tool-call steps
     // do not re-run retrieval or inject twice.

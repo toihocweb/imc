@@ -290,19 +290,23 @@ decay is a bias, never a filter. Business rules and working methods are
 exempt — a decision does not expire. Two tests in
 `crates/imc-memory/tests/memory_retrieval.rs` cover both.
 
-## Working-memory injection point (class B — deliberate divergence)
+## Working-memory injection point (fixed — the port was wrong)
 
-Python's proxy injects the working memory into the first user turn and
-re-hydrates it into every past turn, so the prompt prefix stays byte-stable
-for Anthropic's prompt cache. That is a history edit: any change to the
-memory set rewrites the whole conversation, and the block sits where the
-model attends least ("lost in the middle").
+The port picked the **first** user turn; Python picks the **last** one
+(`main/proxy/lib/imc_memory.py:953` scans `reversed(messages)`). So the
+memory block was written into the oldest turn of the conversation while the
+query sat at the other end — the worst zone for attention ("lost in the
+middle", arXiv 2307.03172: 75.8% at the start, 53.8% in the middle) — and the
+port also re-hydrated the block into the past turns, which Python does as
+well.
 
-The port injects into the most recent genuine user turn — a turn with real
-text, not only tool results — and leaves the earlier turns byte-identical.
-The per-(session, project, query) cache keeps the block byte-identical
-between turns, so the cached prefix survives. Covered by
-`crates/imc-proxy/src/imc_memory/tests.rs`.
+Now both pick the most recent genuine user turn (a turn with real text, not
+only tool results), and the re-hydration of the earlier turns is back: the
+client resends the whole conversation every time, so a turn that carried a
+block must carry the same bytes or the cached prefix changes. The
+per-(session, project, query) cache keeps the block byte-identical between
+turns. Covered by `crates/imc-proxy/src/imc_memory/tests.rs` and
+`e2e/injection_e2e.py`.
 
 ## `imc pack` (superset)
 
