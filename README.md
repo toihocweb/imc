@@ -72,6 +72,8 @@ imc context main/api/routers/git.py
 | `imc pack "<query>" [--budget N] [--candidates N] [--no-vector] [--no-memories] [--graph N]` | Assemble an agent's context: retrieval + graph neighbourhood + project memories, compressed to a token budget; shortened items carry an `imc retrieve <id>` handle. |
 | `imc compress [--text T] [--raw] [--store]` | Compress content by detected kind. Reads stdin when `--text` is absent. `--raw` prints the compressed text only; `--store` keeps the original and prints its id. |
 | `imc retrieve <id> [--compressed]` | Print the original behind a compression handle (`--compressed` for the short form). |
+| `imc mcp` | MCP stdio server: exposes `search`, `ask`, `trace`, `read`, `context`, `memory_search`, `pack` to any MCP client. |
+| `imc mcp install [--config PATH]` | Write `<root>/.mcp.json` so the project's MCP client discovers the imc tools (pinned to that root). |
 | `imc web [--port N] [--no-open] [--url URL]` | Open the web dashboard, starting it first (systemd unit, then detached `next start`). `--url` for a remote host, or set `IMC_WEB_URL`. |
 
 Global flags: `-C/--root <dir>` (defaults to the active project) and `--json`
@@ -164,6 +166,23 @@ git_diff (real commit)             9253 -> 8852 tokens    4.3%    489/489 change
 
 A real diff is mostly changed lines. Anything much above ~5% there would mean
 dropping the answer, so the number is low on purpose.
+
+## MCP server
+
+`imc mcp` speaks MCP (JSON-RPC 2.0 over stdio), so agents call imc through a real
+tool schema instead of guessing CLI flags:
+
+```bash
+imc mcp install     # writes <root>/.mcp.json (merged, existing servers preserved)
+imc mcp             # serve on stdio; clients spawn this themselves
+```
+
+Tools: `search`, `ask`, `trace`, `read`, `context`, `memory_search`, `pack`.
+Each one delegates to `imc -C <root> <verb> --json`, so the root is pinned and a
+call can never answer for whatever project happens to be globally active.
+
+`imc claude setup` writes `.mcp.json` too, so a Claude Code session in that
+project sees the tools without further wiring.
 
 ## Web dashboard
 

@@ -35,6 +35,17 @@ struct Cli {
     command: Command,
 }
 
+/// Subcommands of `imc mcp`. Bare `imc mcp` serves over stdio.
+#[derive(Subcommand, Debug)]
+enum McpAction {
+    /// Register this project so MCP clients discover the imc tools (.mcp.json).
+    Install {
+        /// Config file to write (defaults to <root>/.mcp.json).
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+}
+
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Index a project (incremental).
@@ -233,6 +244,12 @@ enum Command {
     },
     /// Diagnose environment, config, proxy, and project state; print fix commands.
     Doctor,
+    /// MCP server (stdio) exposing imc tools to any MCP client.
+    #[command(name = "mcp")]
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpAction>,
+    },
     /// Open the web dashboard, starting it first if it is not running.
     #[command(name = "web")]
     Web {
@@ -1533,6 +1550,14 @@ saved to {}", st::path().display());
         Command::Doctor => {
             imc_cli::doctor::run_doctor(&cfg, &root)?;
         }
+        Command::Mcp { action } => match action {
+            None => imc_cli::mcp::serve(&root)?,
+            Some(McpAction::Install { config }) => {
+                let path = imc_cli::mcp::install(&root, config.clone())?;
+                println!("wrote {}", path.display());
+                println!("MCP client will discover: search, ask, trace, read, context, memory_search, pack");
+            }
+        },
         Command::Web { port, no_open, url } => {
             imc_cli::web::run(*port, *no_open, url.clone())?;
         }

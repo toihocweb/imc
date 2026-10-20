@@ -21,6 +21,11 @@ callers, or trace HTTP routes.
 - `imc trace "<GET /api/path>"` — HTTP route → backend handler.
 - `imc graph <symbol>` — definition site and kind.
 - `imc memory-search "<topic>"` — conventions/decisions recorded for this repo.
+
+If MCP tools are available (`mcp__imc__search`, `mcp__imc__trace`, `mcp__imc__read`,
+`mcp__imc__context`, `mcp__imc__memory_search`, `mcp__imc__pack`), prefer them over
+shelling out: they carry the schema, the arguments are validated, and the project
+root is pinned. Fall back to the CLI (`imc ...`) when MCP is not wired.
 - `imc search "<q>" --on-miss` — if search returns nothing, the query is saved
   to memory so the next agentic pass can surface it.
 - `imc trace "<symbol>" --callers` — if blast radius is large, a business_rule

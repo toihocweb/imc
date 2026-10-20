@@ -1111,6 +1111,99 @@ def suite_agentic():
     return root, data
 
 
+# -- N. MCP server -----------------------------------------------------------
+def suite_mcp(root, data):
+    """Drive `imc mcp` over stdio: initialize, tools/list, tools/call, errors."""
+    import json as _json
+    import subprocess as _sp
+
+    env = imc_env(data, False)
+    proc = _sp.Popen(
+        [str(IMC), "-C", str(root), "mcp"],
+        stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.PIPE,
+        text=True, bufsize=1, env=env,
+    )
+
+    def rpc(method, params=None, rid=None, notify=False):
+        msg = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            msg["params"] = params
+        if not notify:
+            msg["id"] = rid
+        proc.stdin.write(_json.dumps(msg) + "\n")
+        proc.stdin.flush()
+        if notify:
+            return None
+        line = proc.stdout.readline()
+        if not line.strip():
+            raise AssertionError(f"no response to {method}")
+        return _json.loads(line)
+
+    try:
+        def handshake():
+            r = rpc("initialize", {"protocolVersion": "2024-11-05",
+                                   "capabilities": {},
+                                   "clientInfo": {"name": "e2e", "version": "1"}}, 1)
+            info = r["result"]["serverInfo"]
+            assert info["name"] == "imc", info
+            assert "tools" in r["result"]["capabilities"], r
+            return f"serverInfo={info['name']} {info['version']}"
+
+        check("N1 mcp initialize handshake", handshake)
+
+        def list_tools():
+            r = rpc("tools/list", None, 2)
+            names = [t["name"] for t in r["result"]["tools"]]
+            for want in ("search", "ask", "trace", "read", "context",
+                         "memory_search", "pack"):
+                assert want in names, f"{want} missing from {names}"
+            return f"{len(names)} tools advertised"
+
+        check("N2 mcp tools/list exposes the core verbs", list_tools)
+
+        def call_search():
+            r = rpc("tools/call",
+                    {"name": "search", "arguments": {"query": "invoice tax", "limit": 3}}, 3)
+            assert r["result"]["isError"] is False, r
+            hits = _json.loads(r["result"]["content"][0]["text"])
+            assert isinstance(hits, list) and hits, hits
+            assert "file" in hits[0] and "score" in hits[0], hits[0]
+            return f"{len(hits)} hits via MCP"
+
+        check("N3 mcp tools/call search returns hits", call_search)
+
+        def bad_tool():
+            r = rpc("tools/call", {"name": "nope", "arguments": {}}, 4)
+            assert r["result"]["isError"] is True, r
+            return "unknown tool reports isError"
+
+        check("N4 mcp unknown tool is an error result", bad_tool)
+
+        def bad_method():
+            r = rpc("bogus/method", None, 5)
+            assert r["error"]["code"] == -32601, r
+            return "unknown method -> -32601"
+
+        check("N5 mcp unknown method -> JSON-RPC error", bad_method)
+
+        def install():
+            r = run_imc(["mcp", "install"], root, data, False)
+            cfg = root / ".mcp.json"
+            assert cfg.is_file(), r.stdout + r.stderr
+            doc = _json.loads(cfg.read_text())
+            args = doc["mcpServers"]["imc"]["args"]
+            assert "mcp" in args and str(root) in args, args
+            return "wrote .mcp.json with pinned root"
+
+        check("N6 mcp install writes .mcp.json", install)
+    finally:
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        proc.wait(timeout=10)
+
+
 # -- main ----------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
@@ -1168,6 +1261,8 @@ def main():
 
     print("\nM. web dashboard")
     suite_web(root, data)
+    print("\nN. MCP server")
+    suite_mcp(root, data)
 
     total = len(PASS) + len(FAIL)
     print("\n" + "=" * 64)

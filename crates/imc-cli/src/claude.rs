@@ -100,6 +100,11 @@ callers, or trace HTTP routes.
 - `imc graph <symbol>` — definition site and kind.
 - `imc memory-search "<topic>"` — conventions/decisions recorded for this repo.
 
+If MCP tools are available (`mcp__imc__search`, `mcp__imc__trace`, `mcp__imc__read`,
+`mcp__imc__context`, `mcp__imc__memory_search`, `mcp__imc__pack`), prefer them over
+shelling out: they carry the schema, the arguments are validated, and the project
+root is pinned. Fall back to the CLI (`imc ...`) when MCP is not wired.
+
 ## Rules
 
 1. **Search before you edit.** Never invent an API, path, or line number.
@@ -336,6 +341,13 @@ pub fn setup_and_start(
     ));
     let rule = write_imc_rule(root)?;
     log.push(format!("wrote {}", rule.display()));
+
+    // MCP discovery: .mcp.json lets any MCP client see the imc tools.
+    let mcp = crate::mcp::install(root, None)?;
+    log.push(format!(
+        "wrote {} (MCP tools: search, ask, trace, read, context, memory_search, pack)",
+        mcp.display()
+    ));
 
     // 4. Proxy.
     let key = cfg.llm_api_key();
