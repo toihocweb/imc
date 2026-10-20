@@ -55,8 +55,16 @@ From source — install it globally so `imc` works from any directory:
 ```bash
 git clone https://github.com/toihocweb/imc.git
 cd imc
-cargo install --path crates/imc-cli --locked   # → ~/.cargo/bin/imc
+cargo install --path crates/imc-cli --locked --no-strip   # → ~/.cargo/bin/imc
 imc --help
+```
+
+On macOS, `--no-strip` matters: `cargo install` strips the binary, which
+invalidates its code signature, and the kernel then kills it on launch
+(zsh prints `killed` with no message). If that happens:
+
+```bash
+codesign --force --sign - "$(which imc)"
 ```
 
 Or build in place and copy the binary (plus the dashboard app) onto your PATH:

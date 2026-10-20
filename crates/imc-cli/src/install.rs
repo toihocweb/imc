@@ -14,6 +14,32 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+/// Re-apply an ad-hoc code signature on macOS.
+///
+/// macOS kills a Mach-O whose signature is missing or no longer matches the
+/// file — the shell just prints "killed" (SIGKILL), with no error message.
+/// Two common causes: `cargo install` strips the binary, and copying a
+/// signed binary invalidates the signature. `codesign --force --sign -`
+/// re-signs it ad-hoc, which is enough for a local tool.
+///
+/// No-op on other platforms; failures are ignored (the binary may be fine).
+pub fn resign_if_macos(path: &Path) -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    let Ok(status) = std::process::Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    else {
+        return false;
+    };
+    status.success()
+}
+
+
 /// Where the binary goes.
 pub fn default_bin_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("IMC_INSTALL_DIR") {
@@ -99,6 +125,9 @@ pub fn run(bin_dir: Option<PathBuf>, with_dashboard: bool) -> Result<Vec<String>
             perms.set_mode(0o755);
             std::fs::set_permissions(&target, perms)?;
         }
+        if resign_if_macos(&target) {
+            log.push("         re-signed (macOS ad-hoc signature)".to_string());
+        }
         log.push(format!("binary  → {}", target.display()));
     } else {
         log.push(format!("binary  → {} (already there)", target.display()));
@@ -120,6 +149,7 @@ pub fn run(bin_dir: Option<PathBuf>, with_dashboard: bool) -> Result<Vec<String>
                 perms.set_mode(0o755);
                 std::fs::set_permissions(&dst, perms)?;
             }
+            resign_if_macos(&dst);
             log.push(format!("daemon   → {}", dst.display()));
         }
     } else {

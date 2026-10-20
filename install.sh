@@ -76,6 +76,38 @@ download_binary() {
     chmod +x "$dest"
 }
 
+# A downloaded binary carries no signature. macOS kills an unsigned Mach-O
+# before it can print anything ("killed", SIGKILL), so sign it ad-hoc.
+sign_if_macos() {
+    local bin="$1"
+    case "$(uname -s)" in
+        Darwin)
+            if have codesign; then
+                codesign --force --sign - "$bin" >/dev/null 2>&1 || true
+            fi
+            ;;
+    esac
+}
+
+# Prove the installed binary starts: on macOS a bad signature only shows up
+# as the process being killed, so a silent check would leave the user with a
+# binary that dies without a message.
+verify_binary() {
+    local bin="$1"
+    if "$bin" --version >/dev/null 2>&1; then
+        return 0
+    fi
+    error "$bin does not run on this machine."
+    case "$(uname -s)" in
+        Darwin)
+            error "on macOS this usually means a missing code signature; try:"
+            error "  codesign --force --sign - $bin"
+            ;;
+    esac
+    error "  (rebuild from source: cargo build --release && ./target/release/imc install)"
+    return 1
+}
+
 install_from_release() {
     local url tmp dest
     url="$(resolve_release_url)" || return 1
@@ -87,7 +119,9 @@ install_from_release() {
     mv "$tmp" "$dest"
     chmod +x "$dest"
     rm -f "$tmp"
+    sign_if_macos "$dest"
     info "installed $BIN_NAME to $dest"
+    verify_binary "$dest" || return 1
 }
 
 build_from_source() {
@@ -109,7 +143,9 @@ build_from_source() {
     cp "$tmp/target/release/$BIN_NAME" "$INSTALL_DIR/$BIN_NAME"
     chmod +x "$INSTALL_DIR/$BIN_NAME"
     rm -rf "$tmp"
+    sign_if_macos "$INSTALL_DIR/$BIN_NAME"
     info "installed $BIN_NAME to $INSTALL_DIR/$BIN_NAME"
+    verify_binary "$INSTALL_DIR/$BIN_NAME" || return 1
 }
 
 ensure_config() {

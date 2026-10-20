@@ -255,6 +255,9 @@ pub fn install(timeout: Duration) -> Result<(String, PathBuf)> {
     }
     std::fs::rename(&staged, &exe)
         .with_context(|| format!("replace {}", exe.display()))?;
+    // A downloaded binary has no signature: on macOS the kernel kills it
+    // ("killed", SIGKILL) before it can print anything. Re-sign ad-hoc.
+    crate::install::resign_if_macos(&exe);
     Ok((latest, exe))
 }
 
