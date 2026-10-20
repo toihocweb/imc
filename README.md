@@ -200,9 +200,11 @@ scripts/repo_guard.py --all  # audit every tracked file
 ```
 
 It refuses a commit that contains an absolute home path (`/Users/...`), a
-project name listed in `scripts/repo_guard.deny`, a local artefact (`.env`,
-`*.db`, `captures/`, `.claude/settings.local.json`) or something that looks
-like a real API key.
+project name listed in `scripts/repo_guard.deny` (shared) or
+`scripts/repo_guard.local.deny` (personal, gitignored — the repository is
+public, so a project name must never enter its history), a local artefact
+(`.env`, `*.db`, `captures/`, `.claude/settings.local.json`) or something that
+looks like a real API key. The commit message is checked as well.
 
 ### Web dashboard
 
