@@ -151,6 +151,7 @@ main() {
     check_path
 
     info "done. Try: $BIN_NAME --help   (or: $BIN_NAME index .   to index this folder)"
+    info "the web dashboard needs the repo: cd <repo>/web-dashboard && npm ci && npm run build"
 }
 
 main "$@"

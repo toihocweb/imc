@@ -5,6 +5,7 @@ pub mod agentic;
 pub mod claude;
 pub mod doctor;
 pub mod index;
+pub mod install;
 pub mod mcp;
 pub mod pack;
 pub mod update;

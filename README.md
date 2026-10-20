@@ -50,13 +50,20 @@ curl -fsSL https://raw.githubusercontent.com/toihocweb/imc/master/install.sh | b
 imc .
 ```
 
-From source:
+From source — install it globally so `imc` works from any directory:
 
 ```bash
 git clone https://github.com/toihocweb/imc.git
 cd imc
+cargo install --path crates/imc-cli --locked   # → ~/.cargo/bin/imc
+imc --help
+```
+
+Or build in place and copy the binary (plus the dashboard app) onto your PATH:
+
+```bash
 cargo build --release
-./target/release/imc --help
+./target/release/imc install          # → ~/.local/bin/imc + ~/.local/share/imc/web-dashboard
 ```
 
 Rust 1.80+ and a C compiler to build (tree-sitter grammars and the bundled SQLite are
@@ -313,6 +320,7 @@ Per-project database: `$IMC_DATA_DIR/projects/<md5(path)[:16]>/index.db`.
 | `imc config get\|set\|list\|path\|test\|models\|migrate\|setup` | View and edit the configuration. |
 | `imc doctor` | Diagnose the environment and print fix commands. |
 | `imc update [--check]` | Update to the latest release, or just check. |
+| `imc install` | Copy the current build onto your PATH (and the dashboard app next to it). |
 | `imc web` | Open the dashboard, starting it if needed. |
 | `imc list` | Registered projects with counts and database size. |
 

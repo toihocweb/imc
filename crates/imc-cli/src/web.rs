@@ -51,6 +51,15 @@ fn candidate_dirs() -> Vec<PathBuf> {
             }
         }
     }
+    // Globally installed layout: `imc install` puts the app here. It comes
+    // before the development checkouts below, so a global install uses its own
+    // copy instead of a checkout that happens to sit in $HOME.
+    if let Ok(home) = std::env::var("HOME") {
+        let installed = PathBuf::from(&home).join(".local/share/imc/web-dashboard");
+        if installed.join("package.json").is_file() {
+            dirs.push(installed);
+        }
+    }
     if let Ok(home) = std::env::var("HOME") {
         for rel in ["imc-rs/web-dashboard", "imc/web-dashboard", ".imc/web-dashboard"] {
             let cand = PathBuf::from(&home).join(rel);
@@ -98,7 +107,13 @@ fn start(port: u16) -> Result<String> {
     let dir = candidate_dirs()
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("dashboard directory not found (set {DIR_ENV})"))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "dashboard directory not found — run `imc install` from a checkout to copy it to \
+~/.local/share/imc, or clone the repo and run `npm ci && npm run build` in web-dashboard/ \
+(or point {DIR_ENV} at an existing app)"
+            )
+        })?;
     let next_bin = dir.join("node_modules/next/dist/bin/next");
     if !next_bin.is_file() || !dir.join(".next/BUILD_ID").is_file() {
         // A fresh clone has the app source but no dependencies and no build.

@@ -269,6 +269,16 @@ enum Command {
         #[command(subcommand)]
         action: Option<McpAction>,
     },
+    /// Install this build somewhere on PATH (plus the dashboard app).
+    #[command(name = "install")]
+    Install {
+        /// Directory for the binary (default: ~/.local/bin).
+        #[arg(long)]
+        bin_dir: Option<PathBuf>,
+        /// Do not copy the dashboard app.
+        #[arg(long = "no-dashboard")]
+        no_dashboard: bool,
+    },
     /// Update to the latest release, or just check whether one exists.
     #[command(name = "update")]
     Update {
@@ -1709,6 +1719,14 @@ saved to {}", st::path().display());
                 println!("MCP client will discover: search, ask, trace, read, context, memory_search, pack");
             }
         },
+        Command::Install {
+            bin_dir,
+            no_dashboard,
+        } => {
+            for line in imc_cli::install::run(bin_dir.clone(), !*no_dashboard)? {
+                println!("{line}");
+            }
+        }
         Command::Update { check } => {
             use imc_cli::update;
             let timeout = std::time::Duration::from_secs(if *check { 5 } else { 60 });
