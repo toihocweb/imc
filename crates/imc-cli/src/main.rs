@@ -233,6 +233,19 @@ enum Command {
     },
     /// Diagnose environment, config, proxy, and project state; print fix commands.
     Doctor,
+    /// Open the web dashboard, starting it first if it is not running.
+    #[command(name = "web")]
+    Web {
+        /// Port the dashboard listens on.
+        #[arg(long, default_value_t = imc_cli::web::DEFAULT_PORT)]
+        port: u16,
+        /// Print the URL but do not launch a browser.
+        #[arg(long = "no-open")]
+        no_open: bool,
+        /// URL to open (overrides IMC_WEB_URL / localhost). Use for a remote host.
+        #[arg(long)]
+        url: Option<String>,
+    },
 }
 
 /// Flags shared by `trace`, `callers`, `callees` and `blast`. Python gives all
@@ -1519,6 +1532,9 @@ saved to {}", st::path().display());
         }
         Command::Doctor => {
             imc_cli::doctor::run_doctor(&cfg, &root)?;
+        }
+        Command::Web { port, no_open, url } => {
+            imc_cli::web::run(*port, *no_open, url.clone())?;
         }
         Command::Learn { file } => {
             let db = cfg.project_db(&root);

@@ -66,12 +66,13 @@ imc context main/api/routers/git.py
 | `imc graph <symbol>` | Quick definitions / callees / callers dump. |
 | `imc memory-add/-search/-list/-delete`, `imc learn <file>` | Project memory (rules, decisions). |
 | `imc list` | Registered projects (files, symbols, edges, chunks, memories, DB size). |
-| `imc search "<query>" [--on-miss]` | Search; `--on-miss` auto-records failed queries to memory. |
+| `imc search "<query>" [--no-on-miss]` | Search. Failed queries are auto-recorded to memory by default; `--no-on-miss` opts out. |
 | `imc trace <target> [--callers]` | Trace; auto-records business_rule if blast radius is large. |
 | `imc ccr stats\|list\|clear\|prune\|tune` | Inspect compression store; `tune` suggests MIN_SAVINGS adjustments. |
 | `imc pack "<query>" [--budget N] [--candidates N] [--no-vector] [--no-memories] [--graph N]` | Assemble an agent's context: retrieval + graph neighbourhood + project memories, compressed to a token budget; shortened items carry an `imc retrieve <id>` handle. |
 | `imc compress [--text T] [--raw] [--store]` | Compress content by detected kind. Reads stdin when `--text` is absent. `--raw` prints the compressed text only; `--store` keeps the original and prints its id. |
 | `imc retrieve <id> [--compressed]` | Print the original behind a compression handle (`--compressed` for the short form). |
+| `imc web [--port N] [--no-open] [--url URL]` | Open the web dashboard, starting it first (systemd unit, then detached `next start`). `--url` for a remote host, or set `IMC_WEB_URL`. |
 
 Global flags: `-C/--root <dir>` (defaults to the active project) and `--json`
 (every command emits machine-readable JSON). `search`/`trace`/`context` also take
@@ -168,6 +169,13 @@ dropping the answer, so the number is low on purpose.
 
 A shadcn/ui dashboard lives in `web-dashboard/` and exposes the CLI over HTTP:
 project overview, hybrid search, call-graph tracing, memories, and CCR statistics.
+
+```bash
+imc web                          # opens http://localhost:4789, starts it if needed
+imc web --url http://<host>:4789  # remote host
+```
+
+From source:
 
 ```bash
 cd web-dashboard

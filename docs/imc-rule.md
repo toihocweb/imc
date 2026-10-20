@@ -50,3 +50,5 @@ callers, or trace HTTP routes.
 - `imc config test` — verify the embedding/chat endpoint.
 - `imc claude setup` — index, wire `.claude/settings.local.json`, add this
   rule file, and start the proxy.
+- `imc web` — open the web dashboard (starts it if needed); `--url` or
+  `IMC_WEB_URL` for a remote host.

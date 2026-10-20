@@ -31,6 +31,16 @@ All routes shell out to the `imc` binary and return its `--json` payload verbati
 
 ## Running
 
+From the CLI (starts the dashboard if needed, then opens it):
+
+```bash
+imc web                           # http://localhost:4789
+imc web --url http://<host>:4789  # remote host
+imc web --no-open                 # print the URL only
+```
+
+From source:
+
 ```bash
 cd web-dashboard
 npm install

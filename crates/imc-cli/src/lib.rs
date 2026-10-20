@@ -6,3 +6,4 @@ pub mod claude;
 pub mod doctor;
 pub mod index;
 pub mod pack;
+pub mod web;

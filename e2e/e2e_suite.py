@@ -796,6 +796,52 @@ def suite_json(root, data):
     check("I1 --json produces valid JSON everywhere", all_json)
 
 
+# -- M. web dashboard command -------------------------------------------------
+def suite_web(root, data):
+    """`imc web` advertises its flags and degrades cleanly. Never starts the
+    dashboard for real: only --help and a --no-open run against a dead port are
+    exercised, and the start path is skipped when nothing is listening."""
+
+    def help_lists_flags():
+        p = run_imc(["web", "--help"], root, data, False)
+        for flag in ("--port", "--no-open", "--url"):
+            if flag not in p.stdout:
+                raise AssertionError(f"`imc web --help` lacks {flag}")
+        return "port / no-open / url documented"
+
+    check("M1 imc web --help lists its flags", help_lists_flags)
+
+    def top_level_lists_web():
+        p = run_imc(["--help"], root, data, False)
+        if "web" not in p.stdout:
+            raise AssertionError("`imc --help` does not list the web subcommand")
+        return "web subcommand discoverable"
+
+    check("M2 imc --help lists `web`", top_level_lists_web)
+
+    def no_open_prints_url():
+        # A running dashboard on the default port means the command returns fast
+        # without touching anything. When nothing runs, the call would try to
+        # start it, so probe the port first and skip instead of mutating state.
+        import socket
+        s = socket.socket()
+        s.settimeout(0.5)
+        try:
+            s.connect(("127.0.0.1", 4789))
+        except OSError:
+            skip("M3 imc web --no-open prints a URL", "dashboard not running")
+            return
+        finally:
+            s.close()
+        p = run_imc(["web", "--no-open"], root, data, False)
+        out = p.stdout + p.stderr
+        if "http://" not in out:
+            raise AssertionError(f"no URL in output: {out[:200]}")
+        return "prints the dashboard URL"
+
+    check("M3 imc web --no-open prints a URL", no_open_prints_url)
+
+
 # -- J. multi-language ---------------------------------------------------------
 def suite_languages(root, data):
     cases = {
@@ -1119,6 +1165,9 @@ def main():
     if not args.keep:
         shutil.rmtree(ag_root, ignore_errors=True)
         shutil.rmtree(ag_data, ignore_errors=True)
+
+    print("\nM. web dashboard")
+    suite_web(root, data)
 
     total = len(PASS) + len(FAIL)
     print("\n" + "=" * 64)
