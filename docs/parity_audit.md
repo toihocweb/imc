@@ -129,6 +129,15 @@ were fixed.
   handler ← route ← component.
 - **`locate_target_file` semantic fallback** (context 4, above) — needs the
   embedder wired into `imc-find`.
+- **The prompt-cache breakpoint sits on the last system block.** Anthropic's
+  guidance puts the breakpoint at the end of the *stable* prefix, so a
+  per-user system section stays cacheable across users; marking the last
+  block moves the breakpoint past it and forfeits that sharing. Both
+  implementations do it the same way (Python migrates the markers to the new
+  last block as well), so this is parity, not a port bug — changing it means
+  changing both. Left alone until someone measures the cache hit rate with
+  and without it; the usage log now prints the rate, so that measurement is
+  one command away.
 - **Flask `@app.route("/x", methods=[...])`** — *resolved this session*: the
   bridge now reads it (one route per method, GET when `methods` is absent, with
   `Blueprint(url_prefix=...)` applied like a FastAPI `prefix=`). Neither
