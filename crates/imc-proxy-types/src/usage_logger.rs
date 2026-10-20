@@ -54,8 +54,19 @@ pub async fn log_usage(
         .get("output_tokens")
         .and_then(Value::as_i64)
         .unwrap_or(0);
+    // The hit rate is the instrument for prompt-shape regressions: when the
+    // injected context changes on every turn, the cached prefix stops
+    // matching and this number collapses.
     let cache_info = if cache_read != 0 || cache_write != 0 {
-        format!(" | cache_read={cache_read} cache_write={cache_write}")
+        let total = cache_read + cache_write + input_tok;
+        let hit = if total > 0 {
+            cache_read as f64 / total as f64 * 100.0
+        } else {
+            0.0
+        };
+        format!(
+            " | cache_read={cache_read} cache_write={cache_write} (hit {hit:.1}%)"
+        )
     } else {
         String::new()
     };

@@ -1172,6 +1172,26 @@ def suite_mcp(root, data):
 
         check("N3 mcp tools/call search returns hits", call_search)
 
+        def list_resources():
+            r = rpc("resources/list", None, 7)
+            res = r["result"].get("resources")
+            assert isinstance(res, list) and res, r
+            assert res[0]["uri"].startswith("imc://project/"), res[0]
+            return f"{len(res)} resources advertised"
+
+        check("N7 mcp resources/list exposes the projects", list_resources)
+
+        def read_resource():
+            r = rpc("resources/list", None, 8)
+            uri = r["result"]["resources"][0]["uri"]
+            r = rpc("resources/read", {"uri": uri}, 9)
+            contents = r["result"].get("contents")
+            assert isinstance(contents, list) and contents, r
+            assert contents[0]["uri"] == uri, contents[0]
+            return f"read {uri}"
+
+        check("N8 mcp resources/read answers with the content", read_resource)
+
         def bad_tool():
             r = rpc("tools/call", {"name": "nope", "arguments": {}}, 4)
             assert r["result"]["isError"] is True, r

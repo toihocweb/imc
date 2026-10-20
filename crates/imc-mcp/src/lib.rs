@@ -233,7 +233,10 @@ pub fn initialize(params: Option<&Value>) -> Value {
         .unwrap_or("2024-11-05");
     json!({
         "protocolVersion": client_proto,
-        "capabilities": { "tools": { "listChanged": false } },
+        "capabilities": {
+            "tools": { "listChanged": false },
+            "resources": { "listChanged": false }
+        },
         "serverInfo": { "name": "imc", "version": env!("CARGO_PKG_VERSION") }
     })
 }
@@ -301,6 +304,90 @@ pub fn call_tool(root: &Path, params: Option<&Value>) -> Value {
 }
 
 
+
+/// The registered projects, as MCP resources.
+///
+/// A client that speaks resources can browse the index instead of asking for
+/// it one search at a time. `imc://project/{id}` answers with the project's
+/// summary; `imc://file/{path}` answers with that file's symbol outline.
+fn resources_list(root: &Path) -> Value {
+    let out = run_imc(root, &["list".to_string(), "--json".to_string()]);
+    let Ok(text) = out else {
+        return json!({"resources": []});
+    };
+    let Ok(parsed) = serde_json::from_str::<Value>(&text) else {
+        return json!({"resources": []});
+    };
+    let mut resources = Vec::new();
+    // `imc list --json` answers with a bare array; the proxy's variant wraps
+    // it in an object.
+    let projects = parsed
+        .as_array()
+        .cloned()
+        .or_else(|| {
+            parsed
+                .get("projects")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default();
+    for project in projects {
+        let id = project.get("id").and_then(Value::as_str).unwrap_or("");
+        let name = project.get("name").and_then(Value::as_str).unwrap_or(id);
+        resources.push(json!({
+            "uri": format!("imc://project/{id}"),
+            "name": name,
+            "description": format!("imc project {name}"),
+            "mimeType": "application/json"
+        }));
+    }
+    json!({ "resources": resources })
+}
+
+/// Read one resource: a project's file list, or one file's outline.
+fn resources_read(root: &Path, params: Option<&Value>) -> Value {
+    let uri = params
+        .and_then(|p| p.get("uri"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let text = if let Some(path) = uri.strip_prefix("imc://file/") {
+        run_imc(
+            root,
+            &[
+                "read".to_string(),
+                path.to_string(),
+                "--symbols".to_string(),
+                "--json".to_string(),
+            ],
+        )
+    } else if let Some(id) = uri.strip_prefix("imc://project/") {
+        // One project, not the whole registry.
+        run_imc(
+            root,
+            &["list".to_string(), "--project".to_string(), id.to_string(), "--json".to_string()],
+        )
+    } else {
+        run_imc(root, &["list".to_string(), "--json".to_string()])
+    };
+    match text {
+        Ok(body) => json!({
+            "contents": [{
+                "uri": uri,
+                "mimeType": "application/json",
+                "text": body
+            }]
+        }),
+        Err(e) => json!({
+            "contents": [{
+                "uri": uri,
+                "mimeType": "text/plain",
+                "text": format!("{e:#}")
+            }],
+            "isError": true
+        }),
+    }
+}
+
 /// Handle one JSON-RPC request.
 ///
 /// Returns `None` for notifications (a message without an `id`), which get no
@@ -312,6 +399,8 @@ pub fn handle_jsonrpc(root: &Path, req: &Value) -> Option<Value> {
 
     let result = match method {
         "initialize" => Ok(initialize(params)),
+        "resources/list" => Ok(resources_list(root)),
+        "resources/read" => Ok(resources_read(root, params)),
         "tools/list" => Ok(json!({"tools": tools()})),
         "tools/call" => Ok(call_tool(root, params)),
         "ping" | "shutdown" => Ok(json!({})),
