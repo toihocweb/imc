@@ -376,6 +376,14 @@ enum ClaudeAction {
 }
 
 #[derive(Subcommand, Debug)]
+enum ModelMapAction {
+    /// Add or replace one mapping.
+    Set { from: String, to: String },
+    /// Remove one mapping.
+    Rm { from: String },
+}
+
+#[derive(Subcommand, Debug)]
 enum ProxyAction {
     /// Serve the proxy in the foreground (used by `imc claude start`).
     Serve {
@@ -442,6 +450,12 @@ enum ConfigAction {
     /// Interactive setup: prompt for llm.base_url, llm.api_key, llm.model and
     /// embedding.model, then write ~/.imc_config.yaml.
     Setup,
+    /// Model mappings the proxy applies: the model a client asks for → the
+    /// model the upstream serves. Without one, the model is forwarded as-is.
+    ModelMap {
+        #[command(subcommand)]
+        action: Option<ModelMapAction>,
+    },
 }
 
 /// Resolve the project root.
@@ -1650,6 +1664,57 @@ fn main() -> Result<()> {
 saved to {}", st::path().display());
                     println!("Now run: imc config test  (to verify the endpoint)");
                     println!("Then:  imc claude setup   (to wire a project for Claude Code)");
+                }
+                ConfigAction::ModelMap { action } => {
+                    // The proxy's own config file: the CLI edits it through the
+                    // same helpers the proxy reads it with, so the file stays
+                    // byte-for-byte what the proxy expects.
+                    use imc_proxy::imc_proxy_types::config_store as cs;
+                    match action {
+                        Some(ModelMapAction::Set { from, to }) => {
+                            let mut cfg3 = cs::read_config_from_disk();
+                            let mut mappings = cfg3.model_mappings.clone().unwrap_or_default();
+                            mappings.insert(from.clone(), to.clone());
+                            cfg3.model_mappings = Some(mappings);
+                            cs::write_config_to_disk(&cfg3)?;
+                            if cli.json {
+                                println!("{}", serde_json::json!({"ok": true, "from": from, "to": to, "path": cs::config_file_path().display().to_string()}));
+                            } else {
+                                println!("mapped {from} -> {to}");
+                                println!("  {}", cs::config_file_path().display());
+                            }
+                        }
+                        Some(ModelMapAction::Rm { from }) => {
+                            let mut cfg3 = cs::read_config_from_disk();
+                            let mut mappings = cfg3.model_mappings.clone().unwrap_or_default();
+                            let existed = mappings.remove(from).is_some();
+                            cfg3.model_mappings = Some(mappings);
+                            cs::write_config_to_disk(&cfg3)?;
+                            if cli.json {
+                                println!("{}", serde_json::json!({"ok": existed, "removed": from}));
+                            } else if existed {
+                                println!("removed {from}");
+                            } else {
+                                println!("no mapping for {from}");
+                            }
+                        }
+                        None => {
+                            let cfg3 = cs::read_config_from_disk();
+                            let mappings = cfg3.model_mappings.clone().unwrap_or_default();
+                            if cli.json {
+                                println!("{}", serde_json::json!({"mappings": mappings, "path": cs::config_file_path().display().to_string()}));
+                            } else {
+                                println!("config: {}", cs::config_file_path().display());
+                                if mappings.is_empty() {
+                                    println!("(no mappings — every model is forwarded unchanged)");
+                                } else {
+                                    for (from, to) in &mappings {
+                                        println!("  {from} -> {to}");
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 ConfigAction::Test => {
                     let cfg2 = imc_core::config::Config::default();

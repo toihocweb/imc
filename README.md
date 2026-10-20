@@ -316,6 +316,9 @@ imc config setup        # interactive
 imc config list        # secrets masked
 imc config test        # probe the endpoint
 imc config models      # what the endpoint serves
+imc config model-map                # list the proxy's model mappings
+imc config model-map set claude-pro-max claude-haiku-4.5   # map one
+imc config model-map rm claude-pro-max                    # remove one
 imc doctor             # diagnose everything, print the fix commands
 ```
 
@@ -369,6 +372,7 @@ Per-project database: `$IMC_DATA_DIR/projects/<md5(path)[:16]>/index.db`.
 | `imc mcp [install]` | MCP server; `install` writes `.mcp.json` for the project. |
 | `imc capture status\|on\|off\|list\|show\|rm\|clear` | Capture the prompts the proxy sends upstream. |
 | `imc config get\|set\|list\|path\|test\|models\|migrate\|setup` | View and edit the configuration. |
+| `imc config model-map [set\|rm]` | Model mappings the proxy applies: the model a client asks for → the model the upstream serves. Also editable on the dashboard's **Model map** page. |
 | `imc doctor` | Diagnose the environment and print fix commands. |
 | `imc update [--check]` | Update to the latest release, or just check. |
 | `imc install` | Copy the current build onto your PATH (and the dashboard app next to it). |

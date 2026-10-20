@@ -62,11 +62,44 @@ pub fn codex_credential_path() -> PathBuf {
 }
 
 /// Port of `paths.CONFIG_PATH` resolution order.
+///
+/// Python resolves it like this (main/proxy/lib/paths.py):
+///
+/// ```text
+/// <repo>/hy-pro/config.json   → if it exists
+/// <repo>/config.json          → if it exists
+/// $COPILOT_API_HOME/config.json  (default ~/.local/share/copilot-api/config.json)
+/// ```
+///
+/// Python finds `<repo>` relative to its own `__file__`; Rust has no
+/// `__file__`, so the repo root is derived from the running binary
+/// (`target/release/imc` → three levels up). `COPILOT_API_CONFIG_PATH` stays
+/// as an explicit override.
 pub fn config_path() -> PathBuf {
-    match std::env::var(CONFIG_PATH_ENV) {
-        Ok(p) if !p.trim().is_empty() => PathBuf::from(p),
-        _ => app_dir().join("config.json"),
+    if let Ok(p) = std::env::var(CONFIG_PATH_ENV) {
+        if !p.trim().is_empty() {
+            return PathBuf::from(p);
+        }
     }
+    for candidate in repo_local_config_candidates() {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    app_dir().join("config.json")
+}
+
+/// The repo-local config files Python looks at, in the same order.
+fn repo_local_config_candidates() -> Vec<PathBuf> {
+    let Some(exe) = std::env::current_exe().ok() else {
+        return Vec::new();
+    };
+    // target/{debug,release}/<bin> → the crate root → the repo root
+    let root = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent());
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    vec![root.join("hy-pro").join("config.json"), root.join("config.json")]
 }
 
 /// Port of the `PATHS` class: same members, resolved on demand.

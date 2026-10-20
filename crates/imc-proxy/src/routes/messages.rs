@@ -303,6 +303,19 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
         Err(e) => return error_response(422, &format!("invalid messages payload: {e}")),
     };
 
+    // 0. Repair tool ids before anything else looks at them. Anthropic
+    //    rejects the whole request with 400 when a `tool_use_id` does not
+    //    match `^[a-zA-Z0-9_-]+$` (a provider id like `call_abc.def` is
+    //    enough). The call and its result are rewritten with the same rule,
+    //    so the pair survives.
+    let ids = crate::sanitize::sanitize_tool_ids(&mut payload);
+    if ids.fixed_ids > 0 {
+        create_handler_logger("main").info(&format!(
+            "[Proxy] Repaired {} invalid tool id(s) before forwarding",
+            ids.fixed_ids
+        ));
+    }
+
     // 1. Model mapping + explicit provider prefix.
     let original_model = payload.model.clone();
     payload.model = apply_model_mapping(&payload.model);

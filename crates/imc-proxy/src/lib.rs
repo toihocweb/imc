@@ -8,6 +8,11 @@ pub mod hyperspace;
 pub mod imc_memory;
 pub mod providers;
 pub mod routes;
+pub mod sanitize;
+
+// The CLI edits the proxy's own config through these helpers, so the file it
+// writes is byte-for-byte the one the proxy reads.
+pub use imc_proxy_types;
 
 pub const DEFAULT_PORT: u16 = 12345;
 

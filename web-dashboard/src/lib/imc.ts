@@ -1,8 +1,54 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { existsSync } from "fs";
+import { join } from "path";
 
-const IMC_BINARY =
-  process.env.IMC_BIN ||
-  "/root/imc-rs/target/release/imc";
+/**
+ * Find the imc binary the API routes shell out to.
+ *
+ * A hardcoded path only works on the machine that built the dashboard, so it
+ * is the last resort, not the first. Order:
+ *
+ *   1. `IMC_BIN` — explicit override.
+ *   2. The binary next to the app: a repo checkout (`<repo>/target/release/imc`)
+ *      or a global install (`~/.local/share/imc/web-dashboard` →
+ *      `~/.local/bin/imc`).
+ *   3. `imc` on `PATH`.
+ *   4. The old absolute path, for a dashboard that was deployed elsewhere.
+ */
+function resolveImcBinary(): string {
+  const fromEnv = process.env.IMC_BIN;
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+
+  const cwd = process.cwd();
+  const candidates = [
+    join(cwd, "..", "target", "release", "imc"), // repo checkout
+    join(cwd, "..", "..", "..", "bin", "imc"), // ~/.local/share/imc/web-dashboard
+    join(cwd, "..", "imc"), // binary beside the app directory
+    "/root/imc-rs/target/release/imc", // this server
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (existsSync(candidate)) return candidate;
+    } catch {
+      // an unreadable path is simply not a candidate
+    }
+  }
+
+  const path = process.env.PATH || "";
+  for (const dir of path.split(":").filter(Boolean)) {
+    const candidate = join(dir, "imc");
+    try {
+      if (existsSync(candidate)) return candidate;
+    } catch {
+      // keep looking
+    }
+  }
+
+  // Last resort: let the OS resolve it when the process is spawned.
+  return "imc";
+}
+
+const IMC_BINARY = resolveImcBinary();
 
 export interface ProjectCounts {
   files: number;

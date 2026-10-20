@@ -15,6 +15,7 @@ const LINKS = [
   { href: "/memory", label: "Memory" },
   { href: "/compression", label: "Compression" },
   { href: "/captures", label: "Captures" },
+  { href: "/model-map", label: "Model map" },
   { href: "/settings", label: "Settings" },
 ];
 
