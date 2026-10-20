@@ -57,3 +57,17 @@ calls a real embedding endpoint.
 - The compression page reads the CCR store that belongs to the selected project.
 - Search and trace results are rendered straight from the CLI contract, so a CLI change
   surfaces here without extra mapping.
+
+## Run as a service (systemd)
+
+`deploy/imc-dashboard.service` is a ready unit. Adjust `WorkingDirectory`, `ExecStart`
+(node path) and `IMC_BIN`, then:
+
+```bash
+sudo cp deploy/imc-dashboard.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now imc-dashboard
+sudo ufw allow 4789/tcp          # if the host has ufw enabled
+```
+
+It listens on `0.0.0.0:4789` and restarts on failure.

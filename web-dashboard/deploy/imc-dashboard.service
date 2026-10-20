@@ -1,0 +1,17 @@
+[Unit]
+Description=imc dashboard (Next.js UI for the imc CLI)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/imc/web-dashboard
+Environment=NODE_ENV=production
+# Point IMC_BIN at the imc binary; it is on PATH for most installs.
+Environment=IMC_BIN=/usr/local/bin/imc
+ExecStart=/usr/bin/node /opt/imc/web-dashboard/node_modules/next/dist/bin/next start -p 4789 -H 0.0.0.0
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
