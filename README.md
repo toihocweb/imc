@@ -166,6 +166,27 @@ imc mcp             # serve over stdio
 Tools: `search`, `ask`, `trace`, `read`, `context`, `memory_search`, `pack`. Every call is
 pinned to the project's root, so a tool call can never answer for a different repository.
 
+### One command to start everything
+
+```bash
+imc            # starts the proxy (port 12345) and the dashboard (port 4789)
+imc claude     # same, then runs the claude binary
+```
+
+A bare `imc` starts the LLM proxy that Claude Code talks to and opens the
+dashboard; `imc claude` does the same and then hands over to the `claude`
+binary. `imc .` still indexes the current directory, `imc index <path>` still
+indexes something else.
+
+While indexing, progress goes to stderr so a long run is not a black box:
+
+```
+[imc] scanning 120/120
+[imc] parsing 120/120 m37.py
+[imc] indexing 120/120 m99.py
+[imc] building index…
+```
+
 ### Web dashboard
 
 A shadcn/ui dashboard over the same CLI — browse projects, search, trace, inspect memories,
@@ -278,6 +299,17 @@ imc config test        # probe the endpoint
 imc config models      # what the endpoint serves
 imc doctor             # diagnose everything, print the fix commands
 ```
+
+**Which project imc answers for.** Without `-C`, imc walks up from the current
+directory to the project that contains it. If the directory is not inside any
+project, it falls back to the globally active project and says so:
+
+```
+[imc] using the active project /home/you/other-repo — the current directory is not inside a project; pass -C <path> to choose another
+```
+
+`imc index` never does that: without an explicit path it indexes the current
+directory, so it can never re-index an unrelated repository.
 
 `imc doctor` reports the things that actually break setups — a missing `llm.model` (the
 built-in fallback is endpoint-specific and usually 404s), an unreachable endpoint, a project

@@ -269,6 +269,9 @@ enum Command {
         #[command(subcommand)]
         action: Option<McpAction>,
     },
+    /// Start the proxy and the dashboard — what a bare `imc` does.
+    #[command(name = "start")]
+    Start,
     /// Install this build somewhere on PATH (plus the dashboard app).
     #[command(name = "install")]
     Install {
@@ -367,7 +370,7 @@ enum ClaudeAction {
     /// Run the `claude` binary directly, passing all args through.
     /// `imc claude` with no subcommand falls through to this.
     Run {
-        #[arg(last = true)]
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
 }
@@ -441,7 +444,19 @@ enum ConfigAction {
     Setup,
 }
 
-fn resolve_root(cfg: &Config, project: Option<PathBuf>) -> Result<PathBuf> {
+/// Resolve the project root.
+///
+/// `use_active` decides whether the globally active project may stand in when
+/// the current directory is not inside any registered project. Query commands
+/// want that fallback (it is how a shell far from the repo still works), but
+/// a command that *creates* state must not: `imc index` in a fresh directory
+/// has to index that directory, not re-index whatever project was active.
+fn resolve_root_with(
+    cfg: &Config,
+    project: Option<PathBuf>,
+    use_active: bool,
+    notify: bool,
+) -> Result<PathBuf> {
     if let Some(p) = project {
         // A raw `No such file or directory (os error 2)` from `canonicalize`
         // does not say which argument was wrong.
@@ -465,9 +480,20 @@ fn resolve_root(cfg: &Config, project: Option<PathBuf>) -> Result<PathBuf> {
         }
         dir = d.parent();
     }
-    if let Some(p) = cfg.active_project() {
-        if p.exists() {
-            return Ok(p);
+    if use_active {
+        if let Some(p) = cfg.active_project() {
+            if p.exists() {
+                // Say so: answering for a project you are not standing in is
+                // surprising, and the result looks like it came from here.
+                if notify {
+                    eprintln!(
+                        "[imc] using the active project {} — the current directory is not \
+inside a project; pass -C <path> to choose another",
+                        p.display()
+                    );
+                }
+                return Ok(p);
+            }
         }
     }
     Ok(cwd)
@@ -684,16 +710,36 @@ fn main() -> Result<()> {
 
     // Allow `imc <path>` as a shortcut for `imc index <path>`.
     let mut args: Vec<String> = std::env::args().collect();
+    // A bare `imc` starts the proxy and the dashboard: one command to get
+    // the whole setup running.
+    if args.len() == 1 {
+        args.push("start".to_string());
+    }
     if args.len() == 2 {
         let p = &args[1];
         if !p.starts_with('-') && std::path::Path::new(p).exists() {
             args.insert(1, "index".to_string());
         }
     }
+    // `imc claude` on its own runs the claude binary (that is what the help
+    // promises); `imc claude setup|wire|start|stop|status|run` stay explicit.
+    if args.len() >= 2 && args[1] == "claude" {
+        let first = args.get(2).map(String::as_str).unwrap_or("");
+        let is_sub = matches!(
+            first,
+            "setup" | "wire" | "start" | "stop" | "status" | "run" | "help" | "--help" | "-h"
+        );
+        if !is_sub {
+            args.insert(2, "run".to_string());
+        }
+    }
     let cli = Cli::parse_from(&args);
     let cfg = Config::default();
     cfg.ensure_dirs()?;
-    let root = resolve_root(&cfg, cli.root.clone())?;
+    // `imc index` decides its own root (see the Index arm), so it must not
+    // print the "using the active project" notice.
+    let notify_active = !matches!(&cli.command, Command::Index { .. });
+    let root = resolve_root_with(&cfg, cli.root.clone(), true, notify_active)?;
 
     match &cli.command {
         Command::Index {
@@ -703,9 +749,43 @@ fn main() -> Result<()> {
         } => {
             let target = match path {
                 Some(p) => std::fs::canonicalize(p).unwrap_or(root.clone()),
-                None => root.clone(),
+                // No explicit path: index the project that contains the cwd, or
+                // the cwd itself. The globally active project must not win
+                // here — `imc index` in a fresh directory would otherwise
+                // re-index an unrelated repository.
+                None => resolve_root_with(&cfg, None, false, false)?,
             };
-            let stats = index::run(&cfg, &target, ignore, *force)?;
+            // Progress goes to stderr: stdout may carry --json.
+            use std::io::IsTerminal;
+            let tty = std::io::stderr().is_terminal();
+            let last = std::sync::Mutex::new(
+                std::time::Instant::now() - std::time::Duration::from_secs(5),
+            );
+            let printer = |p: imc_index::Progress| {
+                let label = match p.phase {
+                    imc_index::Phase::Scan => "scanning",
+                    imc_index::Phase::Parse => "parsing",
+                    imc_index::Phase::Embed => "indexing",
+                    imc_index::Phase::Finalize => "building index",
+                };
+                let mut last = match last.lock() {
+                    Ok(l) => l,
+                    Err(_) => return,
+                };
+                let now = std::time::Instant::now();
+                // Fast on a terminal, calm when the output is piped.
+                let min_gap = std::time::Duration::from_millis(if tty { 120 } else { 1000 });
+                if now.duration_since(*last) < min_gap && p.done < p.total {
+                    return;
+                }
+                *last = now;
+                if p.total > 0 {
+                    eprintln!("[imc] {label} {}/{} {}", p.done, p.total, p.current);
+                } else {
+                    eprintln!("[imc] {label}…");
+                }
+            };
+            let stats = imc_index::run_with_progress(&cfg, &target, ignore, *force, &printer)?;
 
             // Python's index.py prunes memories pointing at deleted files on
             // every non-forced run; keep that behaviour (`imc index --force`
@@ -1719,6 +1799,40 @@ saved to {}", st::path().display());
                 println!("MCP client will discover: search, ask, trace, read, context, memory_search, pack");
             }
         },
+        Command::Start => {
+            // Bare `imc`: the whole setup in one command — the proxy that
+            // Claude Code talks to, and the dashboard to drive everything else.
+            let proxy_port: u16 = 12345;
+            let web_port: u16 = 4789;
+            if cli.json {
+                let proxy = match imc_cli::claude::start_proxy(&cfg, proxy_port) {
+                    Ok(v) => v,
+                    Err(e) => serde_json::json!({"error": e.to_string()}),
+                };
+                let running = imc_cli::claude::proxy_status(&cfg)
+                    .map(|s| s.get("running").and_then(|v| v.as_bool()).unwrap_or(false))
+                    .unwrap_or(false);
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "proxy": {"port": proxy_port, "running": running, "state": proxy},
+                        "dashboard": {"port": web_port, "url": format!("http://localhost:{web_port}")},
+                    })
+                );
+            } else {
+                match imc_cli::claude::start_proxy(&cfg, proxy_port) {
+                    Ok(v) => {
+                        let pid = v.get("pid").and_then(|p| p.as_i64()).unwrap_or(0);
+                        println!("proxy    → http://127.0.0.1:{proxy_port}  (pid {pid})");
+                    }
+                    Err(e) => {
+                        println!("proxy    → not started: {e}");
+                        println!("           build it with: cargo build --release --bin imc-proxyd");
+                    }
+                }
+                imc_cli::web::run(web_port, false, None)?;
+            }
+        }
         Command::Install {
             bin_dir,
             no_dashboard,
@@ -1878,6 +1992,7 @@ saved to {}", st::path().display());
             }
         }
     }
+
 
     // Tell the user when a newer release exists. The check itself is cached
     // (<data dir>/update_check.json) and refreshed by a detached background

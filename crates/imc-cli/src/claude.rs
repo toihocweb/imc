@@ -116,8 +116,13 @@ root is pinned. Fall back to the CLI (`imc ...`) when MCP is not wired.
    Hits are ranked evidence, not proof — open the file before relying on it.
 4. **If search misses repeatedly, fall back to Read/Grep.** An empty result
    means "not in the index", not "does not exist".
+0. **A bare `imc` starts the proxy and the dashboard** (the one-command
+   setup). `imc claude` does the same and then runs the `claude` binary.
+   `imc .` indexes the current directory.
 5. **Use `-C <project-root>`** (or `-p <id>`) when the cwd may not be the
-   project; otherwise imc answers for the globally active project.
+   project; otherwise imc answers for the globally active project and says so
+   on stderr ("using the active project …"). `imc index` without a path always
+   indexes the current directory, never the active project.
 
 ## Setup
 
@@ -218,7 +223,16 @@ pub fn proxy_bin() -> Result<PathBuf> {
     if cand.exists() {
         return Ok(cand);
     }
-    // `cargo run` puts it in target/{debug,release}/ alongside `imc`; fall back to PATH.
+    // `cargo run` puts it in target/{debug,release}/ alongside `imc`; a global
+    // install puts it in the same bin dir. Also look it up on PATH.
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let cand = dir.join("imc-proxyd");
+            if cand.is_file() {
+                return Ok(cand);
+            }
+        }
+    }
     anyhow::bail!(
         "imc-proxyd not found next to {} — build it first: cargo build --release --bin imc-proxyd",
         exe.display()

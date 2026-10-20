@@ -104,6 +104,28 @@ pub fn run(bin_dir: Option<PathBuf>, with_dashboard: bool) -> Result<Vec<String>
         log.push(format!("binary  → {} (already there)", target.display()));
     }
 
+    // The proxy daemon lives next to the binary; a global install needs it
+    // too, otherwise `imc claude` cannot start the proxy.
+    let daemon = exe.with_file_name("imc-proxyd");
+    if daemon.exists() {
+        let dst = bin_dir.join("imc-proxyd");
+        if exe != dst.with_file_name("imc") {
+            std::fs::copy(&daemon, &dst).with_context(|| {
+                format!("copy {} → {}", daemon.display(), dst.display())
+            })?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&dst)?.permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&dst, perms)?;
+            }
+            log.push(format!("daemon   → {}", dst.display()));
+        }
+    } else {
+        log.push("daemon   → imc-proxyd not found next to the binary (the proxy needs it)".to_string());
+    }
+
     if with_dashboard {
         if let Some(src) = source_dashboard_dir() {
             let dst = installed_dashboard_dir();

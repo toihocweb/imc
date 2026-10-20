@@ -27,14 +27,65 @@ pub struct IndexStats {
     pub elapsed_ms: u128,
 }
 
+/// The stage an index run is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// Walking the tree.
+    Scan,
+    /// Parsing sources with tree-sitter.
+    Parse,
+    /// Embedding and writing chunks.
+    Embed,
+    /// Rebuilding the search index.
+    Finalize,
+}
+
+/// A progress tick. Emitted while indexing so a long run is not a black box.
+#[derive(Debug, Clone)]
+pub struct Progress {
+    pub phase: Phase,
+    /// Files done in this phase.
+    pub done: usize,
+    /// Files in this phase (0 when unknown).
+    pub total: usize,
+    /// The file being worked on.
+    pub current: String,
+}
+
 pub fn run(cfg: &Config, root: &Path, extra_ignores: &[String], force: bool) -> Result<IndexStats> {
+    run_with_progress(cfg, root, extra_ignores, force, &|_| {})
+}
+
+/// Index a project, reporting progress as it goes.
+///
+/// The callback is called from the rayon workers during the parse phase, so it
+/// has to be `Sync`; the caller decides how much to print.
+pub fn run_with_progress(
+    cfg: &Config,
+    root: &Path,
+    extra_ignores: &[String],
+    force: bool,
+    progress: &(dyn Fn(Progress) + Sync),
+) -> Result<IndexStats> {
     let start = std::time::Instant::now();
     let db = cfg.project_db(root);
     let mut store = store::open(&db)?;
     imc_search::rebuild_fts(&store)?;
 
+    progress(Progress {
+        phase: Phase::Scan,
+        done: 0,
+        total: 0,
+        current: String::new(),
+    });
     let manifest = build_manifest(root, cfg.max_file_bytes, extra_ignores)
         .context("walk project")?;
+    progress(Progress {
+        phase: Phase::Scan,
+        done: manifest.len(),
+        total: manifest.len(),
+        current: String::new(),
+    });
 
     let known = store.all_file_hashes();
     let mut new_files: Vec<&FileEntry> = Vec::new();
@@ -65,10 +116,19 @@ pub fn run(cfg: &Config, root: &Path, extra_ignores: &[String], force: bool) -> 
 
     // Parse in parallel (tree-sitter is CPU bound); writes stay single-threaded.
     let window_lines = cfg.window_lines;
+    let todo_total = todo.len();
+    let parsed_counter = std::sync::atomic::AtomicUsize::new(0);
     let parsed: Vec<_> = todo
         .par_iter()
         .map(|f| -> Result<(String, Vec<imc_core::types::Symbol>, Vec<imc_core::types::Edge>, Vec<RawChunk>)> {
             let text = read_text(&f.path)?;
+            let done = parsed_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            progress(Progress {
+                phase: Phase::Parse,
+                done,
+                total: todo_total,
+                current: f.rel.clone(),
+            });
             let (symbols, edges, mut chunks) = match imc_parser::parse(&f.rel, &text) {
                 Some(p) => (p.symbols, p.edges, p.chunks),
                 None => (Vec::new(), Vec::new(), Vec::new()),
@@ -83,7 +143,14 @@ pub fn run(cfg: &Config, root: &Path, extra_ignores: &[String], force: bool) -> 
     let embedder = imc_embed::build(&cfg.embedding);
     let embedder_name = embedder.as_ref().map(|e| e.name()).unwrap_or_else(|| "none".into());
 
-    for (rel, symbols, edges, chunks) in parsed {
+    let parsed_total = parsed.len();
+    for (done, (rel, symbols, edges, chunks)) in parsed.into_iter().enumerate() {
+        progress(Progress {
+            phase: Phase::Embed,
+            done: done + 1,
+            total: parsed_total,
+            current: rel.clone(),
+        });
         store.clear_file(&rel)?;
         store.insert_symbols(&rel, &symbols)?;
         store.insert_edges(&rel, &edges)?;
@@ -105,6 +172,12 @@ pub fn run(cfg: &Config, root: &Path, extra_ignores: &[String], force: bool) -> 
         }
     }
 
+    progress(Progress {
+        phase: Phase::Finalize,
+        done: 0,
+        total: 0,
+        current: String::new(),
+    });
     imc_search::rebuild_fts(&store)?;
 
     Ok(IndexStats {
