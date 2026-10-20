@@ -90,6 +90,9 @@ enum Command {
         /// instead of re-running a broad query.
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// One line per hit: location, symbol and the first line only.
+        #[arg(long)]
+        concise: bool,
         /// Raw hits only: skip the LLM answer (Python's `-r/--raw`).
         #[arg(long, short = 'r')]
         raw: bool,
@@ -691,6 +694,39 @@ fn run_trace_arm(
 /// Python printed the chunk plus its `AST Context:` block; the equivalent here
 /// is the `// graph:` evidence the indexer appended, which only `--json`
 /// consumers used to see.
+/// One line per hit: where it is and what it is.
+///
+/// The full listing prints the whole snippet, which is what a human wants
+/// and what an agent does not: the agent needs the location and the symbol,
+/// then reads the file itself. `imc search --concise` costs a fraction of
+/// the tokens.
+fn print_hits_concise(hits: &[imc_core::types::SearchHit], query: &str) {
+    for (i, h) in hits.iter().enumerate() {
+        let kind = h.sym_kind.as_deref().unwrap_or("chunk");
+        let sym = h.sym_name.as_deref().unwrap_or("");
+        let head = h.snippet.lines().next().unwrap_or("").trim();
+        let head = if head.len() > 100 {
+            format!("{}…", &head[..100])
+        } else {
+            head.to_string()
+        };
+        println!(
+            "{}. [{}] {}:{}-{} {} (score {:.4}) {}",
+            i + 1,
+            kind,
+            h.file,
+            h.start_line,
+            h.end_line,
+            sym,
+            h.score,
+            head
+        );
+    }
+    if hits.is_empty() {
+        println!("no matches for {query:?}");
+    }
+}
+
 fn print_hits(hits: &[imc_core::types::SearchHit], query: &str) {
     for (i, h) in hits.iter().enumerate() {
         let kind = h.sym_kind.as_deref().unwrap_or("chunk");
@@ -848,6 +884,7 @@ fn main() -> Result<()> {
             limit,
             no_vector,
             offset,
+            concise,
             raw,
             project,
             no_on_miss,
@@ -887,6 +924,14 @@ fn main() -> Result<()> {
             if cli.json || *raw {
                 if cli.json {
                     println!("{}", serde_json::to_string_pretty(&hits)?);
+                } else if *concise {
+                    print_hits_concise(&hits, query);
+                    if has_more {
+                        println!(
+                            "\nmore matches exist — narrow the query, or page with --offset {}",
+                            skipped + hits.len()
+                        );
+                    }
                 } else {
                     print_hits(&hits, query);
                     if has_more {

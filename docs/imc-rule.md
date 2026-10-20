@@ -13,6 +13,10 @@ callers, or trace HTTP routes.
   never stop at hit 1.
 - `imc search "<exact symbol>"` — exact symbol lookup (case & `_`/camelCase
   normalized). Use when you know the name.
+- `imc search "<q>" --raw --concise` — one line per hit, about 8x fewer tokens
+  than the full snippet; then read the file for the rest.
+- `imc search "<q>" --offset N` — page through a long result set. The output
+  says when more matches exist.
 - `imc read <file> --symbols` — outline; then read only the lines you need.
 - `imc context <file>` — whole feature around a file: deps, endpoints, tests.
 - `imc trace <symbol> --callers --depth 3` — blast radius; run *before* you
@@ -28,8 +32,9 @@ If MCP tools are available (`mcp__imc__search`, `mcp__imc__trace`, `mcp__imc__re
 `mcp__imc__context`, `mcp__imc__memory_search`, `mcp__imc__pack`), prefer them over
 shelling out: they carry the schema, the arguments are validated, and the project
 root is pinned. Fall back to the CLI (`imc ...`) when MCP is not wired.
-- `imc search "<q>" --on-miss` — if search returns nothing, the query is saved
-  to memory so the next agentic pass can surface it.
+- `imc search "<q>"` — a search that returns nothing is saved to memory
+  automatically, so the next agentic pass can surface it. `--no-on-miss`
+  turns that off.
 - `imc trace "<symbol>" --callers` — if blast radius is large, a business_rule
   is auto-recorded to warn future editors.
 - `imc ccr tune` — analyze compression store stats and suggest MIN_SAVINGS

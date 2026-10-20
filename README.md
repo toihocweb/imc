@@ -118,6 +118,7 @@ imc search "tax calculation"              # LLM answer with citations
 imc search "tax calculation" --raw        # ranked chunks only, no LLM
 imc search "exact symbol name"            # symbol lookup
 imc search "retry policy" --no-vector     # BM25 + graph only
+imc search "retry policy" --raw --concise # one line per hit (~8x fewer tokens)
 ```
 
 Retrieval has a relevance floor: a junk query returns nothing rather than padding the list
@@ -365,7 +366,7 @@ Per-project database: `$IMC_DATA_DIR/projects/<md5(path)[:16]>/index.db`.
 | Command | What it does |
 |---|---|
 | `imc [path]` / `imc index [path]` | Incremental index (`--force` rebuilds, `-i` adds ignore globs). `imc .` is a shortcut for `imc index .`. |
-| `imc search "<query>"` | Retrieve (BM25 + vector + graph), then answer with the LLM. `--raw` for hits only, `--json` for machine output, `-l N` for the limit, `--no-vector` to force BM25. |
+| `imc search "<query>"` | Retrieve (BM25 + vector + graph), then answer with the LLM. `--raw` for hits only, `--json` for machine output, `-l N` for the limit, `--no-vector` to force BM25, `--concise` for one line per hit, `--offset N` to page. |
 | `imc trace <target>` | Call tree / blast radius, also for `GET /api/path` route targets. `--callers`, `--callees`, `--both`, `-d N`, `-f file`. |
 | `imc graph <symbol>` | Definitions, callees and callers of a symbol. |
 | `imc read <file>` | Token-optimised reader: blank-line strip, JSON smart-strip, auto-truncate with a summary header. `--symbols`, `--method`, `--offset`, `-l`, `--raw`. |

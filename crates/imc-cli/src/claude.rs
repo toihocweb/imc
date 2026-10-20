@@ -36,6 +36,11 @@ code. Every command below is verified to exist in this binary.
 - `imc search "<exact identifier>"` — for a known symbol this is exact, not fuzzy:
   case and `_`/camelCase are normalised on both sides. Prefer it when you know the name.
 - `imc search "<q>" --json` — machine-readable hits (implies `--raw`).
+- `imc search "<q>" --raw --concise` — one line per hit (location, symbol, first
+  line) instead of the whole snippet. About 8x fewer tokens; read the file for
+  the rest.
+- `imc search "<q>" --offset N` — page through a long result set instead of
+  re-running a broad query. The output says when more matches exist.
 - `imc search "<q>" --no-vector` — BM25 only; use when no embedding endpoint is
   configured or when you want deterministic, offline results.
 - Add `-C <project-root>` when the current directory may not be the project:
@@ -91,6 +96,10 @@ callers, or trace HTTP routes.
   never stop at hit 1.
 - `imc search "<exact symbol>"` — exact symbol lookup (case & `_`/camelCase
   normalized). Use when you know the name.
+- `imc search "<q>" --raw --concise` — one line per hit, about 8x fewer tokens
+  than the full snippet; then read the file for the rest.
+- `imc search "<q>" --offset N` — page through a long result set. The output
+  says when more matches exist.
 - `imc read <file> --symbols` — outline; then read only the lines you need.
 - `imc context <file>` — whole feature around a file: deps, endpoints, tests.
 - `imc trace <symbol> --callers --depth 3` — blast radius; run *before* you
