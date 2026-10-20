@@ -115,9 +115,18 @@ fn start(port: u16) -> Result<String> {
             )
         })?;
     let next_bin = dir.join("node_modules/next/dist/bin/next");
-    if !next_bin.is_file() || !dir.join(".next/BUILD_ID").is_file() {
+    let build_id = dir.join(".next/BUILD_ID");
+    if !next_bin.is_file() || !build_id.is_file() {
         // A fresh clone has the app source but no dependencies and no build.
         // Building it here beats making the user remember two commands.
+        build_dashboard(&dir)?;
+    } else if build_is_stale(&dir, &build_id) {
+        // The source changed after the last build (a `git pull`, an edit).
+        // Serving the old build means the API routes the user sees are the
+        // ones from the previous commit, so rebuild before starting.
+        eprintln!(
+            "[imc web] the dashboard source is newer than the build — rebuilding…"
+        );
         build_dashboard(&dir)?;
     }
     if !next_bin.is_file() {
@@ -152,6 +161,60 @@ fn start(port: u16) -> Result<String> {
             log.display()
         ))
     }
+}
+
+/// True when a source file is newer than the build.
+///
+/// Only the files that end up in the bundle are considered: `src/`,
+/// `package.json`, the lockfile and the config files.
+fn build_is_stale(dir: &Path, build_id: &Path) -> bool {
+    let Ok(build_time) = std::fs::metadata(build_id)
+        .and_then(|m| m.modified())
+        .map_err(|e| anyhow!("stat {}: {e}", build_id.display()))
+    else {
+        return true;
+    };
+    let watched: Vec<PathBuf> = vec![
+        dir.join("src"),
+        dir.join("package.json"),
+        dir.join("package-lock.json"),
+        dir.join("next.config.ts"),
+        dir.join("tsconfig.json"),
+    ];
+    for path in watched {
+        if !path.exists() {
+            continue;
+        }
+        let newer = if path.is_dir() {
+            newest_file(&path).map(|t| t > build_time).unwrap_or(false)
+        } else {
+            std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .map(|t| t > build_time)
+                .unwrap_or(false)
+        };
+        if newer {
+            return true;
+        }
+    }
+    false
+}
+
+/// The newest modification time under a directory.
+fn newest_file(dir: &Path) -> Option<std::time::SystemTime> {
+    let mut newest = None;
+    for entry in walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        if let Some(t) = entry.metadata().ok().and_then(|m| m.modified().ok()) {
+            if newest.map(|n: std::time::SystemTime| t > n).unwrap_or(true) {
+                newest = Some(t);
+            }
+        }
+    }
+    newest
 }
 
 fn wait_up(port: u16, budget: Duration) -> bool {
@@ -296,6 +359,7 @@ pub fn run(port: u16, no_open: bool, url: Option<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn is_up_false_for_unlikely_port() {
@@ -306,5 +370,36 @@ mod tests {
     #[test]
     fn shell_quote_escapes_single_quotes() {
         assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn a_fresh_build_is_not_stale() {
+        let dir = std::env::temp_dir().join(format!("imc-stale-{}", std::process::id()));
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(dir.join(".next")).unwrap();
+        std::fs::write(src.join("page.tsx"), "x").unwrap();
+        let build_id = dir.join(".next/BUILD_ID");
+        std::fs::write(&build_id, "id").unwrap();
+        // The build is written after the source.
+        std::thread::sleep(Duration::from_millis(1100));
+        std::fs::write(&build_id, "id").unwrap();
+        assert!(!build_is_stale(&dir, &build_id));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_changed_source_makes_the_build_stale() {
+        let dir = std::env::temp_dir().join(format!("imc-stale2-{}", std::process::id()));
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(dir.join(".next")).unwrap();
+        let build_id = dir.join(".next/BUILD_ID");
+        std::fs::write(&build_id, "id").unwrap();
+        // The source is written after the build.
+        std::thread::sleep(Duration::from_millis(1100));
+        std::fs::write(src.join("page.tsx"), "x").unwrap();
+        assert!(build_is_stale(&dir, &build_id));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -1895,6 +1895,7 @@ saved to {}", st::path().display());
                         println!("           build it with: cargo build --release --bin imc-proxyd");
                     }
                 }
+                wire_claude_to_proxy(&cfg, &root, proxy_port);
                 imc_cli::web::run(web_port, false, None)?;
             }
         }
@@ -2066,6 +2067,55 @@ saved to {}", st::path().display());
         imc_cli::update::maybe_notify();
     }
     Ok(())
+}
+
+/// Point Claude Code at the proxy, and make sure the model it asks for
+/// exists upstream.
+///
+/// `imc claude setup` writes `.claude/settings.local.json` with
+/// `ANTHROPIC_BASE_URL` pointing at the proxy; without it Claude Code talks to
+/// the API directly and the proxy never sees a request. The placeholder model
+/// name it uses (`claude-pro-max`) is not a model any upstream serves, so a
+/// mapping to the configured model is created as well — otherwise the proxy
+/// forwards a name the API rejects.
+fn wire_claude_to_proxy(cfg: &Config, root: &Path, port: u16) {
+    let settings = root.join(".claude/settings.local.json");
+    let wired = std::fs::read_to_string(&settings)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| {
+            v.get("env")
+                .and_then(|e| e.get("ANTHROPIC_BASE_URL"))
+                .and_then(|u| u.as_str())
+                .map(|u| u.contains("127.0.0.1"))
+        })
+        .unwrap_or(false);
+    if !wired {
+        match imc_cli::claude::write_claude_settings(root, port) {
+            Ok(p) => println!("wiring   → {} (Claude Code now goes through the proxy)", p.display()),
+            Err(e) => println!("wiring   → skipped: {e}"),
+        }
+    }
+
+    // The placeholder model needs a mapping to a model the endpoint serves.
+    let target = cfg.llm_model();
+    if target.is_empty() {
+        return;
+    }
+    let placeholder = "claude-pro-max";
+    if target == placeholder {
+        return;
+    }
+    use imc_proxy::imc_proxy_types::config_store as cs;
+    let mut proxy_cfg = cs::read_config_from_disk();
+    let mut mappings = proxy_cfg.model_mappings.clone().unwrap_or_default();
+    if !mappings.contains_key(placeholder) {
+        mappings.insert(placeholder.to_string(), target.clone());
+        proxy_cfg.model_mappings = Some(mappings);
+        if cs::write_config_to_disk(&proxy_cfg).is_ok() {
+            println!("mapping  → {placeholder} → {target}");
+        }
+    }
 }
 
 /// Resolve a user-typed symbol to the stored definitions.
