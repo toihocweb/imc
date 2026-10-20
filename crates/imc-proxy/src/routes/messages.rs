@@ -358,6 +358,17 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
     }
     normalize_system(&mut payload);
 
+    // Prompt capture: store the payload exactly as the model will see it
+    // (templates + injected memories included). Off unless
+    // `imc capture on` (or the dashboard toggle) turned it on.
+    if imc_core::capture::is_enabled() {
+        if let Ok(v) = serde_json::to_value(&payload) {
+            if let Some(path) = imc_core::capture::record_payload(&v) {
+                log.debug(&format!("[Proxy] captured prompt -> {}", path.display()));
+            }
+        }
+    }
+
     let model = payload.model.clone();
     let wants_stream = payload.stream.unwrap_or(false);
     let decision = route_for_model(

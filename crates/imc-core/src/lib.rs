@@ -1,5 +1,6 @@
 //! Shared config, types and SQLite storage for the IndexMyCode Rust port.
 
+pub mod capture;
 pub mod config;
 pub mod hash;
 pub mod settings;

@@ -73,6 +73,7 @@ imc context main/api/routers/git.py
 | `imc pack "<query>" [--budget N] [--candidates N] [--no-vector] [--no-memories] [--graph N]` | Assemble an agent's context: retrieval + graph neighbourhood + project memories, compressed to a token budget; shortened items carry an `imc retrieve <id>` handle. |
 | `imc compress [--text T] [--raw] [--store]` | Compress content by detected kind. Reads stdin when `--text` is absent. `--raw` prints the compressed text only; `--store` keeps the original and prints its id. |
 | `imc retrieve <id> [--compressed]` | Print the original behind a compression handle (`--compressed` for the short form). |
+| `imc capture status\|on\|off\|list\|show <id>\|rm <id>\|clear` | Capture the full prompt the proxy sends upstream (system + tools + memory + tool results) so you can see what the agent really sent. Off by default; toggleable from the web dashboard at /captures. |
 | `imc mcp` | MCP stdio server: exposes `search`, `ask`, `trace`, `read`, `context`, `memory_search`, `pack` to any MCP client. |
 | `imc mcp install [--config PATH]` | Write `<root>/.mcp.json` so the project's MCP client discovers the imc tools (pinned to that root). |
 | `imc web [--port N] [--no-open] [--url URL]` | Open the web dashboard, starting it first (systemd unit, then detached `next start`). `--url` for a remote host, or set `IMC_WEB_URL`. |

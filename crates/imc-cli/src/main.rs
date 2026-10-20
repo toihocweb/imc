@@ -35,6 +35,25 @@ struct Cli {
     command: Command,
 }
 
+/// Subcommands of `imc capture`. Bare `imc capture` shows the status.
+#[derive(Subcommand, Debug)]
+enum CaptureAction {
+    /// Show whether capture is on and how many payloads are stored.
+    Status,
+    /// Turn prompt capture on.
+    On,
+    /// Turn prompt capture off.
+    Off,
+    /// List the captured payloads, newest first.
+    List,
+    /// Print one captured payload.
+    Show { id: String },
+    /// Delete one captured payload.
+    Rm { id: String },
+    /// Delete every captured payload.
+    Clear,
+}
+
 /// Subcommands of `imc mcp`. Bare `imc mcp` serves over stdio.
 #[derive(Subcommand, Debug)]
 enum McpAction {
@@ -250,6 +269,12 @@ enum Command {
         #[command(subcommand)]
         action: Option<McpAction>,
     },
+    /// Capture the full prompt the proxy receives (see what the model really sees).
+    #[command(name = "capture")]
+    Capture {
+        #[command(subcommand)]
+        action: Option<CaptureAction>,
+    },
     /// Open the web dashboard, starting it first if it is not running.
     #[command(name = "web")]
     Web {
@@ -389,7 +414,11 @@ enum ConfigAction {
     Test,
     /// List the models the configured endpoint serves (GET {base_url}/models).
     /// The API key stays in the config — it is never echoed.
-    Models,
+    Models {
+        /// Which list to print: chat models, embedding models, or all.
+        #[arg(long, default_value = "chat")]
+        kind: String,
+    },
     /// Interactive setup: prompt for llm.base_url, llm.api_key, llm.model and
     /// embedding.model, then write ~/.imc_config.yaml.
     Setup,
@@ -1548,7 +1577,7 @@ saved to {}", st::path().display());
                         }
                     }
                 }
-                ConfigAction::Models => {
+                ConfigAction::Models { kind } => {
                     let cfg2 = imc_core::config::Config::default();
                     let base = cfg2.llm_base_url();
                     if base.trim().is_empty() {
@@ -1569,27 +1598,75 @@ saved to {}", st::path().display());
                                 .unwrap_or(serde_json::Value::Null);
                             // OpenAI-compatible: {"data":[{"id":...}]}. Some
                             // servers answer {"models":[...]} or a bare array.
-                            let mut ids: Vec<String> = Vec::new();
-                            let mut push = |v: &serde_json::Value| {
-                                if let Some(s) = v.as_str() {
-                                    ids.push(s.to_string());
-                                } else if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                                    ids.push(id.to_string());
-                                } else if let Some(name) = v.get("name").and_then(|i| i.as_str()) {
-                                    ids.push(name.to_string());
+                            // OpenAI-compatible: {"data":[{"id":...}]}. Some
+                            // servers answer {"models":[...]} or a bare array.
+                            let mut entries: Vec<serde_json::Value> = Vec::new();
+                            if let Some(arr) = parsed.get("data").and_then(|d| d.as_array()) {
+                                entries.extend(arr.iter().cloned());
+                            } else if let Some(arr) = parsed.get("models").and_then(|d| d.as_array()) {
+                                entries.extend(arr.iter().cloned());
+                            } else if let Some(arr) = parsed.as_array() {
+                                entries.extend(arr.iter().cloned());
+                            }
+                            // Classify: an embedding model has no completion/output
+                            // pricing (and no context window); chat models price
+                            // completion tokens. The name is the fallback signal.
+                            let is_embedding = |v: &serde_json::Value| -> bool {
+                                let id = v
+                                    .as_str()
+                                    .map(str::to_string)
+                                    .or_else(|| v.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                                    .or_else(|| v.get("name").and_then(|i| i.as_str()).map(str::to_string))
+                                    .unwrap_or_default();
+                                let lower = id.to_lowercase();
+                                if lower.contains("embed")
+                                    || lower.contains("bge-")
+                                    || lower.contains("gte-")
+                                    || lower.starts_with("e5-")
+                                    || lower.contains("retrieval")
+                                {
+                                    return true;
+                                }
+                                match v.get("pricing") {
+                                    Some(p) if p.is_object() => {
+                                        p.get("completion").is_none() && p.get("output").is_none()
+                                    }
+                                    _ => false,
                                 }
                             };
-                            if let Some(arr) = parsed.get("data").and_then(|d| d.as_array()) {
-                                arr.iter().for_each(&mut push);
-                            } else if let Some(arr) = parsed.get("models").and_then(|d| d.as_array()) {
-                                arr.iter().for_each(&mut push);
-                            } else if let Some(arr) = parsed.as_array() {
-                                arr.iter().for_each(&mut push);
+                            let mut chat: Vec<String> = Vec::new();
+                            let mut embedding: Vec<String> = Vec::new();
+                            for v in &entries {
+                                let id = v
+                                    .as_str()
+                                    .map(str::to_string)
+                                    .or_else(|| v.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                                    .or_else(|| v.get("name").and_then(|i| i.as_str()).map(str::to_string))
+                                    .unwrap_or_default();
+                                if id.is_empty() {
+                                    continue;
+                                }
+                                if is_embedding(v) {
+                                    embedding.push(id);
+                                } else {
+                                    chat.push(id);
+                                }
                             }
-                            ids.sort();
-                            ids.dedup();
-                            if ids.is_empty() {
-                                eprintln!("no models found at {url} (response: {})", &body.chars().take(200).collect::<String>());
+                            chat.sort();
+                            chat.dedup();
+                            embedding.sort();
+                            embedding.dedup();
+                            let selected: Vec<String> = match kind.as_str() {
+                                "embedding" | "embeddings" => embedding.clone(),
+                                "all" => {
+                                    let mut all = chat.clone();
+                                    all.extend(embedding.clone());
+                                    all
+                                }
+                                _ => chat.clone(),
+                            };
+                            if selected.is_empty() {
+                                eprintln!("no {} models found at {url} (response: {})", kind, &body.chars().take(200).collect::<String>());
                                 std::process::exit(1);
                             }
                             if cli.json {
@@ -1597,11 +1674,13 @@ saved to {}", st::path().display());
                                     "{}",
                                     serde_json::to_string_pretty(&serde_json::json!({
                                         "url": url,
-                                        "models": ids,
+                                        "models": selected,
+                                        "chat_models": chat,
+                                        "embedding_models": embedding,
                                     }))?
                                 );
                             } else {
-                                for id in &ids {
+                                for id in &selected {
                                     println!("{id}");
                                 }
                             }
@@ -1629,6 +1708,71 @@ saved to {}", st::path().display());
                 println!("MCP client will discover: search, ask, trace, read, context, memory_search, pack");
             }
         },
+        Command::Capture { action } => {
+            use imc_core::capture;
+            match action {
+                None | Some(CaptureAction::Status) => {
+                    let status = capture::status();
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&status)?);
+                    } else {
+                        println!(
+                            "prompt capture: {}",
+                            if status["enabled"].as_bool().unwrap_or(false) { "on" } else { "off" }
+                        );
+                        println!(
+                            "  stored: {} payload(s) in {}",
+                            status["captures"].as_u64().unwrap_or(0),
+                            status["dir"].as_str().unwrap_or("")
+                        );
+                    }
+                }
+                Some(CaptureAction::On) => {
+                    capture::set_enabled(true)?;
+                    println!("prompt capture: on");
+                }
+                Some(CaptureAction::Off) => {
+                    capture::set_enabled(false)?;
+                    println!("prompt capture: off");
+                }
+                Some(CaptureAction::List) => {
+                    let list = capture::list_captures();
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&list)?);
+                    } else {
+                        for c in &list {
+                            println!(
+                                "{}\t{}\t{} B\t{}",
+                                c.id,
+                                c.model,
+                                c.size,
+                                c.preview
+                            );
+                        }
+                        if list.is_empty() {
+                            println!("no captures yet");
+                        }
+                    }
+                }
+                Some(CaptureAction::Show { id }) => {
+                    match capture::get_capture(&id) {
+                        Some(v) => println!("{}", serde_json::to_string_pretty(&v)?),
+                        None => bail!("no capture with id {id:?}"),
+                    }
+                }
+                Some(CaptureAction::Rm { id }) => {
+                    if capture::delete_capture(&id) {
+                        println!("deleted {id}");
+                    } else {
+                        bail!("no capture with id {id:?}");
+                    }
+                }
+                Some(CaptureAction::Clear) => {
+                    let n = capture::clear_captures();
+                    println!("deleted {n} capture(s)");
+                }
+            }
+        }
         Command::Web { port, no_open, url } => {
             imc_cli::web::run(*port, *no_open, url.clone())?;
         }

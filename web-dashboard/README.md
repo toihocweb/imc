@@ -17,6 +17,7 @@ Built with Next.js 16 (App Router) + shadcn/ui components (hand-written, no CLI)
 | `/memory` | List and add project memories (category, work-memory type, scene) |
 | `/compression` | CCR totals, recent records with savings %, and an interactive compress box |
 | `/settings` | LLM endpoint / API key / model / embedding model, with a live status card and a "Save & test" probe |
+| `/captures` | Toggle prompt capture, browse the captured payloads and read them in full |
 
 ## API routes
 
@@ -24,6 +25,8 @@ All routes shell out to the `imc` binary and return its `--json` payload verbati
 
 - `POST /api/models` — saves the typed URL/key, then lists the endpoint's models
   (`imc config models` → `GET {base_url}/models`); returns `{url, models[]}`
+- `GET /api/captures[?id=]` — captured prompts + capture state
+- `POST /api/captures` — `{action: "on"|"off"|"clear"|"delete", id?}`
 - `GET /api/config` — effective config with the key **masked** (the CLI masks it)
 - `POST /api/config` — `{ base_url?, api_key?, model?, embedding_model?, test? }`; writes through
   `imc config set` and can probe the endpoint with `imc config test`
