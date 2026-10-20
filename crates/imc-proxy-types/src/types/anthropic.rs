@@ -145,11 +145,19 @@ fn default_tool_reference() -> String {
 
 /// Port of the `AnthropicToolResultContentBlock` Union.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+// Internally tagged on `type`, NOT untagged. With untagged, the first variant
+// whose every field is `#[serde(default)]` swallows every other block: a
+// `tool_result` deserialized as an empty `Text`, losing its payload. The wire
+// format always carries `type`, so tag on it.
+#[serde(tag = "type")]
 pub enum AnthropicToolResultContentBlock {
+    #[serde(rename = "text")]
     Text(AnthropicTextBlock),
+    #[serde(rename = "image")]
     Image(AnthropicImageBlock),
+    #[serde(rename = "document")]
     Document(AnthropicDocumentBlock),
+    #[serde(rename = "tool_reference")]
     ToolReference(AnthropicToolReferenceBlock),
 }
 
@@ -210,20 +218,31 @@ fn default_thinking() -> String {
 
 /// Port of the `AnthropicUserContentBlock` Union.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+// See AnthropicToolResultContentBlock for why this must not be untagged.
+#[serde(tag = "type")]
 pub enum AnthropicUserContentBlock {
+    #[serde(rename = "text")]
     Text(AnthropicTextBlock),
+    #[serde(rename = "image")]
     Image(AnthropicImageBlock),
+    #[serde(rename = "document")]
     Document(AnthropicDocumentBlock),
+    #[serde(rename = "tool_result")]
     ToolResult(AnthropicToolResultBlock),
 }
 
 /// Port of the `AnthropicAssistantContentBlock` Union.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+// See AnthropicToolResultContentBlock for why this must not be untagged.
+// Untagged, every assistant `tool_use` arrived as an empty `Text`, so the proxy
+// forwarded tool calls with no name, no input and no id.
+#[serde(tag = "type")]
 pub enum AnthropicAssistantContentBlock {
+    #[serde(rename = "text")]
     Text(AnthropicTextBlock),
+    #[serde(rename = "tool_use")]
     ToolUse(AnthropicToolUseBlock),
+    #[serde(rename = "thinking")]
     Thinking(AnthropicThinkingBlock),
 }
 
@@ -272,18 +291,29 @@ fn default_system_role() -> String {
 
 /// Port of the `AnthropicMessage` Union.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+// Tagged on `role`, not untagged: each variant's `role` field has a `default`,
+// so untagged matching accepted the first variant for *any* message and every
+// assistant turn silently became a user turn. An assistant message only parsed
+// correctly by accident — its tool_use block is invalid for the user variant.
+#[serde(tag = "role")]
 pub enum AnthropicMessage {
+    #[serde(rename = "user")]
     User(AnthropicUserMessage),
+    #[serde(rename = "assistant")]
     Assistant(AnthropicAssistantMessage),
 }
 
 /// Port of the `AnthropicInputMessage` Union (`AnthropicMessage | AnthropicSystemMessage`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+// See AnthropicMessage: untagged here silently rewrote every assistant turn
+// into a user turn, because `role` defaults rather than being required.
+#[serde(tag = "role")]
 pub enum AnthropicInputMessage {
+    #[serde(rename = "user")]
     User(AnthropicUserMessage),
+    #[serde(rename = "assistant")]
     Assistant(AnthropicAssistantMessage),
+    #[serde(rename = "system")]
     System(AnthropicSystemMessage),
 }
 
