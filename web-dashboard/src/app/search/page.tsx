@@ -69,9 +69,9 @@ export default function SearchPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold tracking-tight">Search</h1>
+      <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Search</h1>
 
-      <div className="max-w-2xl">
+      <div className="w-full max-w-2xl">
         <label className="text-xs text-muted-foreground">Project</label>
         <Select value={root} onValueChange={setRoot}>
           <SelectTrigger className="w-full">
@@ -85,7 +85,7 @@ export default function SearchPage() {
         </Select>
       </div>
 
-      <form onSubmit={handleSearch} className="flex gap-2 max-w-2xl">
+      <form onSubmit={handleSearch} className="flex w-full max-w-2xl flex-col gap-2 sm:flex-row">
         <Input
           placeholder="Search query (e.g. authentication flow)"
           value={query}
@@ -108,7 +108,7 @@ export default function SearchPage() {
               {results.map((h, i) => (
                 <div key={i} className="border-b pb-4 last:border-0">
                   <div className="flex justify-between items-start gap-2">
-                    <div className="font-mono text-sm break-all">{h.file}:{h.start_line}-{h.end_line}</div>
+                    <div className="break-all font-mono text-xs sm:text-sm">{h.file}:{h.start_line}-{h.end_line}</div>
                     <Badge variant="secondary">{h.source}</Badge>
                   </div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
@@ -116,7 +116,7 @@ export default function SearchPage() {
                     {h.sym_kind && <Badge variant="outline" className="text-[10px]">{h.sym_kind}</Badge>}
                     <span>score {h.score.toFixed(4)}</span>
                   </div>
-                  <pre className="text-xs mt-2 bg-muted p-3 rounded overflow-auto max-h-72 whitespace-pre-wrap">{h.text}</pre>
+                  <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 text-[11px] leading-relaxed sm:p-3 sm:text-xs">{h.text}</pre>
                 </div>
               ))}
             </div>

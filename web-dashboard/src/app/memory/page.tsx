@@ -97,9 +97,9 @@ export default function MemoryPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold tracking-tight">Memory</h1>
+      <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Memory</h1>
 
-      <div className="max-w-2xl">
+      <div className="w-full max-w-2xl">
         <label className="text-xs text-muted-foreground">Project</label>
         <Select value={root} onValueChange={setRoot}>
           <SelectTrigger className="w-full">
@@ -116,22 +116,22 @@ export default function MemoryPage() {
       <Card>
         <CardHeader><CardTitle>Add Memory</CardTitle></CardHeader>
         <CardContent>
-          <form onSubmit={handleAdd} className="flex flex-col gap-4 max-w-2xl">
+          <form onSubmit={handleAdd} className="flex w-full max-w-2xl flex-col gap-4">
             <Textarea
               placeholder="Memory content..."
               value={content}
               onChange={(e) => setContent(e.target.value)}
               rows={3}
             />
-            <div className="flex flex-wrap gap-2 items-center">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
               <Select value={category} onValueChange={setCategory}>
-                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={memType} onValueChange={setMemType}>
-                <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-full sm:w-44"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {MEM_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
                 </SelectContent>

@@ -170,7 +170,7 @@ export default function ProjectDetail({ id }: { id: string }) {
           ["Embeddings", c.embeddings],
         ].map(([label, val]) => (
           <Card key={String(label)}>
-            <CardContent className="pt-6">
+            <CardContent className="pt-4 sm:pt-6">
               <div className="text-xs text-muted-foreground">{label}</div>
               <div className="text-2xl font-bold font-mono">{Number(val).toLocaleString()}</div>
             </CardContent>

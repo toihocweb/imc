@@ -41,18 +41,18 @@ export default function Home() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-start gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex-1">
-          <h1 className="text-3xl font-bold tracking-tight">imc Dashboard</h1>
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">imc Dashboard</h1>
           <p className="text-muted-foreground">
             Code intelligence for coding agents: AST index + lexical/vector retrieval + call graph
           </p>
         </div>
-        <div className="flex gap-2">
-          <Link href="/search" className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90">
+        <div className="flex flex-wrap gap-2">
+          <Link href="/search" className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
             Search
           </Link>
-          <Link href="/compression" className="px-4 py-2 border border-input bg-background hover:bg-secondary rounded-md">
+          <Link href="/compression" className="inline-flex items-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-secondary">
             Compression
           </Link>
         </div>
@@ -68,7 +68,7 @@ export default function Home() {
         <p className="text-muted-foreground">Loading projects...</p>
       ) : (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-5">
             {[
               ["Projects", projects.length],
               ["Files", totals.files],
@@ -79,13 +79,13 @@ export default function Home() {
               <Card key={String(label)}>
                 <CardContent className="pt-6">
                   <div className="text-xs text-muted-foreground">{label}</div>
-                  <div className="text-2xl font-bold font-mono">{Number(val).toLocaleString()}</div>
+                  <div className="font-mono text-xl font-bold sm:text-2xl">{Number(val).toLocaleString()}</div>
                 </CardContent>
               </Card>
             ))}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 sm:gap-6">
             {projects.map((p) => (
               <Card key={p.id}>
                 <CardHeader>

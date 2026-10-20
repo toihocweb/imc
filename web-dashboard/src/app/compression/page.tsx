@@ -99,9 +99,9 @@ export default function CompressionPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold tracking-tight">Compression</h1>
+      <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Compression</h1>
 
-      <div className="max-w-2xl">
+      <div className="w-full max-w-2xl">
         <label className="text-xs text-muted-foreground">Project (CCR store)</label>
         <Select value={root} onValueChange={setRoot}>
           <SelectTrigger className="w-full">
@@ -121,7 +121,7 @@ export default function CompressionPage() {
         <CardHeader><CardTitle>CCR Totals</CardTitle></CardHeader>
         <CardContent>
           {stats ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
               {[
                 ["Records", stats.records.toLocaleString()],
                 ["Original tokens", stats.original_tokens.toLocaleString()],
@@ -148,7 +148,7 @@ export default function CompressionPage() {
       <Card>
         <CardHeader><CardTitle>Compress Text</CardTitle></CardHeader>
         <CardContent>
-          <form onSubmit={handleCompress} className="flex flex-col gap-4 max-w-2xl">
+          <form onSubmit={handleCompress} className="flex w-full max-w-2xl flex-col gap-4">
             <Textarea
               placeholder="Paste build log, JSON array, source code, or git diff..."
               value={text}
@@ -163,7 +163,7 @@ export default function CompressionPage() {
                 <div className="text-xs text-muted-foreground mb-1">
                   Output ({compressed.length} chars, was {text.length})
                 </div>
-                <pre className="text-xs font-mono bg-muted p-3 rounded overflow-auto max-h-72 whitespace-pre-wrap">{compressed}</pre>
+                <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 text-[11px] font-mono sm:p-3 sm:text-xs">{compressed}</pre>
               </div>
             )}
           </form>
@@ -176,8 +176,8 @@ export default function CompressionPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>ID</TableHead>
-                <TableHead>Kind</TableHead>
+                <TableHead className="whitespace-nowrap">ID</TableHead>
+                <TableHead className="whitespace-nowrap">Kind</TableHead>
                 <TableHead className="text-right">Orig</TableHead>
                 <TableHead className="text-right">Comp</TableHead>
                 <TableHead className="text-right">Saved</TableHead>

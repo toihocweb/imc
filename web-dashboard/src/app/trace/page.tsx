@@ -78,8 +78,8 @@ export default function TracePage() {
       <div key={`${node.id}-${depth}`} style={{ marginLeft: depth * 16 }}>
         <div className="flex items-center gap-2 py-0.5">
           <Badge variant="secondary" className="text-[10px]">{node.type}</Badge>
-          <span className="font-mono text-sm">{node.name}</span>
-          <span className="text-xs text-muted-foreground break-all">{node.file}:{node.line}</span>
+          <span className="break-all font-mono text-xs sm:text-sm">{node.name}</span>
+          <span className="hidden break-all text-xs text-muted-foreground sm:inline">{node.file}:{node.line}</span>
         </div>
         {kids.map((k) => renderTree(k, depth + 1))}
       </div>
@@ -88,9 +88,9 @@ export default function TracePage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold tracking-tight">Trace</h1>
+      <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Trace</h1>
 
-      <div className="max-w-2xl">
+      <div className="w-full max-w-2xl">
         <label className="text-xs text-muted-foreground">Project</label>
         <Select value={root} onValueChange={setRoot}>
           <SelectTrigger className="w-full">
@@ -104,13 +104,13 @@ export default function TracePage() {
         </Select>
       </div>
 
-      <form onSubmit={handleTrace} className="flex flex-col gap-3 max-w-2xl">
+      <form onSubmit={handleTrace} className="flex w-full max-w-2xl flex-col gap-3">
         <Input
           placeholder="Symbol or route (e.g. AuthController.login)"
           value={target}
           onChange={(e) => setTarget(e.target.value)}
         />
-        <div className="flex gap-2 items-center">
+        <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-1 text-sm">
             <input type="radio" checked={mode === "callees"} onChange={() => setMode("callees")} />
             Callees
@@ -134,7 +134,7 @@ export default function TracePage() {
       {arms.map((arm, i) => (
         <Card key={i}>
           <CardHeader><CardTitle className="text-base">{arm.mode}</CardTitle></CardHeader>
-          <CardContent className="overflow-auto">{renderTree(arm.tree)}</CardContent>
+          <CardContent className="overflow-x-auto scroll-thin">{renderTree(arm.tree)}</CardContent>
         </Card>
       ))}
     </div>
