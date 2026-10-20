@@ -61,6 +61,7 @@ imc context main/api/routers/git.py
 | `imc read <file> [--symbols] [--method NAME] [--offset N] [--limit N] [--raw]` | Token-optimised reader: blank-line strip, JSON smart-strip, auto-truncate with summary header. |
 | `imc context <target>` | One-shot resolved context for a file/module (outline, deps, tests). |
 | `imc claude setup\|wire\|start\|stop\|status` | Claude Code integration (see below). |
+| `imc config models` | List the models the endpoint serves (`GET {base_url}/models`) — pick one instead of guessing its name. |
 | `imc config get\|set\|list\|path\|test\|migrate\|setup` | Edit `~/.imc_config.yaml`: LLM url/key/model, embedding model. `setup` walks you through interactively. |
 | `imc proxy serve\|status\|stop` | The LLM proxy Claude Code talks to. |
 | `imc graph <symbol>` | Quick definitions / callees / callers dump. |
@@ -206,7 +207,9 @@ IMC_BIN=$(command -v imc) npm run build && IMC_BIN=$(command -v imc) npm run sta
 
 Pages: `/` overview, `/projects`, `/projects/[id]` (search + trace + memory tabs),
 `/search`, `/trace`, `/memory`, `/compression`, `/settings`. The settings page edits the
-LLM endpoint / key / model (key stays masked) and probes the endpoint; a banner on every
+LLM endpoint / key / model (key stays masked), probes the endpoint, and
+**fetches the endpoint's model list** (`imc config models` → `GET {base_url}/models`)
+so the model is picked from a dropdown instead of typed by hand; a banner on every
 page reminds you to configure the model before using imc, and `imc doctor` reports
 `llm.model not set` as an issue. See `web-dashboard/README.md` for the API surface.
 

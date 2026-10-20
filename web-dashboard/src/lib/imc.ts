@@ -270,3 +270,17 @@ export async function configSet(key: string, value: string): Promise<string> {
 export async function configTest(): Promise<string> {
   return runImc(["config", "test"]);
 }
+
+export interface ModelList {
+  url: string;
+  models: string[];
+}
+
+/**
+ * Ask the configured endpoint which models it serves (`GET {base_url}/models`).
+ * The key stays in the config file — the CLI sends it, the browser never sees it.
+ */
+export async function fetchModels(): Promise<ModelList> {
+  const raw = JSON.parse(await runImc(["--json", "config", "models"]));
+  return { url: raw.url || "", models: Array.isArray(raw.models) ? raw.models : [] };
+}

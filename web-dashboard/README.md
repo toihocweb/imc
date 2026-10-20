@@ -22,6 +22,8 @@ Built with Next.js 16 (App Router) + shadcn/ui components (hand-written, no CLI)
 
 All routes shell out to the `imc` binary and return its `--json` payload verbatim.
 
+- `POST /api/models` — saves the typed URL/key, then lists the endpoint's models
+  (`imc config models` → `GET {base_url}/models`); returns `{url, models[]}`
 - `GET /api/config` — effective config with the key **masked** (the CLI masks it)
 - `POST /api/config` — `{ base_url?, api_key?, model?, embedding_model?, test? }`; writes through
   `imc config set` and can probe the endpoint with `imc config test`
@@ -69,6 +71,8 @@ calls a real embedding endpoint.
 `llm.model` unset is the most common "imc does not work" cause: the built-in fallback model
 is endpoint-specific and usually answers 404. The dashboard therefore:
 
+- fetches the endpoint's model list into a dropdown (datalist) so the model name is
+  never typed by hand — the key stays in the config file, the browser never sees it;
 - shows a dismissible banner on every page while `llm.base_url` / `llm.model` / `llm.api_key`
   is incomplete, linking to `/settings`;
 - shows an "LLM setup" card on the overview page;

@@ -387,6 +387,9 @@ enum ConfigAction {
     List,
     /// Probe the configured endpoint (POST {base_url}/embeddings) and report.
     Test,
+    /// List the models the configured endpoint serves (GET {base_url}/models).
+    /// The API key stays in the config — it is never echoed.
+    Models,
     /// Interactive setup: prompt for llm.base_url, llm.api_key, llm.model and
     /// embedding.model, then write ~/.imc_config.yaml.
     Setup,
@@ -1541,6 +1544,74 @@ saved to {}", st::path().display());
                         Ok(r) => println!("OK  {url}  status={}", r.status()),
                         Err(e) => {
                             println!("FAIL  {url}\n  {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                ConfigAction::Models => {
+                    let cfg2 = imc_core::config::Config::default();
+                    let base = cfg2.llm_base_url();
+                    if base.trim().is_empty() {
+                        eprintln!("no llm.base_url configured — run `imc config set llm.base_url <url>`");
+                        std::process::exit(1);
+                    }
+                    let key = cfg2.llm_api_key();
+                    let url = format!("{}/models", base.trim_end_matches('/'));
+                    let agent = ureq::Agent::new_with_defaults();
+                    let mut req = agent.get(&url);
+                    if !key.is_empty() {
+                        req = req.header("Authorization", format!("Bearer {key}"));
+                    }
+                    match req.call() {
+                        Ok(mut resp) => {
+                            let body = resp.body_mut().read_to_string().unwrap_or_default();
+                            let parsed: serde_json::Value = serde_json::from_str(&body)
+                                .unwrap_or(serde_json::Value::Null);
+                            // OpenAI-compatible: {"data":[{"id":...}]}. Some
+                            // servers answer {"models":[...]} or a bare array.
+                            let mut ids: Vec<String> = Vec::new();
+                            let mut push = |v: &serde_json::Value| {
+                                if let Some(s) = v.as_str() {
+                                    ids.push(s.to_string());
+                                } else if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                                    ids.push(id.to_string());
+                                } else if let Some(name) = v.get("name").and_then(|i| i.as_str()) {
+                                    ids.push(name.to_string());
+                                }
+                            };
+                            if let Some(arr) = parsed.get("data").and_then(|d| d.as_array()) {
+                                arr.iter().for_each(&mut push);
+                            } else if let Some(arr) = parsed.get("models").and_then(|d| d.as_array()) {
+                                arr.iter().for_each(&mut push);
+                            } else if let Some(arr) = parsed.as_array() {
+                                arr.iter().for_each(&mut push);
+                            }
+                            ids.sort();
+                            ids.dedup();
+                            if ids.is_empty() {
+                                eprintln!("no models found at {url} (response: {})", &body.chars().take(200).collect::<String>());
+                                std::process::exit(1);
+                            }
+                            if cli.json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&serde_json::json!({
+                                        "url": url,
+                                        "models": ids,
+                                    }))?
+                                );
+                            } else {
+                                for id in &ids {
+                                    println!("{id}");
+                                }
+                            }
+                        }
+                        Err(ureq::Error::StatusCode(code)) => {
+                            eprintln!("{url} returned HTTP {code}");
+                            std::process::exit(1);
+                        }
+                        Err(e) => {
+                            eprintln!("{url} unreachable: {e}");
                             std::process::exit(1);
                         }
                     }

@@ -29,6 +29,9 @@ export default function SettingsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [testOutput, setTestOutput] = useState<string | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsUrl, setModelsUrl] = useState<string>("");
+  const [fetchingModels, setFetchingModels] = useState(false);
 
   const load = async () => {
     try {
@@ -50,6 +53,40 @@ export default function SettingsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  const loadModels = async () => {
+    setFetchingModels(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          base_url: baseUrl || undefined,
+          api_key: apiKey || undefined,
+        }),
+      });
+      const d = await res.json();
+      if (d.error) {
+        setError(`could not fetch models: ${d.error}`);
+        setModels([]);
+        return;
+      }
+      setModels(d.models || []);
+      setModelsUrl(d.url || "");
+      setMessage(`${(d.models || []).length} models from ${d.url}`);
+      if (!model && d.models && d.models.length) {
+        setModel(d.models[0]);
+      }
+      // the endpoint may have been new: refresh what we know
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setFetchingModels(false);
+    }
+  };
 
   const save = async (withTest: boolean) => {
     setBusy(true);
@@ -149,15 +186,40 @@ export default function SettingsPage() {
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium">Model</label>
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-sm font-medium">Model</label>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadModels}
+                disabled={fetchingModels}
+              >
+                {fetchingModels ? "Fetching..." : "Fetch models"}
+              </Button>
+            </div>
             <Input
               value={model}
               onChange={(e) => setModel(e.target.value)}
               placeholder="claude-haiku-4.5"
+              list="imc-model-list"
             />
+            <datalist id="imc-model-list">
+              {models.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
             <p className="text-xs text-muted-foreground">
-              Tên model đúng theo endpoint của bạn. Thiếu model là nguyên nhân phổ biến
-              nhất của lỗi 404 &quot;model is not available&quot;.
+              {models.length > 0 ? (
+                <>
+                  {models.length} model từ {modelsUrl} — bấm vào ô để xem danh sách và lọc.
+                </>
+              ) : (
+                <>
+                  Bấm &quot;Fetch models&quot; để lấy danh sách model từ endpoint (URL + key
+                  được lưu trước rồi mới gọi). Thiếu model là nguyên nhân phổ biến nhất của
+                  lỗi 404 &quot;model is not available&quot;.
+                </>
+              )}
             </p>
           </div>
 
