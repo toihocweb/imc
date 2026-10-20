@@ -589,7 +589,19 @@ pub fn search(
     // RefreshTokenRotationTest.java) and gives production code a chance to
     // appear.
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    let lambda: f64 = 0.60;
+    // The relevance scores are RRF values in the 0.01-0.06 range, while the
+    // MMR diversity penalty is 0..1. On the original scale the penalty
+    // dominated every score difference, so the order was effectively
+    // "diverse first, relevant second" — a chunk with score 0.0296 lost to
+    // one with 0.0231. Normalise the scores to 0..1 first, then the two terms
+    // are comparable and the diversity trade-off is the one that was intended.
+    let max_score = scored.first().map(|(s, _)| *s).unwrap_or(0.0);
+    if max_score > 0.0 {
+        for (s, _) in scored.iter_mut() {
+            *s /= max_score;
+        }
+    }
+    let lambda: f64 = 0.70;
     let mut selected: Vec<SearchHit> = Vec::new();
     let mut remaining: Vec<(f64, SearchHit)> = scored;
     while !remaining.is_empty() && selected.len() < opts.limit {
@@ -606,7 +618,10 @@ pub fn search(
                 best_idx = i;
             }
         }
-        let (_score, hit) = remaining.remove(best_idx);
+        let (score, mut hit) = remaining.remove(best_idx);
+        // Report the ranking key that was actually used, so the printed order
+        // and the printed score agree.
+        hit.score = score;
         selected.push(hit);
     }
     Ok(selected)

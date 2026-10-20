@@ -116,6 +116,8 @@ pub fn run_with_progress(
 
     // Parse in parallel (tree-sitter is CPU bound); writes stay single-threaded.
     let window_lines = cfg.window_lines;
+    let budget_nws = cfg.chunk_budget_nws;
+    let strategy = cfg.chunk_strategy.clone();
     let todo_total = todo.len();
     let parsed_counter = std::sync::atomic::AtomicUsize::new(0);
     let parsed: Vec<_> = todo
@@ -129,12 +131,13 @@ pub fn run_with_progress(
                 total: todo_total,
                 current: f.rel.clone(),
             });
-            let (symbols, edges, mut chunks) = match imc_parser::parse(&f.rel, &text) {
-                Some(p) => (p.symbols, p.edges, p.chunks),
-                None => (Vec::new(), Vec::new(), Vec::new()),
-            };
+            let (symbols, edges, mut chunks) =
+                match imc_parser::parse_with(&f.rel, &text, budget_nws, &strategy) {
+                    Some(p) => (p.symbols, p.edges, p.chunks),
+                    None => (Vec::new(), Vec::new(), Vec::new()),
+                };
             if chunks.is_empty() {
-                chunks = window_chunks(&f.rel, &text, window_lines);
+                chunks = window_chunks(&f.rel, &text, window_lines, budget_nws);
             }
             Ok((f.rel.clone(), symbols, edges, chunks))
         })
@@ -194,8 +197,21 @@ pub fn run_with_progress(
     })
 }
 
+/// Non-whitespace characters — the size unit the cAST paper budgets in.
+fn nws_len(s: &str) -> usize {
+    s.chars().filter(|c| !c.is_whitespace()).count()
+}
+
 /// Sliding-window chunking for files without AST symbols (markdown, configs, plain text).
-pub fn window_chunks(rel: &str, text: &str, window: usize) -> Vec<RawChunk> {
+///
+/// The window is capped at the same non-whitespace budget the AST chunking
+/// uses (cAST paper: ~2,000 non-whitespace characters).
+pub fn window_chunks(
+    rel: &str,
+    text: &str,
+    window: usize,
+    budget_nws: usize,
+) -> Vec<RawChunk> {
     let lines: Vec<&str> = text.lines().collect();
     if lines.is_empty() {
         return Vec::new();
@@ -205,7 +221,13 @@ pub fn window_chunks(rel: &str, text: &str, window: usize) -> Vec<RawChunk> {
     let step = (window / 2).max(1);
     let mut i = 0;
     while i < lines.len() {
-        let end = (i + window).min(lines.len());
+        let mut end = (i + window).min(lines.len());
+        // Shrink the window until it fits the budget: an uncapped 120-line
+        // window produced a single 8.4 KB chunk, four times the embedding
+        // budget of a normal chunk for no extra signal.
+        while end > i + 1 && nws_len(&lines[i..end].join("\n")) > budget_nws {
+            end -= 1;
+        }
         let body = lines[i..end].join("\n");
         out.push(RawChunk {
             start_line: i + 1,

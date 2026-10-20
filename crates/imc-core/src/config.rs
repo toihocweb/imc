@@ -64,6 +64,11 @@ pub struct Config {
     pub max_file_bytes: u64,
     /// Hard cap for text chunks used when a file has no AST symbols.
     pub window_lines: usize,
+    /// Chunk budget in non-whitespace characters (cAST-style chunking).
+    pub chunk_budget_nws: usize,
+    /// Chunking strategy: `symbol` (one chunk per symbol, default) or `cast`
+    /// (cAST split-then-merge over the syntax tree).
+    pub chunk_strategy: String,
 }
 
 impl Default for Config {
@@ -82,6 +87,8 @@ impl Default for Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1024 * 1024),
             window_lines: 120,
+            chunk_budget_nws: 2000,
+            chunk_strategy: "symbol".to_string(),
         }
     }
 }

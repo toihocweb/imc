@@ -231,3 +231,30 @@ indexed **zero** files when the tree contained a single file that was not
 valid UTF-8. Python feeds tree-sitter raw bytes, so such a file still yields
 symbols; only its text/embedding step degrades. `ingest::read_text` now
 decodes lossily (`String::from_utf8_lossy`) instead of propagating the error.
+
+## Chunking (class B — deliberate divergence, measured)
+
+Python (`main/indexing/semantic.py`) chunks with LlamaIndex: `CodeSplitter`
+for code files and `SentenceSplitter` for the rest. The Rust port chunks by
+AST symbol instead.
+
+Measured on the Python repo (183 files) with `e2e/search_bench_auto.py`
+(120 questions generated from the repo's own docstrings, paired comparison):
+
+| chunks | BM25 top-1 / top-5 / MRR | hybrid top-1 / top-5 / MRR |
+|---|---|---|
+| cAST split-then-merge (2000 non-whitespace chars) | 52 / 63 / 0.465 | 54 / 70 / 0.489 |
+| one chunk per symbol | **58 / 77 / 0.543** | **62 / 79 / 0.563** |
+
+The cAST paper (arXiv 2506.15655) reports gains in *recall* and generation,
+but on a per-symbol index the vector leg scores a single symbol instead of a
+mixture of three, and that wins on precision. The strategy is therefore
+configurable (`chunk_strategy`: `symbol` — default — or `cast`), and the
+default is the one that measured better.
+
+Two real bugs were fixed along the way:
+
+* a symbol larger than the chunk budget was **truncated** at 4096 bytes, so
+  the tail of the function was lost (it is now split into several chunks);
+* the sliding window for files without AST symbols was **uncapped** and
+  produced a single 8.4 KB chunk.

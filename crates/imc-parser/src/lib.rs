@@ -2,6 +2,8 @@
 //! AST-scoped chunks. This replaces `main/ingest/parser.py` (extraction half)
 //! and `main/indexing/graph.py` (graph half) of the Python implementation.
 
+pub mod chunker;
+
 use tree_sitter::{Node, Parser};
 
 use imc_core::ingest::language_of;
@@ -51,6 +53,16 @@ fn parser_for(lang: &str) -> Option<Parser> {
 /// Parse `text` for `rel` (project-relative path). Returns `None` when the
 /// language has no tree-sitter grammar wired up.
 pub fn parse(rel: &str, text: &str) -> Option<ParsedFile> {
+    parse_with(rel, text, chunker::BUDGET_NWS, "symbol")
+}
+
+/// Parse with an explicit chunk budget and chunking strategy.
+pub fn parse_with(
+    rel: &str,
+    text: &str,
+    budget: usize,
+    strategy: &str,
+) -> Option<ParsedFile> {
     let lang = language_of(rel)?;
     if !SUPPORTED.contains(&lang) {
         return None;
@@ -64,8 +76,63 @@ pub fn parse(rel: &str, text: &str) -> Option<ParsedFile> {
         edges: Vec::new(),
         chunks: Vec::new(),
     };
-    walk(tree.root_node(), rel, bytes, text, lang, &mut out, None, None);
+    // `symbol` keeps one chunk per symbol (precise: the vector leg of the
+    // hybrid search scores a single symbol, not a mixture of three).
+    // `cast` uses the cAST split-then-merge over the tree.
+    if strategy == "cast" {
+        walk(tree.root_node(), rel, bytes, text, lang, &mut out, None, None, budget);
+        out.chunks = chunk_tree_chunks(tree.root_node(), text, &out.symbols, budget);
+    } else {
+        walk(tree.root_node(), rel, bytes, text, lang, &mut out, None, None, budget);
+    }
     Some(out)
+}
+
+
+
+/// Parse with an explicit chunk budget (non-whitespace characters).
+pub fn parse_with_budget(rel: &str, text: &str, budget: usize) -> Option<ParsedFile> {
+    let mut parsed = parse(rel, text)?;
+    if budget != chunker::BUDGET_NWS {
+        // Re-run only the chunking with the new budget.
+        let lang = language_of(rel)?;
+        let mut parser = parser_for(lang)?;
+        let tree = parser.parse(text, None)?;
+        parsed.chunks = chunk_tree_chunks(tree.root_node(), text, &parsed.symbols, budget);
+    }
+    Some(parsed)
+}
+
+/// Turn the cAST pieces into chunks the index can store.
+fn chunk_tree_chunks(
+    root: Node<'_>,
+    text: &str,
+    symbols: &[Symbol],
+    budget: usize,
+) -> Vec<RawChunk> {
+    chunker::chunk_tree(root, text, symbols, budget)
+        .into_iter()
+        .map(|p| {
+            let body = chunker::slice(text, p.start_byte, p.end_byte);
+            let names: Vec<String> = p
+                .symbols
+                .iter()
+                .filter_map(|id| symbols.iter().find(|s| &s.id == id))
+                .map(|s| s.qualname.clone())
+                .collect();
+            let header = if names.is_empty() {
+                String::new()
+            } else {
+                format!("{}\n", names.join(" | "))
+            };
+            RawChunk {
+                start_line: p.start_line,
+                end_line: p.end_line,
+                text: format!("{header}{}", body.trim_end()),
+                sym_id: p.symbols.first().cloned(),
+            }
+        })
+        .collect()
 }
 
 fn walk(
@@ -77,12 +144,13 @@ fn walk(
     out: &mut ParsedFile,
     parent_qualified: Option<&str>,
     parent_id: Option<&str>,
+    budget: usize,
 ) {
     // Explicit stack keeps deep trees well inside the thread stack limit.
-    let mut stack: Vec<(Node<'_>, Option<String>, Option<String>)> =
-        vec![(node, parent_qualified.map(String::from), parent_id.map(String::from))];
+    let mut stack: Vec<(Node<'_>, Option<String>, Option<String>, usize)> =
+        vec![(node, parent_qualified.map(String::from), parent_id.map(String::from), budget)];
 
-    while let Some((n, pq, pid)) = stack.pop() {
+    while let Some((n, pq, pid, budget)) = stack.pop() {
         // Rust `impl Pair { ... }`: Python indexes the type definition
         // (`struct`/`enum`) and its methods, never the impl block. Emitting a
         // symbol here is actively harmful — its qualname is the type name, so its
@@ -101,20 +169,40 @@ fn walk(
             let nested = (!prefix.is_empty()).then_some(prefix);
             for i in (0..n.child_count()).rev() {
                 if let Some(c) = n.child(i) {
-                    stack.push((c, nested.clone(), pid.clone()));
+                    stack.push((c, nested.clone(), pid.clone(), budget));
                 }
             }
             continue;
         }
 
         if let Some(sym) = maybe_symbol(n, rel, bytes, text, lang, pq.as_deref()) {
-            out.chunks.push(chunk_of(&sym, bytes, text));
+            // One chunk per symbol. A symbol larger than the budget is split
+            // into several chunks instead of being truncated: cutting it lost
+            // the tail of the function (and the API answer with it).
+            let body = chunker::slice(text, sym.start_byte, sym.end_byte);
+            if chunker::nws_len(&body) > budget {
+                for part in chunker::split_text_by_lines(&body, budget) {
+                    out.chunks.push(RawChunk {
+                        start_line: sym.line,
+                        end_line: sym.end_line,
+                        text: format!("{}\n{}", sym.qualname, part),
+                        sym_id: Some(sym.id.clone()),
+                    });
+                }
+            } else {
+                out.chunks.push(RawChunk {
+                    start_line: sym.line,
+                    end_line: sym.end_line,
+                    text: format!("{} {}", sym.qualname, body.trim_end()),
+                    sym_id: Some(sym.id.clone()),
+                });
+            }
             let qual = sym.qualname.clone();
             let id = sym.id.clone();
             out.symbols.push(sym);
             for i in (0..n.child_count()).rev() {
                 if let Some(c) = n.child(i) {
-                    stack.push((c, Some(qual.clone()), Some(id.clone())));
+                    stack.push((c, Some(qual.clone()), Some(id.clone()), budget));
                 }
             }
             continue;
@@ -126,7 +214,7 @@ fn walk(
 
         for i in (0..n.child_count()).rev() {
             if let Some(c) = n.child(i) {
-                stack.push((c, pq.clone(), pid.clone()));
+                stack.push((c, pq.clone(), pid.clone(), budget));
             }
         }
     }
@@ -158,43 +246,6 @@ fn make_symbol(
         start_byte: node.start_byte(),
         end_byte: node.end_byte(),
         parent,
-    }
-}
-
-/// Largest index `<= i` that is a UTF-8 char boundary. `str::floor_char_boundary`
-/// is still unstable, and byte offsets over arbitrary source text are unsafe.
-fn floor_char_boundary(s: &str, i: usize) -> usize {
-    let mut i = i.min(s.len());
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}
-
-fn chunk_of(sym: &Symbol, bytes: &[u8], text: &str) -> RawChunk {
-    let end = sym.end_byte.min(bytes.len());
-    let start = sym.start_byte.min(end);
-    let mut body = &text[start..end];
-    // Cap very large symbols at ~4 KB to keep embedding batches sane.
-    if body.len() > 4096 {
-        // Byte 4096 can land inside a multi-byte character; slicing there
-        // panicked the whole index on a Korean repo (chunks ended up empty).
-        // Python's CodeSplitter caps by *characters* and cannot do this.
-        // `find`, not `rfind`: the last newline of the remainder is almost at
-        // the end of the body, so the cap never actually truncated anything
-        // (a 6 KB function kept 6030 of its 6032 bytes).
-        let cut_at = floor_char_boundary(body, 4096);
-        if let Some(cut) = body[cut_at..].find('\n') {
-            body = &body[..cut_at + cut];
-        } else {
-            body = &body[..cut_at];
-        }
-    }
-    RawChunk {
-        start_line: sym.line,
-        end_line: sym.end_line,
-        text: format!("{} {}", sym.qualname, body.trim_end()),
-        sym_id: Some(sym.id.clone()),
     }
 }
 
