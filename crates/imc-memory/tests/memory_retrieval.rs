@@ -41,6 +41,32 @@ fn add_mem(
     .unwrap()
 }
 
+/// Adds a memory and returns the id, or -1 when the memory was not stored
+/// (empty content, or a near duplicate of an existing one).
+fn try_add_mem(
+    store: &imc_core::store::Store,
+    content: &str,
+    mem_type: MemoryType,
+    scene: &str,
+    paths: &[&str],
+    importance: f64,
+) -> i64 {
+    let paths: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
+    imc_memory::add_typed(
+        store,
+        content,
+        mem_type,
+        scene,
+        "test_category",
+        &paths,
+        &[],
+        importance,
+        "test",
+    )
+    .unwrap()
+    .unwrap_or(-1)
+}
+
 #[test]
 fn mem_type_filter_excludes_non_matching() {
     let store = make_store("typefilter");
@@ -268,7 +294,7 @@ fn decay_reorders_two_identical_memories() {
     );
     let stale = add_mem(
         &store,
-        "deploy pipeline runs on ci too",
+        "kubernetes rollout waits for the health probe to pass",
         MemoryType::WorkFact,
         "ci",
         &[],
@@ -285,7 +311,7 @@ fn decay_reorders_two_identical_memories() {
         )
         .unwrap();
 
-    let hits = retrieve(&store, None, "deploy pipeline runs", &[], None, None, 5).unwrap();
+    let hits = retrieve(&store, None, "deploy pipeline kubernetes rollout health probe", &[], None, None, 5).unwrap();
     assert!(hits.len() >= 2, "{hits:?}");
     assert_eq!(hits[0].memory.id, fresh, "{hits:?}");
     assert!(
@@ -324,4 +350,48 @@ fn business_rules_do_not_decay() {
         hits[0].rank_score,
         hits[0].score
     );
+}
+
+/// The same fact written twice with different wording must not become two
+/// memories. The second write reinforces the first instead: it counts as
+/// used, it counts as seen recently, and it keeps its importance.
+#[test]
+fn a_near_duplicate_reinforces_the_stored_memory() {
+    let store = make_store("near_dup");
+    let first = add_mem(
+        &store,
+        "the deploy pipeline runs on the ci runner",
+        MemoryType::WorkFact,
+        "ci",
+        &[],
+        0.6,
+    );
+    let second = try_add_mem(
+        &store,
+        "the deploy pipeline runs on the ci runner, on every push",
+        MemoryType::WorkFact,
+        "ci",
+        &[],
+        0.9,
+    );
+    assert!(first > 0, "the first memory is stored");
+    assert!(second < 0, "the near duplicate is not stored as a second memory");
+
+    let count: i64 = store
+        .conn
+        .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "one memory, not two");
+
+    let (use_count, importance, last_used): (i64, f64, i64) = store
+        .conn
+        .query_row(
+            "SELECT use_count, importance, last_used FROM memories WHERE id = ?1",
+            rusqlite::params![first],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert!(use_count >= 1, "the existing memory was reinforced: {use_count}");
+    assert!(importance >= 0.6, "importance kept: {importance}");
+    assert!(last_used > 0, "seen recently: {last_used}");
 }

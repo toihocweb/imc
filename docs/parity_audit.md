@@ -244,7 +244,8 @@ Measured on the Python repo (183 files) with `e2e/search_bench_auto.py`
 | chunks | BM25 top-1 / top-5 / MRR | hybrid top-1 / top-5 / MRR |
 |---|---|---|
 | cAST split-then-merge (2000 non-whitespace chars) | 52 / 63 / 0.465 | 54 / 70 / 0.489 |
-| one chunk per symbol | **58 / 77 / 0.543** | **62 / 79 / 0.563** |
+| one chunk per symbol | 58 / 77 / 0.543 | 62 / 79 / 0.563 |
+| + contextual headers | **59 / 77 / 0.547** | **62 / 76 / 0.557** |
 
 The cAST paper (arXiv 2506.15655) reports gains in *recall* and generation,
 but on a per-symbol index the vector leg scores a single symbol instead of a
@@ -258,3 +259,56 @@ Two real bugs were fixed along the way:
   the tail of the function was lost (it is now split into several chunks);
 * the sliding window for files without AST symbols was **uncapped** and
   produced a single 8.4 KB chunk.
+
+### Contextual headers
+
+Splitting a symbol into parts has a cost: the middle of a function arrives as
+a chunk that says `if prune:` and nothing else. Every part now carries the
+symbol's signature and the first line of its docstring
+(`run_memory (part 2/2) | def run_memory(...): | """Delete only
+memories..."""`), so each hit is self-describing. This is the contextual
+chunking trick — a few dozen characters of context that do not dilute the
+query. The benchmark does not move (BM25 top-1 58 -> 59, hybrid 62 -> 62),
+so the headers are kept for the agent, not for the score.
+
+The text sent to the embedding model is capped at 4 KB on a character
+boundary while the stored text stays whole, so the lexical leg still matches
+the tail of a long function.
+
+## Memory ranking: decay (class B — deliberate divergence, measured)
+
+Python's memory ranking is `0.55*sim + 0.20*importance + 0.10*recency +
+0.05*usage + 0.10*overlap`. The recency term has a weight of 0.10, which
+cannot reorder a crowded result set: a memory used yesterday and one used
+last month land within 0.1 of each other.
+
+The port applies a decay as a separate multiplicative stage, with a 5x
+spread: 1.5x used today, 1.2x this week, 0.8x this month, 0.5x this
+quarter, 0.3x beyond. The combined score is multiplied before it is clamped,
+so decay reorders while the public score stays in 0..1. The floor is 0.3:
+decay is a bias, never a filter. Business rules and working methods are
+exempt — a decision does not expire. Two tests in
+`crates/imc-memory/tests/memory_retrieval.rs` cover both.
+
+## Working-memory injection point (class B — deliberate divergence)
+
+Python's proxy injects the working memory into the first user turn and
+re-hydrates it into every past turn, so the prompt prefix stays byte-stable
+for Anthropic's prompt cache. That is a history edit: any change to the
+memory set rewrites the whole conversation, and the block sits where the
+model attends least ("lost in the middle").
+
+The port injects into the most recent genuine user turn — a turn with real
+text, not only tool results — and leaves the earlier turns byte-identical.
+The per-(session, project, query) cache keeps the block byte-identical
+between turns, so the cached prefix survives. Covered by
+`crates/imc-proxy/src/imc_memory/tests.rs`.
+
+## `imc pack` (superset)
+
+Python has no `pack`. The port assembles retrieval, graph facts and
+memories under a token budget. Two additions on top of the first version:
+a relevance floor (a hit below a quarter of the best score is dropped) and
+cross-source dedup (Jaccard >= 0.75 on the compressed text, because that is
+what ships). Measured over 30 questions: the raw search results hold 58
+near-duplicate pairs among 348 items, the pack holds none.

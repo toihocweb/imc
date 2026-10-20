@@ -161,6 +161,89 @@ pub fn now() -> i64 {
 }
 
 /// Insert a memory; exact-duplicate content is rejected like the Python store.
+
+/// Jaccard similarity of the word sets of two normalized strings.
+fn jaccard(a: &str, b: &str) -> f64 {
+    let tokens = |s: &str| -> std::collections::HashSet<String> {
+        s.split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_string())
+            .collect()
+    };
+    let ta = tokens(a);
+    let tb = tokens(b);
+    if ta.is_empty() || tb.is_empty() {
+        return 0.0;
+    }
+    let inter = ta.intersection(&tb).count() as f64;
+    let union = ta.union(&tb).count() as f64;
+    if union == 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
+}
+
+/// A shorter memory whose words are at least this contained in the longer
+/// one says the same thing.
+const NEAR_DUP_CONTAINMENT: f64 = 0.9;
+/// Below this many words a memory is too short for a containment rule: three
+/// words and one different word is already 75% similar, and "the deploy
+/// pipeline rustfmt" and "the deploy pipeline rustfmt prod" are two scenes,
+/// not one fact twice.
+const NEAR_DUP_MIN_WORDS: usize = 5;
+
+/// Find a stored memory that says the same thing as `norm`.
+///
+/// Jaccard alone is too blunt here: one different word in a short sentence
+/// already scores 0.75. The rule is containment — the shorter text's words
+/// are almost all in the longer one — which matches "the same fact, written
+/// again with a few extra words" and leaves "the same words in a different
+/// module" alone.
+fn find_near_dup(store: &Store, norm: &str) -> Result<Option<i64>> {
+    let mut stmt = store.conn.prepare(
+        "SELECT id, content_norm FROM memories WHERE content_norm != ?1",
+    )?;
+    let rows = stmt.query_map(params![norm], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    })?;
+    let mut best: Option<(i64, f64)> = None;
+    for row in rows {
+        let (id, other) = row?;
+        let sim = jaccard(norm, &other);
+        let containment = containment(norm, &other);
+        let short_words = word_count(norm).min(word_count(&other));
+        let same = short_words >= NEAR_DUP_MIN_WORDS
+            && (containment >= NEAR_DUP_CONTAINMENT || sim >= 0.9);
+        if same && best.map(|(_, s)| sim > s).unwrap_or(true) {
+            best = Some((id, sim));
+        }
+    }
+    Ok(best.map(|(id, _)| id))
+}
+
+/// How much of the shorter text appears in the longer one.
+fn containment(a: &str, b: &str) -> f64 {
+    let tokens = |s: &str| -> std::collections::HashSet<String> {
+        s.split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_string())
+            .collect()
+    };
+    let ta = tokens(a);
+    let tb = tokens(b);
+    if ta.is_empty() || tb.is_empty() {
+        return 0.0;
+    }
+    let (short, long) = if ta.len() <= tb.len() { (&ta, &tb) } else { (&tb, &ta) };
+    short.iter().filter(|w| long.contains(*w)).count() as f64 / short.len() as f64
+}
+
+/// The number of words in a normalized string.
+fn word_count(s: &str) -> usize {
+    s.split_whitespace().count()
+}
+
 pub fn add(
     store: &Store,
     content: &str,
@@ -184,6 +267,20 @@ pub fn add(
         )
         .optional()?;
     if dup.is_some() {
+        return Ok(None);
+    }
+    // Near-duplicate: the same fact written twice with different wording.
+    // Storing both fills the store with copies of one thing, so the existing
+    // memory is reinforced instead (used, seen recently, no less important).
+    if let Some(existing) = find_near_dup(store, &norm)? {
+        store.conn.execute(
+            "UPDATE memories
+             SET use_count = use_count + 1,
+                 last_used = ?1,
+                 importance = MAX(importance, ?2)
+             WHERE id = ?3",
+            params![now(), importance.clamp(0.0, 1.0), existing],
+        )?;
         return Ok(None);
     }
     store.conn.execute(
