@@ -336,6 +336,9 @@ enum CcrAction {
         /// Automatically write the recommended min_savings to config.
         #[arg(long)]
         apply: bool,
+        /// Run in background, re-tuning every 30 minutes (daemon).
+        #[arg(long)]
+        auto: bool,
     },
 }
 
@@ -388,6 +391,49 @@ fn resolve_root(cfg: &Config, project: Option<PathBuf>) -> Result<PathBuf> {
         }
     }
     Ok(cwd)
+}
+
+/// Auto-tune CCR min_savings once: recompute from current store and write to config
+/// only if the recommended value differs from the current one.
+fn auto_tune_once(root: &std::path::Path) -> Result<()> {
+    let db = root.join("index.db");
+    let store = imc_proxy::compression::ccr_store::CcrStore::open(&db)?;
+    let entries = store.list(None, 10_000)?;
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let total_orig: i64 = entries.iter().map(|e| e.orig_tokens).sum();
+    let total_comp: i64 = entries.iter().map(|e| e.comp_tokens).sum();
+    let overall_ratio = if total_orig > 0 {
+        total_comp as f64 / total_orig as f64
+    } else {
+        1.0
+    };
+    let recommended = if overall_ratio > 0.80 {
+        overall_ratio.min(0.90)
+    } else if overall_ratio < 0.30 {
+        (overall_ratio * 0.7).max(0.10)
+    } else {
+        0.20
+    };
+    let current = imc_core::settings::load()
+        .compression
+        .as_ref()
+        .and_then(|c| c.min_savings)
+        .unwrap_or(0.20);
+    if (recommended - current).abs() > 0.01 {
+        let mut s = imc_core::settings::load();
+        imc_core::settings::set(
+            &mut s,
+            "compression.min_savings",
+            &recommended.to_string(),
+        )?;
+        imc_core::settings::save(&s)?;
+        println!(
+            "[ccr auto-tune] min_savings {current:.3} -> {recommended:.3} (ratio {overall_ratio:.3})"
+        );
+    }
+    Ok(())
 }
 
 /// Python's `positive_int`: argparse rejects `--limit 0` / `--depth 0` with
@@ -915,7 +961,7 @@ fn main() -> Result<()> {
                     let n = store.prune_before(cutoff)?;
                     println!("pruned {n} record(s) older than {days} day(s)");
                 }
-                CcrAction::Tune { apply } => {
+                CcrAction::Tune { apply, auto } => {
                     let entries = store.list(None, 10_000)?;
                     let total_orig: i64 = entries.iter().map(|e| e.orig_tokens).sum();
                     let total_comp: i64 = entries.iter().map(|e| e.comp_tokens).sum();
@@ -994,6 +1040,17 @@ fn main() -> Result<()> {
                         println!(
                             "restart the proxy (`imc proxy stop && imc proxy serve`) to take effect."
                         );
+                        if *auto {
+                            println!("CCR auto-tune running in background (every 30 min).");
+                            let root2 = root.to_path_buf();
+                            std::thread::spawn(move || loop {
+                                std::thread::sleep(std::time::Duration::from_secs(30 * 60));
+                                match auto_tune_once(&root2) {
+                                    Ok(()) => {}
+                                    Err(e) => eprintln!("ccr auto-tune: {e}"),
+                                }
+                            });
+                        }
                     } else {
                         println!();
                         println!(
