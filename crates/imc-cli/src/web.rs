@@ -128,6 +128,16 @@ fn running_dashboard_is_stale(dir: &Path) -> bool {
 
 /// Stop the dashboard that `imc` started earlier.
 fn stop_recorded_dashboard() {
+    // The pid file of a previous run belongs to the process being replaced.
+    if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("imc-web-") && name.ends_with(".pid") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
     let Ok(raw) = std::fs::read_to_string(state_path()) else {
         return;
     };
@@ -338,6 +348,12 @@ fn build_dashboard(dir: &Path) -> Result<()> {
         }
     }
 
+    // A clean build: the old .next is removed first, so no chunk from the
+    // previous build can survive in the new one.
+    let next_dir = dir.join(".next");
+    if next_dir.exists() {
+        let _ = std::fs::remove_dir_all(&next_dir);
+    }
     eprintln!("[imc web] building the dashboard (npm run build)…");
     let status = Command::new(&npm)
         .args(["run", "build"])
