@@ -220,6 +220,13 @@ def main() -> int:
             proxy.wait(timeout=10)
         except Exception:
             proxy.kill()
+        # `imc proxy serve` daemonises: the CLI exits but the listener survives,
+        # so kill whatever owns the proxy port as well.
+        subprocess.run(["bash", "-lc",
+                        f"pid=$(ss -tlnp | grep '127.0.0.1:{proxy_port}' "
+                        f"| grep -oP 'pid=\\K[0-9]+' | head -1); "
+                        f"[ -n \"$pid\" ] && kill $pid || true"],
+                       capture_output=True, text=True)
         srv.shutdown()
 
 
