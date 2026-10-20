@@ -1,0 +1,3 @@
+# Known fake keys that live in the repository's own tests.
+# One exact token per line.
+sk-test-1234567890abcdef

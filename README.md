@@ -187,6 +187,23 @@ While indexing, progress goes to stderr so a long run is not a black box:
 [imc] building index…
 ```
 
+### Keeping the repository clean
+
+The imc repository is a tool repository: it must never carry anything from a
+real project — local paths, project names, captured prompts or API keys. A
+pre-commit hook enforces that:
+
+```bash
+scripts/install_hooks.sh     # once per clone
+scripts/repo_guard.py        # check the staged changes
+scripts/repo_guard.py --all  # audit every tracked file
+```
+
+It refuses a commit that contains an absolute home path (`/Users/...`), a
+project name listed in `scripts/repo_guard.deny`, a local artefact (`.env`,
+`*.db`, `captures/`, `.claude/settings.local.json`) or something that looks
+like a real API key.
+
 ### Web dashboard
 
 A shadcn/ui dashboard over the same CLI — browse projects, search, trace, inspect memories,

@@ -2,3 +2,12 @@
 **/*.db
 .imc-data/
 __pycache__/
+
+# Local artefacts — never part of the tool repository
+.claude/
+CLAUDE.md
+.env
+.env.*
+captures/
+*.log
+scripts/repo_guard.local.*

@@ -1,0 +1,5 @@
+# Project names that must never appear in the imc repository.
+#
+# This tracked file stays empty on purpose: the repository is public, so a
+# project name must not live in its history. Put personal names in
+# scripts/repo_guard.local.deny instead (gitignored).
