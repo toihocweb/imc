@@ -239,9 +239,26 @@ pub fn proxy_bin() -> Result<PathBuf> {
     )
 }
 
+/// The daemon's file modification time, in seconds since the epoch.
+fn file_mtime_secs(path: &std::path::Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+}
+
 /// Spawn the proxy in the background and record pid/port.
+///
+/// A daemon that is already running keeps serving the code it was started
+/// with, and the request-path fixes live in the daemon — not in `imc`. So a
+/// daemon older than the binary on disk is replaced instead of reused.
 pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
     let exe = proxy_bin()?;
+    if daemon_is_stale(cfg, &exe) {
+        let _ = stop_proxy(cfg);
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
     let exe_disp = exe.display().to_string();
     let log_dir = cfg.data_dir.join("logs");
     std::fs::create_dir_all(&log_dir).ok();
@@ -260,6 +277,8 @@ pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
         "pid": pid,
         "port": port,
         "started_at": chrono_now(),
+        "daemon_path": exe_disp,
+        "daemon_mtime": file_mtime_secs(&exe),
         "upstream": {
             "base_url": cfg.llm_base_url(),
             "model": cfg.llm_model(),
@@ -269,6 +288,39 @@ pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
     std::fs::create_dir_all(&cfg.data_dir).ok();
     std::fs::write(state_path(cfg), serde_json::to_vec_pretty(&state)?)?;
     Ok(state)
+}
+
+/// True when a running daemon was started from an older build.
+fn daemon_is_stale(cfg: &Config, exe: &std::path::Path) -> bool {
+    let Some(status) = proxy_status(cfg) else {
+        return false;
+    };
+    if !status
+        .get("running")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    let recorded = status
+        .get("state")
+        .and_then(|s| s.get("daemon_mtime"))
+        .and_then(|v| v.as_u64());
+    let current = file_mtime_secs(exe);
+    match (recorded, current) {
+        // A daemon started before this field existed: treat it as stale when
+        // the binary on disk is newer than the recorded start time.
+        (None, Some(cur)) => {
+            let started = status
+                .get("state")
+                .and_then(|s| s.get("started_at"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            cur > started
+        }
+        (Some(rec), Some(cur)) => cur > rec,
+        _ => false,
+    }
 }
 
 pub fn stop_proxy(cfg: &Config) -> Result<Option<u16>> {
