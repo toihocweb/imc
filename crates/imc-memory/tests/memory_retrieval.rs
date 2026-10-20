@@ -251,3 +251,77 @@ fn unrelated_query_does_not_return_a_memory() {
     let hits = retrieve(&store, None, "changelog iso dates", &[], None, None, 5).unwrap();
     assert_eq!(hits.len(), 1, "{hits:?}");
 }
+
+/// Decay is a multiplicative stage: two memories with the same content and
+/// the same importance rank differently once one of them has not been used for
+/// months. The additive recency term (weight 0.10) could not do that.
+#[test]
+fn decay_reorders_two_identical_memories() {
+    let store = make_store("decay");
+    let fresh = add_mem(
+        &store,
+        "deploy pipeline runs on ci",
+        MemoryType::WorkFact,
+        "ci",
+        &[],
+        0.7,
+    );
+    let stale = add_mem(
+        &store,
+        "deploy pipeline runs on ci too",
+        MemoryType::WorkFact,
+        "ci",
+        &[],
+        0.7,
+    );
+
+    let now = imc_memory::now();
+    // The stale one was last used four months ago.
+    store
+        .conn
+        .execute(
+            "UPDATE memories SET last_used = ?1 WHERE id = ?2",
+            rusqlite::params![now - 120 * 86_400, stale],
+        )
+        .unwrap();
+
+    let hits = retrieve(&store, None, "deploy pipeline runs", &[], None, None, 5).unwrap();
+    assert!(hits.len() >= 2, "{hits:?}");
+    assert_eq!(hits[0].memory.id, fresh, "{hits:?}");
+    assert!(
+        hits[0].rank_score > hits[1].rank_score,
+        "decay must reorder: {:?}",
+        hits.iter().map(|h| (h.memory.id, h.rank_score)).collect::<Vec<_>>()
+    );
+}
+
+/// Business rules are decisions, not observations: they do not expire.
+#[test]
+fn business_rules_do_not_decay() {
+    let store = make_store("decay_rule");
+    let rule = add_mem(
+        &store,
+        "always run cargo test before pushing",
+        MemoryType::BusinessRule,
+        "",
+        &[],
+        0.7,
+    );
+    let now = imc_memory::now();
+    store
+        .conn
+        .execute(
+            "UPDATE memories SET last_used = ?1 WHERE id = ?2",
+            rusqlite::params![now - 200 * 86_400, rule],
+        )
+        .unwrap();
+
+    let hits = retrieve(&store, None, "cargo test pushing", &[], None, None, 5).unwrap();
+    assert!(!hits.is_empty(), "{hits:?}");
+    assert!(
+        (hits[0].rank_score - hits[0].score).abs() < 1e-9,
+        "a business rule must not be scaled: {} vs {}",
+        hits[0].rank_score,
+        hits[0].score
+    );
+}

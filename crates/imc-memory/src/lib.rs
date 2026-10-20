@@ -68,7 +68,11 @@ pub struct Memory {
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryHit {
     pub memory: Memory,
+    /// The public score, clamped to 0..1.
     pub score: f64,
+    /// The score the ranking uses: the combined score multiplied by the decay
+    /// factor, which can exceed 1 and is what lets decay reorder results.
+    pub rank_score: f64,
     pub matched_paths: Vec<String>,
 }
 
@@ -475,6 +479,49 @@ fn min_cosine() -> f64 {
         .unwrap_or(0.45)
 }
 
+/// How much a memory has faded since it was last used.
+///
+/// Recency is an additive term with a weight of 0.10, which cannot reorder a
+/// crowded result set: a memory that was useful yesterday and one that was
+/// useful last month land within 0.1 of each other. Decay is therefore a
+/// separate multiplicative stage with a 5x spread (Mem0's decay schedule):
+///
+/// | idle      | factor |
+/// |-----------|--------|
+/// | < 1 day   | 1.5    |
+/// | < 7 days  | 1.2    |
+/// | < 30 days | 0.8    |
+/// | < 90 days | 0.5    |
+/// | older     | 0.3    |
+///
+/// The floor is 0.3, so decay is a bias and never a filter: a stale but
+/// correct fact still surfaces. Business rules and working methods are exempt
+/// — they are decisions, not observations, and they do not expire.
+fn decay_factor(memory: &Memory, now: i64) -> f64 {
+    if matches!(
+        memory.mem_type.as_str(),
+        "business_rule" | "work_method"
+    ) {
+        return 1.0;
+    }
+    let last = if memory.last_used > 0 {
+        memory.last_used
+    } else {
+        memory.created_at
+    };
+    if last <= 0 {
+        return 1.0;
+    }
+    let idle_days = ((now - last).max(0) as f64) / 86_400.0;
+    match idle_days {
+        d if d < 1.0 => 1.5,
+        d if d < 7.0 => 1.2,
+        d if d < 30.0 => 0.8,
+        d if d < 90.0 => 0.5,
+        _ => 0.3,
+    }
+}
+
 fn blended_score(
     similarity: f64,
     memory: &Memory,
@@ -581,7 +628,10 @@ pub fn retrieve(
             continue;
         }
 
-        let score = blended_score(similarity, &m, &context_paths, now);
+        // Decay multiplies the combined score, so it can reorder: the public
+        // score is clamped, the ranking uses the raw value.
+        let raw = blended_score(similarity, &m, &context_paths, now) * decay_factor(&m, now);
+        let score = raw.clamp(0.0, 1.0);
 
         let matched_paths: Vec<String> = m
             .paths
@@ -614,10 +664,16 @@ pub fn retrieve(
         hits.push(MemoryHit {
             memory: m,
             score,
+            rank_score: raw,
             matched_paths,
         });
     }
-    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    // Sort by the rank score (with decay applied), not by the clamped one.
+    hits.sort_by(|a, b| {
+        b.rank_score
+            .partial_cmp(&a.rank_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     hits.truncate(limit);
     Ok(hits)
 }

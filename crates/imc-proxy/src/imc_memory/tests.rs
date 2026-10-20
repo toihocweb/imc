@@ -4,8 +4,9 @@
 use serde_json::{json, Map, Value};
 
 use imc_proxy_types::types::anthropic::{
-    AnthropicInputMessage, AnthropicMessagesPayload, AnthropicTextBlock, AnthropicToolEntry,
-    AnthropicUserContentBlock, AnthropicUserMessage, StringOrBlocks,
+    AnthropicAssistantMessage, AnthropicInputMessage, AnthropicMessagesPayload, AnthropicTextBlock,
+    AnthropicToolEntry, AnthropicToolResultBlock, AnthropicUserContentBlock, AnthropicUserMessage,
+    StringOrBlocks,
 };
 
 use super::*;
@@ -582,4 +583,72 @@ fn get_all_session_text_includes_tool_result_preview() {
     let text = get_all_session_text(&messages);
     assert!(text.contains("please run tests"));
     assert_eq!(text.matches('y').count(), 200, "tool results are truncated at 200 chars");
+}
+
+/// The working memory goes into the most recent genuine user turn, and the
+/// earlier turns are left byte-identical.
+///
+/// Two reasons, both measured elsewhere: the model attends most to the end of
+/// the context ("lost in the middle"), and rewriting an earlier turn changes
+/// the cached prompt prefix — with the block re-hydrated into every past turn,
+/// any change to the memory set invalidated the whole conversation cache.
+#[test]
+fn memory_lands_in_the_last_genuine_user_turn() {
+    let messages = vec![
+        user_msg("first question about the deploy pipeline"),
+        AnthropicInputMessage::Assistant(AnthropicAssistantMessage {
+            role: "assistant".to_string(),
+            content: StringOrBlocks::Text("thinking out loud".to_string()),
+        }),
+        user_msg("second question, the one being answered now"),
+    ];
+    let idx = find_last_genuine_user_index(&messages);
+    assert_eq!(idx, Some(2), "the last genuine user turn");
+
+    // The earlier turn is untouched.
+    let mut payload = payload_with("sys", messages.clone());
+    let before = payload.messages[0].clone();
+    let memory_text = build_memory_block("a fact");
+    attach_memory_to_message(&mut payload.messages[idx.unwrap()], &memory_text);
+    let after = payload.messages[0].clone();
+    assert_eq!(
+        format!("{before:?}"),
+        format!("{after:?}"),
+        "the first turn must not change"
+    );
+
+    // The block is in the last turn.
+    let AnthropicInputMessage::User(um) = &payload.messages[2] else {
+        panic!("expected a user message")
+    };
+    let StringOrBlocks::Blocks(blocks) = &um.content else {
+        panic!("expected blocks")
+    };
+    assert!(
+        blocks.iter().any(|b| matches!(b,
+            AnthropicUserContentBlock::Text(t) if t.text.contains("# Working Memory"))),
+        "{blocks:?}"
+    );
+}
+
+/// A turn that only carries tool results is not a "genuine" turn: the block
+/// must not land there, because that is where the tool output goes.
+#[test]
+fn a_tool_result_turn_is_not_a_target() {
+    let messages = vec![
+        user_msg("the real question"),
+        AnthropicInputMessage::User(AnthropicUserMessage {
+            role: "user".to_string(),
+            content: StringOrBlocks::Blocks(vec![AnthropicUserContentBlock::ToolResult(
+                AnthropicToolResultBlock {
+                    r#type: "tool_result".to_string(),
+                    tool_use_id: "toolu_1".to_string(),
+                    content: StringOrBlocks::Text("output".to_string()),
+                    is_error: None,
+                    cache_control: None,
+                },
+            )]),
+        }),
+    ];
+    assert_eq!(find_last_genuine_user_index(&messages), Some(0));
 }

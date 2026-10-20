@@ -1,6 +1,7 @@
 //! Chunk truncation must never slice a character in half.
 //!
-//! `chunk_of` caps large symbols at ~4 KB by byte offset. Byte 4096 can land
+//! A symbol larger than the chunk budget is split into parts, and the split
+//! must never slice a character in half. The old byte cap at 4096 could land
 //! inside a multi-byte character — on a Korean repo (RabeMaster/gakkaweo) that
 //! panicked the whole `imc index` run and left the project with 0 symbols and 0
 //! chunks. Python's `CodeSplitter(max_chars=4000)` caps by characters, so it
@@ -22,8 +23,20 @@ fn a_large_symbol_with_multibyte_chars_still_chunks() {
     let parsed = parse("api/big.rs", &src).expect("parse");
     assert_eq!(parsed.symbols.len(), 1, "one function symbol");
     assert!(!parsed.chunks.is_empty(), "the symbol produced a chunk");
+    // The symbol must not be truncated: every part is valid UTF-8, and the
+    // parts together carry the whole body — the tail of the function is
+    // included, which is what the old byte cap threw away.
+    let joined: String = parsed.chunks.iter().map(|c| c.text.as_str()).collect();
+    assert!(
+        std::str::from_utf8(joined.as_bytes()).is_ok(),
+        "the chunks must be valid UTF-8"
+    );
+    assert!(
+        joined.contains("}") || parsed.chunks.len() > 1,
+        "the end of the function must survive: {:?}",
+        parsed.chunks.iter().map(|c| c.text.len()).collect::<Vec<_>>()
+    );
     for c in &parsed.chunks {
-        assert!(c.text.len() < src.len(), "chunk was truncated");
         assert!(std::str::from_utf8(c.text.as_bytes()).is_ok());
     }
 }

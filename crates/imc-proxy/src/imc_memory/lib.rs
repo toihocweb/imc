@@ -313,6 +313,40 @@ pub fn find_user_query_message_index(messages: &[AnthropicInputMessage]) -> Opti
         .position(|m| matches!(m, AnthropicInputMessage::User(_)))
 }
 
+/// The most recent user turn that carries real text (not only tool results).
+///
+/// The working memory belongs next to the point where the model continues:
+/// "lost in the middle" (Liu et al.) puts the U-curve of accuracy over the
+/// context, with the ends strongest, and a block that sits in the first turn
+/// of a long conversation is exactly where the model attends least.
+///
+/// Injecting here also leaves the earlier turns untouched, so the cached
+/// prompt prefix keeps matching: before, the block was re-hydrated into every
+/// past turn, and any change to the memory text rewrote the whole history.
+pub fn find_last_genuine_user_index(messages: &[AnthropicInputMessage]) -> Option<usize> {
+    let mut found = None;
+    for (idx, msg) in messages.iter().enumerate() {
+        let AnthropicInputMessage::User(um) = msg else {
+            continue;
+        };
+        match &um.content {
+            StringOrBlocks::Text(s) => {
+                if user_query_from_text(s).is_some() {
+                    found = Some(idx);
+                }
+            }
+            StringOrBlocks::Blocks(blocks) => {
+                if blocks.iter().any(|b| {
+                    matches!(b, AnthropicUserContentBlock::Text(tb) if user_query_from_text(&tb.text).is_some())
+                }) {
+                    found = Some(idx);
+                }
+            }
+        }
+    }
+    found
+}
+
 /// Port of `extract_clean_user_prompt`.
 pub fn extract_clean_user_prompt(msg: &AnthropicInputMessage) -> String {
     let AnthropicInputMessage::User(um) = msg else {
@@ -1512,33 +1546,14 @@ pub fn append_learned_memories_to_payload(
         session_id = Some(format!("fallback_{hex}"));
     }
 
-    let target_idx = find_user_query_message_index(&payload.messages);
+    // The block goes into the most recent genuine user turn. The earlier
+    // turns are left alone on purpose: rewriting them would change the cached
+    // prompt prefix whenever the memory set changes.
+    let target_idx = find_last_genuine_user_index(&payload.messages)
+        .or_else(|| find_user_query_message_index(&payload.messages));
     let memory_session_key = session_id
         .as_ref()
         .map(|s| (s.clone(), project_id.to_string()));
-
-    // Step 1: re-hydrate previous turns so the prompt prefix stays byte-stable
-    // (Anthropic prompt caching).
-    if let Some(key) = &memory_session_key {
-        let turns = session_turn_memories()
-            .lock()
-            .ok()
-            .and_then(|m| m.get(key).cloned())
-            .unwrap_or_default();
-        if !turns.is_empty() {
-            for (idx, msg) in payload.messages.iter_mut().enumerate() {
-                if Some(idx) == target_idx {
-                    continue;
-                }
-                let past = extract_clean_user_prompt(msg);
-                if !past.is_empty() {
-                    if let Some(text) = turns.get(&past) {
-                        attach_memory_to_message(msg, text);
-                    }
-                }
-            }
-        }
-    }
 
     // Step 2: per-(session, project, query) cache, so repeated tool-call steps
     // do not re-run retrieval or inject twice.
