@@ -810,7 +810,7 @@ fn main() -> Result<()> {
         Command::Graph { symbol } => {
             let db = cfg.project_db(&root);
             let store = store::open(&db)?;
-            let syms = store.find_symbols_by_name(symbol, 20);
+            let syms = resolve_symbols(&store, symbol, None)?;
             if cli.json {
                 let payload = serde_json::json!({
                     "definitions": syms,
@@ -819,9 +819,6 @@ fn main() -> Result<()> {
                 });
                 println!("{}", serde_json::to_string_pretty(&payload)?);
             } else {
-                if syms.is_empty() {
-                    bail!("symbol {symbol:?} not found in index");
-                }
                 for s in &syms {
                     println!("{} {}  {}:{}-{}", s.kind.as_str(), s.qualname, s.file, s.line, s.end_line);
                     let callees = store.callees(&s.id);
@@ -1873,11 +1870,20 @@ saved to {}", st::path().display());
     Ok(())
 }
 
-/// Resolve a user-typed symbol to a stored symbol id.
+/// Resolve a user-typed symbol to the stored definitions.
 /// Accepts `name`, `file::qualname` (used verbatim), or `name` + `--file`.
-fn resolve_symbol_ids(store: &store::Store, symbol: &str, file: Option<&str>) -> Result<Vec<String>> {
+fn resolve_symbols(
+    store: &store::Store,
+    symbol: &str,
+    file: Option<&str>,
+) -> Result<Vec<imc_core::types::Symbol>> {
+    // `file::qualname` is an explicit id — take it as-is.
     if symbol.contains("::") {
-        return Ok(vec![symbol.to_string()]);
+        let mut exact = store.find_symbols_by_name(symbol, 25);
+        exact.retain(|s| s.id == symbol || s.qualname == symbol);
+        if !exact.is_empty() {
+            return Ok(exact);
+        }
     }
     let mut cands = store.find_symbols_by_name(symbol, 25);
     if let Some(f) = file {
@@ -1899,9 +1905,9 @@ fn resolve_symbol_ids(store: &store::Store, symbol: &str, file: Option<&str>) ->
             };
             bail!("symbol {symbol:?} not found in index{hint}")
         }
-        // Names like `search` or `build_index` are common; trace every
+        // Names like `search` or `build_index` are common; show every
         // definition instead of forcing the caller to disambiguate.
-        _ => Ok(cands.into_iter().map(|s| s.id).collect()),
+        _ => Ok(cands),
     }
 }
 

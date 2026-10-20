@@ -173,6 +173,9 @@ Pages: overview, projects, per-project detail (search + trace + memory tabs), se
 memory, compression, captures, settings. Light and dark themes, responsive down to phone
 width.
 
+On a fresh clone the app has neither `node_modules` nor a build, so `imc web` installs the
+dependencies and builds it for you (Node.js 18+); after that it only starts the service.
+
 ### LLM proxy and compression
 
 The proxy sits between the agent and the model, so it sees every tool result about to be

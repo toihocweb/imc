@@ -100,9 +100,14 @@ fn start(port: u16) -> Result<String> {
         .next()
         .ok_or_else(|| anyhow!("dashboard directory not found (set {DIR_ENV})"))?;
     let next_bin = dir.join("node_modules/next/dist/bin/next");
+    if !next_bin.is_file() || !dir.join(".next/BUILD_ID").is_file() {
+        // A fresh clone has the app source but no dependencies and no build.
+        // Building it here beats making the user remember two commands.
+        build_dashboard(&dir)?;
+    }
     if !next_bin.is_file() {
         return Err(anyhow!(
-            "{} has no built app — run `npm install && npm run build` there first",
+            "{} still has no Next.js binary after building",
             dir.display()
         ));
     }
@@ -143,6 +148,51 @@ fn wait_up(port: u16, budget: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(300));
     }
     false
+}
+
+/// Install dependencies and build the dashboard app.
+///
+/// A fresh clone ships the source but neither `node_modules` nor `.next`, so
+/// `imc web` would otherwise fail with "run npm install && npm run build" —
+/// exactly the manual step this command exists to remove.
+fn build_dashboard(dir: &Path) -> Result<()> {
+    let npm = which("npm").ok_or_else(|| {
+        anyhow!("`npm` not found on PATH — install Node.js 18+ to build the dashboard")
+    })?;
+
+    if !dir.join("node_modules").is_dir() {
+        // `npm ci` is reproducible when a lockfile is present.
+        let has_lock = dir.join("package-lock.json").is_file();
+        let args: &[&str] = if has_lock { &["ci"] } else { &["install"] };
+        eprintln!(
+            "[imc web] installing dashboard dependencies (npm {}) in {} — this takes a few minutes…",
+            args[0],
+            dir.display()
+        );
+        let status = Command::new(&npm)
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .map_err(|e| anyhow!("failed to run npm: {e}"))?;
+        if !status.success() {
+            return Err(anyhow!(
+                "npm {} failed in {}",
+                args[0],
+                dir.display()
+            ));
+        }
+    }
+
+    eprintln!("[imc web] building the dashboard (npm run build)…");
+    let status = Command::new(&npm)
+        .args(["run", "build"])
+        .current_dir(dir)
+        .status()
+        .map_err(|e| anyhow!("failed to run npm: {e}"))?;
+    if !status.success() {
+        return Err(anyhow!("npm run build failed in {}", dir.display()));
+    }
+    Ok(())
 }
 
 fn which(bin: &str) -> Option<PathBuf> {
