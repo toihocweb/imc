@@ -218,3 +218,55 @@ export async function compressText(text: string, root?: string): Promise<string>
   });
   return stdout;
 }
+
+export interface ConfigStatus {
+  base_url: string;
+  model: string;
+  api_key_masked: string;
+  api_key_set: boolean;
+  embedding_model: string;
+  config_path: string;
+  /** True when base_url, model and api_key are all present. */
+  complete: boolean;
+  /** Which of the LLM settings are missing. */
+  missing: string[];
+}
+
+/** Read the effective imc config (secrets stay masked: the CLI masks them). */
+export async function configStatus(): Promise<ConfigStatus> {
+  const raw = JSON.parse(
+    await runImc(["--json", "config", "list"])
+  ) as Record<string, string | null>;
+  const path = (await runImc(["config", "path"])).trim();
+
+  const base_url = raw["llm.base_url"] || "";
+  const model = raw["llm.model"] || "";
+  const api_key_masked = raw["llm.api_key"] || "";
+  const embedding_model = raw["embedding.model"] || "";
+
+  const missing: string[] = [];
+  if (!base_url) missing.push("llm.base_url");
+  if (!model) missing.push("llm.model");
+  if (!api_key_masked) missing.push("llm.api_key");
+
+  return {
+    base_url,
+    model,
+    api_key_masked,
+    api_key_set: api_key_masked.length > 0,
+    embedding_model,
+    config_path: path,
+    complete: missing.length === 0,
+    missing,
+  };
+}
+
+/** Write one dotted config key (`llm.base_url`, `llm.model`, ...). */
+export async function configSet(key: string, value: string): Promise<string> {
+  return runImc(["config", "set", key, value]);
+}
+
+/** Probe the configured endpoint. Returns the CLI's report as text. */
+export async function configTest(): Promise<string> {
+  return runImc(["config", "test"]);
+}

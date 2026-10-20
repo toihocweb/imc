@@ -16,11 +16,15 @@ Built with Next.js 16 (App Router) + shadcn/ui components (hand-written, no CLI)
 | `/trace` | Call-hierarchy tracer: callees / callers / both, rendered as an indented tree |
 | `/memory` | List and add project memories (category, work-memory type, scene) |
 | `/compression` | CCR totals, recent records with savings %, and an interactive compress box |
+| `/settings` | LLM endpoint / API key / model / embedding model, with a live status card and a "Save & test" probe |
 
 ## API routes
 
 All routes shell out to the `imc` binary and return its `--json` payload verbatim.
 
+- `GET /api/config` — effective config with the key **masked** (the CLI masks it)
+- `POST /api/config` — `{ base_url?, api_key?, model?, embedding_model?, test? }`; writes through
+  `imc config set` and can probe the endpoint with `imc config test`
 - `GET /api/projects[?root=]`
 - `POST /api/search` — `{ query, root, limit?, noVector? }`
 - `POST /api/trace` — `{ target, root, callers?, both?, depth? }`
@@ -59,6 +63,19 @@ IMC_BIN=$(command -v imc) npm run start -- -p 4789
 Every call unsets `IMC_DATA_DIR`, `IMC_CONFIG`, `IMC_VECTOR`, `IMC_EMBED_API_KEY` and
 `OPENAI_API_KEY` so the dashboard never accidentally targets a different project or
 calls a real embedding endpoint.
+
+## Configuration reminder
+
+`llm.model` unset is the most common "imc does not work" cause: the built-in fallback model
+is endpoint-specific and usually answers 404. The dashboard therefore:
+
+- shows a dismissible banner on every page while `llm.base_url` / `llm.model` / `llm.api_key`
+  is incomplete, linking to `/settings`;
+- shows an "LLM setup" card on the overview page;
+- shows the missing keys on `/settings` itself.
+
+The same check exists on the CLI: `imc doctor` lists `llm.model not set` as an issue, and
+`imc search` warns before it sends a request that is likely to 404.
 
 ## Notes
 

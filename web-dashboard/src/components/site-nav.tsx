@@ -14,6 +14,7 @@ const LINKS = [
   { href: "/trace", label: "Trace" },
   { href: "/memory", label: "Memory" },
   { href: "/compression", label: "Compression" },
+  { href: "/settings", label: "Settings" },
 ];
 
 function isActive(pathname: string, href: string) {

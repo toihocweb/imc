@@ -16,6 +16,13 @@ export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cfg, setCfg] = useState<{
+    base_url: string;
+    model: string;
+    api_key_set: boolean;
+    complete: boolean;
+    missing: string[];
+  } | null>(null);
 
   useEffect(() => {
     fetch("/api/projects")
@@ -26,6 +33,12 @@ export default function Home() {
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && !d.error) setCfg(d);
+      })
+      .catch(() => {});
   }, []);
 
   const totals = projects.reduce(
@@ -84,6 +97,38 @@ export default function Home() {
               </Card>
             ))}
           </div>
+
+          {cfg && (
+            <Card className={cfg.complete ? "" : "border-amber-500/60"}>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center justify-between">
+                  <span>LLM setup</span>
+                  {cfg.complete ? (
+                    <Badge variant="secondary">ready</Badge>
+                  ) : (
+                    <Badge variant="destructive">missing {cfg.missing.join(", ")}</Badge>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+                <span className="text-muted-foreground">
+                  model <span className="font-mono">{cfg.model || "—"}</span>
+                </span>
+                <span className="text-muted-foreground truncate max-w-[280px]">
+                  url <span className="font-mono">{cfg.base_url || "—"}</span>
+                </span>
+                <span className="text-muted-foreground">
+                  key <span className="font-mono">{cfg.api_key_set ? "set" : "—"}</span>
+                </span>
+                <Link
+                  href="/settings"
+                  className="ml-auto text-sm text-primary hover:underline"
+                >
+                  {cfg.complete ? "Change settings" : "Configure now"}
+                </Link>
+              </CardContent>
+            </Card>
+          )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 sm:gap-6">
             {projects.map((p) => (

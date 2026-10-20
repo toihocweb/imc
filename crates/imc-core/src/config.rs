@@ -106,6 +106,17 @@ impl Config {
             .unwrap_or_else(|| "gemini-3.1-flash-lite".to_string())
     }
 
+    /// The configured model, or `None` when the user never set one. The
+    /// fallback in [`Config::llm_model`] is an endpoint-specific default, and
+    /// most endpoints answer 404 for it — so callers that need to warn the
+    /// user ask this instead.
+    pub fn llm_model_configured(&self) -> Option<String> {
+        crate::settings::load()
+            .llm
+            .and_then(|l| l.model)
+            .filter(|m| !m.trim().is_empty())
+    }
+
     pub fn projects_dir(&self) -> PathBuf {
         self.data_dir.join("projects")
     }

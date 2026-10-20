@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SiteNav } from "@/components/site-nav";
+import { ConfigBanner } from "@/components/config-banner";
 
 export const metadata: Metadata = {
   title: "imc Dashboard",
@@ -28,6 +29,7 @@ export default function RootLayout({
       <body className="min-h-dvh bg-background text-foreground antialiased">
         <ThemeProvider>
           <SiteNav />
+          <ConfigBanner />
           <main className="mx-auto w-full max-w-[1400px] px-3 pb-12 pt-[4.5rem] sm:px-6 lg:px-8">
             {children}
           </main>

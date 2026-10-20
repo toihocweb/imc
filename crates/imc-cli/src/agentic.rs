@@ -77,6 +77,14 @@ pub fn ask(cfg: &Config, query: &str, context: &str) -> Result<AskOutcome> {
             "no LLM endpoint configured (llm.base_url)".to_string(),
         ));
     }
+    if cfg.llm_model_configured().is_none() {
+        eprintln!(
+            "[imc] warning: llm.model is not set — falling back to the built-in default '{}'. \
+Set the model your endpoint actually serves: `imc config set llm.model <name>` \
+(or `imc config setup`); endpoints usually answer 404 for the default.",
+            cfg.llm_model()
+        );
+    }
     let url = format!("{}/chat/completions", base.trim_end_matches('/'));
     let prompt = build_prompt(&prompt_template(cfg), context, query);
     let body = serde_json::json!({

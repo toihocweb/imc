@@ -42,6 +42,17 @@ pub fn run_doctor(cfg: &Config, root: &std::path::Path) -> Result<()> {
         );
     }
 
+    // 3b. LLM model configured — the built-in fallback is endpoint-specific and
+    // usually 404s, which is the most common "imc does not work" report.
+    match cfg.llm_model_configured() {
+        Some(model) => ok.push(format!("llm.model: {model}")),
+        None => issues.push(
+            "llm.model not set — run `imc config set llm.model <name>` (or `imc config setup`, or the web dashboard at /settings); \
+without it imc guesses a default model that most endpoints do not serve"
+                .to_string(),
+        ),
+    }
+
     // 4. Embedding model configured
     if !cfg.embedding.model.is_empty() {
         ok.push(format!("embedding.model: {}", cfg.embedding.model));

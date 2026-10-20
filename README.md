@@ -205,8 +205,10 @@ IMC_BIN=$(command -v imc) npm run build && IMC_BIN=$(command -v imc) npm run sta
 ```
 
 Pages: `/` overview, `/projects`, `/projects/[id]` (search + trace + memory tabs),
-`/search`, `/trace`, `/memory`, `/compression`. See `web-dashboard/README.md` for the
-API surface.
+`/search`, `/trace`, `/memory`, `/compression`, `/settings`. The settings page edits the
+LLM endpoint / key / model (key stays masked) and probes the endpoint; a banner on every
+page reminds you to configure the model before using imc, and `imc doctor` reports
+`llm.model not set` as an issue. See `web-dashboard/README.md` for the API surface.
 
 ## Config
 
