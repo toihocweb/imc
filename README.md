@@ -64,7 +64,7 @@ imc context main/api/routers/git.py
 | `imc config get\|set\|list\|path\|test\|migrate\|setup` | Edit `~/.imc_config.yaml`: LLM url/key/model, embedding model. `setup` walks you through interactively. |
 | `imc proxy serve\|status\|stop` | The LLM proxy Claude Code talks to. |
 | `imc graph <symbol>` | Quick definitions / callees / callers dump. |
-| `imc memory-add/-search/-list/-delete`, `imc learn <file>` | Project memory (rules, decisions). |
+| `imc memory-add/-search/-list/-delete`, `imc learn <file>` | Project memory (rules, decisions). `memory-search` has a relevance floor: an empty result means no matching memory. |
 | `imc list` | Registered projects (files, symbols, edges, chunks, memories, DB size). |
 | `imc search "<query>" [--no-on-miss]` | Search. Failed queries are auto-recorded to memory by default; `--no-on-miss` opts out. |
 | `imc trace <target> [--callers]` | Trace; auto-records business_rule if blast radius is large. |

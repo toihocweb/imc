@@ -185,3 +185,49 @@ dashboard instead. Class D, deliberate, but it is the one area where the two
 implementations are not interchangeable.
 
 Proxy test suite: 133/0, of which 40 cover memory/injection behaviour.
+
+## Fixed: memory retrieval had no relevance floor (Rust-only bug, class B)
+
+Found by running the real proxy against a stub upstream and inspecting the
+payload it forwarded (`e2e/injection_e2e.py`).
+
+**Symptom.** With one project memory stored, *every* request got that memory
+injected — including queries with no term in common:
+
+```
+imc memory-search "what is the deployment pipeline for kubernetes"
+  → 1 hit, score 0.761   (the stored memory was "Changelog entries use ISO 8601 dates")
+imc memory-search "changelog date format"
+  → 1 hit, score 0.750   ← the *matching* query scored LOWER
+```
+
+In the proxy log the unrelated turn still reported
+`[IMC Memory] Selected 1 precise memories` and
+`Injected 1 learned memories into role 'user'`.
+
+**Cause.** Two defects in `crates/imc-memory`:
+
+1. `lexical_scores()` expanded every query token into `"tok" OR "tok"*`
+   without filtering. The two-letter word `is` prefix-matched `iso`, so one
+   spurious hit made the max-normalised BM25 score 1.0.
+2. `retrieve()` had no similarity floor. Python drops candidates below
+   `SIMILARITY_CUTOFF = 0.55` (`main/memory/store.py`) before the blended
+   re-rank; the port had none, so a memory with similarity 0 still scored
+   ~0.75 on priority/recency/usage weights and passed the proxy's
+   `has_relevance` gate (`semantic >= 0.50`).
+
+**Fix.** `search_tokens()` (≥3 chars, stopword list) feeds the FTS leg, and
+`retrieve()` applies Python's `SIMILARITY_CUTOFF = 0.55`.
+
+**After.** Unrelated query → 0 hits and no injection; matching query → 1 hit
+at 0.75. Regression test in `crates/imc-memory/tests/memory_retrieval.rs`
+(`unrelated_query_does_not_return_a_memory`) and the live check in
+`e2e/injection_e2e.py`.
+
+## Fixed: one non-UTF-8 file aborted the whole index (class B)
+
+`imc index` failed with `Error: stream did not contain valid UTF-8` and
+indexed **zero** files when the tree contained a single file that was not
+valid UTF-8. Python feeds tree-sitter raw bytes, so such a file still yields
+symbols; only its text/embedding step degrades. `ingest::read_text` now
+decodes lossily (`String::from_utf8_lossy`) instead of propagating the error.

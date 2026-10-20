@@ -155,7 +155,13 @@ pub fn looks_binary(path: &std::path::Path) -> bool {
 }
 
 pub fn read_text(path: &std::path::Path) -> Result<String> {
-    Ok(std::fs::read_to_string(path)?)
+    // Python feeds tree-sitter raw bytes, so a file that is not valid UTF-8
+    // still yields symbols and graph edges; only its text/embedding step
+    // degrades. A strict `read_to_string` aborted the *whole* index run on one
+    // bad byte ("stream did not contain valid UTF-8"), losing every file in
+    // the repo. Decode lossily instead: symbols and graph stay complete.
+    let bytes = std::fs::read(path)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Walk the project and return `(rel_path, hash)` for every indexable file.
@@ -218,4 +224,33 @@ pub fn build_manifest(root: &std::path::Path, max_bytes: u64, extra: &[String]) 
     }
     out.sort_by(|a, b| a.rel.cmp(&b.rel));
     Ok(out)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A single file that is not valid UTF-8 must not take the whole index
+    /// run down. Python parses raw bytes, so its symbols still land.
+    #[test]
+    fn read_text_decodes_invalid_utf8_lossily() {
+        let dir = std::env::temp_dir().join("imc_ingest_invalid_utf8");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("legacy.py");
+        std::fs::write(&path, b"def g():\n    return '\xff\xfe bad'\n").unwrap();
+
+        let text = read_text(&path).expect("read_text must not fail on invalid UTF-8");
+        assert!(text.contains("def g()"), "symbol text lost: {text:?}");
+        assert!(text.contains('\u{fffd}'), "invalid bytes should become U+FFFD");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Missing file still reports an error (not silently empty text).
+    #[test]
+    fn read_text_reports_io_errors() {
+        let missing = std::env::temp_dir().join("imc_ingest_missing_file_xyz");
+        assert!(read_text(&missing).is_err());
+    }
 }

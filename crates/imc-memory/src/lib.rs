@@ -396,8 +396,38 @@ pub fn deduplicate(store: &Store) -> Result<usize> {
     Ok(removed)
 }
 
+/// Query tokens worth searching with: at least three characters and not a
+/// common English word.
+///
+/// The FTS leg expands every token into `"token" OR "token"*`. A two-letter
+/// word such as `is` therefore prefix-matches unrelated identifiers — `is*`
+/// hits `iso`, `issue`, `item` — and one spurious hit makes the normalised
+/// BM25 score 1.0, which is enough to pass the similarity cutoff and inject an
+/// unrelated memory. Python's BM25 leg matches whole tokens with IDF
+/// weighting, so it never saw this.
+fn search_tokens(query: &str) -> Vec<String> {
+    const STOP: &[&str] = &[
+        "and", "are", "but", "can", "did", "does", "for", "from", "had", "has", "have", "how", "into",
+        "its", "not", "the", "their", "them", "then", "there", "these", "they", "this", "that", "was",
+        "were", "what", "when", "where", "which", "while", "who", "why", "will", "with", "you", "your",
+        "use", "used", "using", "get", "got", "make", "made", "need", "want", "way", "all", "any",
+        "can", "should", "would", "could", "about", "after", "before", "between", "during", "under",
+    ];
+    tokenize(query)
+        .into_iter()
+        .map(|t| t.to_lowercase())
+        .filter(|t| t.chars().count() >= 3)
+        .filter(|t| !STOP.contains(&t.as_str()))
+        .collect()
+}
+
+/// Python's `SIMILARITY_CUTOFF` (`main/memory/store.py`). Candidates below it
+/// are dropped before the blended re-rank, so a memory that does not match the
+/// query at all is never returned — and never injected.
+const SIMILARITY_CUTOFF: f64 = 0.55;
+
 fn lexical_scores(store: &Store, query: &str, limit: usize) -> Result<HashMap<i64, f64>> {
-    let tokens = tokenize(query);
+    let tokens = search_tokens(query);
     if tokens.is_empty() {
         return Ok(HashMap::new());
     }
@@ -542,6 +572,14 @@ pub fn retrieve(
             (false, true) => cos,
             (false, false) => 0.0,
         };
+
+        // Relevance floor, same as Python: a candidate that does not match the
+        // query must not survive on its priority/recency/usage weights alone.
+        // Without it every memory scored ~0.75 and the proxy injected an
+        // unrelated one into every request.
+        if similarity < SIMILARITY_CUTOFF {
+            continue;
+        }
 
         let score = blended_score(similarity, &m, &context_paths, now);
 

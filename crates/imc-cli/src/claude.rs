@@ -99,6 +99,8 @@ callers, or trace HTTP routes.
 - `imc trace "GET /api/path"` — HTTP route → backend handler.
 - `imc graph <symbol>` — definition site and kind.
 - `imc memory-search "<topic>"` — conventions/decisions recorded for this repo.
+  There is a relevance floor: an empty result means "no matching memory", not
+  "this repo has no memories".
 
 If MCP tools are available (`mcp__imc__search`, `mcp__imc__trace`, `mcp__imc__read`,
 `mcp__imc__context`, `mcp__imc__memory_search`, `mcp__imc__pack`), prefer them over

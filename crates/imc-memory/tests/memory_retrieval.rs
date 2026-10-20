@@ -215,3 +215,39 @@ fn recall_reinforces_use_count() {
     let after: i64 = imc_memory::get(&store, id).unwrap().unwrap().use_count;
     assert_eq!(after, before + 1, "use_count should increment on recall");
 }
+
+#[test]
+fn unrelated_query_does_not_return_a_memory() {
+    // Regression: the FTS leg expanded every query token into `"tok" OR
+    // "tok"*`, so the two-letter word "is" prefix-matched "iso" and one
+    // spurious hit scored 1.0 after normalisation. The memory then passed the
+    // proxy's relevance gate and was injected into unrelated requests.
+    let store = make_store("unrelated_query");
+    add_mem(
+        &store,
+        "Changelog entries use ISO 8601 dates",
+        MemoryType::BusinessRule,
+        "",
+        &[],
+        0.5,
+    );
+
+    let hits = retrieve(
+        &store,
+        None,
+        "what is the deployment pipeline for kubernetes",
+        &[],
+        None,
+        None,
+        5,
+    )
+    .unwrap();
+    assert!(
+        hits.is_empty(),
+        "unrelated query must not match a memory: {hits:?}"
+    );
+
+    // The matching query still finds it.
+    let hits = retrieve(&store, None, "changelog iso dates", &[], None, None, 5).unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+}
