@@ -312,3 +312,21 @@ a relevance floor (a hit below a quarter of the best score is dropped) and
 cross-source dedup (Jaccard >= 0.75 on the compressed text, because that is
 what ships). Measured over 30 questions: the raw search results hold 58
 near-duplicate pairs among 348 items, the pack holds none.
+
+### The order of the bundle (measured, not assumed)
+
+"Lost in the middle" says the ends of a long context are attended strongly,
+which argues for putting the strongest item last. `e2e/pack_order_ab.py`
+renders the same pack strongest-first and strongest-last, answers both with
+the model, and checks the answer against the file the question came from
+(36 questions, the run stopped there because the endpoint hung on the last
+four).
+
+| order | answer cites the right file |
+|---|---|
+| strongest first | 29/36 (80.6%) |
+| strongest last | 29/36 (80.6%) |
+
+Zero discordant pairs: no question was answered with one order and missed
+with the other. The order does not move the needle for this workload, so the
+order was left alone.
