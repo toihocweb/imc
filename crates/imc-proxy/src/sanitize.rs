@@ -249,3 +249,97 @@ mod tests {
         assert_eq!(report.orphans, 1);
     }
 }
+
+/// Repair tool ids in the raw JSON payload, before it is parsed.
+///
+/// The typed structs are the wrong place for this: a `tool_result` block that
+/// the typed parser does not recognise (an unknown variant, a swallowed
+/// field) never reaches the typed sanitizer, and the id goes upstream as it
+/// came in — which is exactly what Anthropic rejects with
+/// `400 … tool_use_id: String should match pattern '^[a-zA-Z0-9_-]+$'`.
+///
+/// Both sides of a pair are rewritten with the same rule, so the call and its
+/// result keep pointing at each other.
+///
+/// Returns the number of distinct ids that were rewritten.
+pub fn sanitize_tool_ids_in_json(value: serde_json::Value) -> (serde_json::Value, usize) {
+    use serde_json::Value;
+
+    let Some(messages) = value.get("messages").and_then(Value::as_array) else {
+        return (value, 0);
+    };
+
+    // Collect the ids first, so one id maps to one new id everywhere.
+    let mut ids: Vec<String> = Vec::new();
+    let remember = |id: &str, ids: &mut Vec<String>| {
+        if !id.is_empty() && !ids.iter().any(|x| x == id) {
+            ids.push(id.to_string());
+        }
+    };
+    for message in messages {
+        let Some(blocks) = message.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+        for block in blocks {
+            match block.get("type").and_then(Value::as_str) {
+                Some("tool_use") => {
+                    if let Some(id) = block.get("id").and_then(Value::as_str) {
+                        remember(id, &mut ids);
+                    }
+                }
+                Some("tool_result") => {
+                    if let Some(id) = block.get("tool_use_id").and_then(Value::as_str) {
+                        remember(id, &mut ids);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut mapping: HashMap<String, String> = HashMap::new();
+    for id in &ids {
+        if !is_valid_id(id) {
+            mapping.insert(id.clone(), clean_id(id));
+        }
+    }
+    if mapping.is_empty() {
+        return (value, 0);
+    }
+
+    let mut out = value;
+    if let Some(messages) = out.get_mut("messages").and_then(Value::as_array_mut) {
+        for message in messages.iter_mut() {
+            let Some(blocks) = message.get_mut("content").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            for block in blocks.iter_mut() {
+                match block.get("type").and_then(Value::as_str) {
+                    Some("tool_use") => {
+                        if let Some(id) = block.get("id").and_then(Value::as_str) {
+                            if let Some(new_id) = mapping.get(id) {
+                                if let Some(obj) = block.as_object_mut() {
+                                    obj.insert("id".to_string(), Value::String(new_id.clone()));
+                                }
+                            }
+                        }
+                    }
+                    Some("tool_result") => {
+                        if let Some(id) = block.get("tool_use_id").and_then(Value::as_str) {
+                            if let Some(new_id) = mapping.get(id) {
+                                if let Some(obj) = block.as_object_mut() {
+                                    obj.insert(
+                                        "tool_use_id".to_string(),
+                                        Value::String(new_id.clone()),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    (out, mapping.len())
+}

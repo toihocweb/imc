@@ -298,6 +298,15 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
         Ok(v) => v,
         Err(e) => return error_response(422, &format!("invalid JSON body: {e}")),
     };
+    // Repair the tool ids on the raw body, before the typed parser sees it:
+    // a block the typed structs do not recognise must not carry a broken id
+    // upstream.
+    let (raw, fixed_raw) = crate::sanitize::sanitize_tool_ids_in_json(raw);
+    if fixed_raw > 0 {
+        create_handler_logger("main").info(&format!(
+            "[Proxy] Repaired {fixed_raw} invalid tool id(s) in the raw payload"
+        ));
+    }
     let mut payload: AnthropicMessagesPayload = match serde_json::from_value(raw.clone()) {
         Ok(p) => p,
         Err(e) => return error_response(422, &format!("invalid messages payload: {e}")),

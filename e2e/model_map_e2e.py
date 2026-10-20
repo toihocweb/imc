@@ -223,7 +223,16 @@ def main():
               str(results))
         check("the call and its result stay paired", calls == results, f"{calls} vs {results}")
 
-        # 4. A valid id is not touched.
+        # 4. An empty id on both sides is repaired into a valid pair.
+        captured.clear()
+        post(base, "/v1/messages", messages_payload("claude-pro-max", ""))
+        calls, results = forwarded_tool_ids()
+        check("an empty tool id becomes a valid id",
+              bool(calls) and all(all(ch.isalnum() or ch in "_-" for ch in i) for i in calls),
+              str(calls))
+        check("the empty pair stays paired", calls == results, f"{calls} vs {results}")
+
+        # 5. A valid id is not touched.
         captured.clear()
         post(base, "/v1/messages", messages_payload("claude-pro-max", "toolu_01ABC"))
         calls, results = forwarded_tool_ids()
