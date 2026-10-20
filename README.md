@@ -1,5 +1,11 @@
 # imc
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-2021?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Release](https://img.shields.io/github/v/release/toihocweb/imc?label=release)](https://github.com/toihocweb/imc/releases/latest)
+[![Stars](https://img.shields.io/github/stars/toihocweb/imc?style=social)](https://github.com/toihocweb/imc/stargazers)
+[![Downloads](https://img.shields.io/github/downloads/toihocweb/imc/total?label=downloads)](https://github.com/toihocweb/imc/releases)
+
 **Code intelligence for coding agents.** `imc` indexes a repository with tree-sitter, keeps a
 call graph and a lexical/vector index over it, and answers the questions an agent actually
 asks — *"where is this handled?"*, *"what breaks if I change it?"*, *"what did we decide about
@@ -220,6 +226,26 @@ Off by default; toggleable from the dashboard at `/captures`.
 
 ---
 
+### Staying current
+
+`imc` checks for new releases in the background — once a day at most, never on the hot
+path — and prints a one-line notice when one exists:
+
+```
+[imc] update available: v0.2.0 → v0.2.1 · run `imc update`
+```
+
+```bash
+imc update            # download the newest release and replace the binary
+imc update --check    # just report what the latest release is
+```
+
+The check is cached in `<data dir>/update_check.json`; disable it with
+`IMC_NO_UPDATE_CHECK=1` (it is also off automatically in CI). `IMC_UPDATE_REPO` points the
+check at a fork.
+
+---
+
 ## Configuration
 
 `~/.imc_config.yaml` holds one endpoint for everything:
@@ -283,6 +309,7 @@ Per-project database: `$IMC_DATA_DIR/projects/<md5(path)[:16]>/index.db`.
 | `imc capture status\|on\|off\|list\|show\|rm\|clear` | Capture the prompts the proxy sends upstream. |
 | `imc config get\|set\|list\|path\|test\|models\|migrate\|setup` | View and edit the configuration. |
 | `imc doctor` | Diagnose the environment and print fix commands. |
+| `imc update [--check]` | Update to the latest release, or just check. |
 | `imc web` | Open the dashboard, starting it if needed. |
 | `imc list` | Registered projects with counts and database size. |
 

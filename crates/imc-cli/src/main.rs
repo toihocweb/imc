@@ -269,6 +269,13 @@ enum Command {
         #[command(subcommand)]
         action: Option<McpAction>,
     },
+    /// Update to the latest release, or just check whether one exists.
+    #[command(name = "update")]
+    Update {
+        /// Only check for a new release; do not install it.
+        #[arg(long)]
+        check: bool,
+    },
     /// Capture the full prompt the proxy receives (see what the model really sees).
     #[command(name = "capture")]
     Capture {
@@ -1705,6 +1712,53 @@ saved to {}", st::path().display());
                 println!("MCP client will discover: search, ask, trace, read, context, memory_search, pack");
             }
         },
+        Command::Update { check } => {
+            use imc_cli::update;
+            let timeout = std::time::Duration::from_secs(if *check { 5 } else { 60 });
+            match update::refresh(timeout) {
+                Ok(latest) => {
+                    let newer = update::is_newer(&latest, update::current_version());
+                    if *check {
+                        if cli.json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "current": update::current_version(),
+                                    "latest": latest,
+                                    "update_available": newer,
+                                }))?
+                            );
+                        } else if newer {
+                            println!(
+                                "update available: v{} → v{}",
+                                update::current_version(),
+                                latest
+                            );
+                        } else {
+                            println!("imc v{} is up to date", update::current_version());
+                        }
+                    } else if newer {
+                        match update::install(timeout) {
+                            Ok((tag, path)) => println!(
+                                "updated v{} → v{} ({})",
+                                update::current_version(),
+                                tag,
+                                path.display()
+                            ),
+                            Err(e) => eprintln!("update failed: {e:#}"),
+                        }
+                    } else {
+                        println!("imc v{} is up to date", update::current_version());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("could not check for updates: {e:#}");
+                    if !*check {
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
         Command::Capture { action } => {
             use imc_core::capture;
             match action {
@@ -1808,6 +1862,13 @@ saved to {}", st::path().display());
                 println!("extracted {} candidates, stored {stored}", candidates.len());
             }
         }
+    }
+
+    // Tell the user when a newer release exists. The check itself is cached
+    // (<data dir>/update_check.json) and refreshed by a detached background
+    // process, so the hot path is a file read, not a network call.
+    if !cli.json && !matches!(&cli.command, Command::Update { .. }) {
+        imc_cli::update::maybe_notify();
     }
     Ok(())
 }
