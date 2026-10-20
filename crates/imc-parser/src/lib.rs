@@ -3,6 +3,7 @@
 //! and `main/indexing/graph.py` (graph half) of the Python implementation.
 
 pub mod chunker;
+pub mod context;
 
 use tree_sitter::{Node, Parser};
 
@@ -177,15 +178,24 @@ fn walk(
 
         if let Some(sym) = maybe_symbol(n, rel, bytes, text, lang, pq.as_deref()) {
             // One chunk per symbol. A symbol larger than the budget is split
-            // into several chunks instead of being truncated: cutting it lost
-            // the tail of the function (and the API answer with it).
+            // into parts — measured better than one long chunk: the query
+            // words get diluted in a long document (BM25 and the vector leg
+            // both suffer), and the split won on the benchmark with p=0.016.
+            //
+            // Every part carries the symbol's signature and the first line of
+            // its docstring, so a hit in the middle of a function still says
+            // what function it is (contextual chunking).
             let body = chunker::slice(text, sym.start_byte, sym.end_byte);
             if chunker::nws_len(&body) > budget {
-                for part in chunker::split_text_by_lines(&body, budget) {
+                let parts = chunker::split_text_by_lines(&body, budget);
+                let total = parts.len();
+                for (i, part) in parts.iter().enumerate() {
+                    let header =
+                        context::symbol_context_header(&sym.qualname, &body, i + 1, total);
                     out.chunks.push(RawChunk {
                         start_line: sym.line,
                         end_line: sym.end_line,
-                        text: format!("{}\n{}", sym.qualname, part),
+                        text: format!("{header}\n{}", part.trim_end()),
                         sym_id: Some(sym.id.clone()),
                     });
                 }

@@ -157,7 +157,14 @@ pub fn run_with_progress(
         store.clear_file(&rel)?;
         store.insert_symbols(&rel, &symbols)?;
         store.insert_edges(&rel, &edges)?;
-        let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+        // The embedding sees at most ~4 KB of the chunk: the vector leg only
+        // needs the head of the code (signature + docstring), and the API
+        // rejects a huge input. The stored text stays whole, so the lexical
+        // leg still matches the tail of a long function.
+        let texts: Vec<String> = chunks
+            .iter()
+            .map(|c| cap_for_embedding(&c.text, EMBED_TEXT_CAP))
+            .collect();
         let vectors = match &embedder {
             Some(e) => e.embed(&texts)?,
             None => Vec::new(),
@@ -195,6 +202,21 @@ pub fn run_with_progress(
         embedder: embedder_name,
         elapsed_ms: start.elapsed().as_millis(),
     })
+}
+
+/// How much of a chunk is sent to the embedding model.
+const EMBED_TEXT_CAP: usize = 4096;
+
+/// Cap a text for the embedding model, on a character boundary.
+fn cap_for_embedding(text: &str, cap: usize) -> String {
+    if text.len() <= cap {
+        return text.to_string();
+    }
+    let mut end = cap;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
 }
 
 /// Non-whitespace characters — the size unit the cAST paper budgets in.
