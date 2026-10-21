@@ -277,11 +277,13 @@ pub fn apply_prompts_and_memories(
     // starts.
     if let Some(detected) = detected.as_ref() {
         let answer = crate::imc_memory::learning::last_assistant_text(&payload.messages);
+        let tool_output = crate::imc_memory::learning::tool_result_text(&payload.messages);
         if !answer.is_empty() && !user_text.is_empty() {
             crate::imc_memory::learning::learn_in_background(
                 std::path::PathBuf::from(&detected.path),
                 user_text.clone(),
                 answer,
+                tool_output,
             );
         }
     }
@@ -398,27 +400,9 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
                 chars_before: obs.chars,
                 sample: obs.sample,
             };
-            // Off the request path: the model call must not delay the answer.
-            tokio::spawn(async move {
-                let settings = imc_core::settings::load();
-                match crate::context_learning::learn(observation, &settings).await {
-                    Ok(rule) => {
-                        eprintln!(
-                            "[imc] learned a filter for `{}` ({} transforms)",
-                            rule.get("command_pattern")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("?"),
-                            rule.get("transforms")
-                                .and_then(|v| v.as_array())
-                                .map(|a| a.len())
-                                .unwrap_or(0)
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("[imc] could not learn a filter: {e}");
-                    }
-                }
-            });
+            // Off the request path: the model call must not delay the answer,
+            // and the number of learning tasks is capped.
+            crate::context_learning::learn_in_background(observation);
         }
     }
 

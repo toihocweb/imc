@@ -23,18 +23,25 @@ use std::time::{Duration, Instant};
 use imc_proxy_types::logger::create_handler_logger;
 use imc_proxy_types::types::anthropic::{AnthropicInputMessage, StringOrBlocks};
 
-/// How long to wait before learning from the same project again.
-const COOLDOWN: Duration = Duration::from_secs(180);
 /// How many learning threads may run at once.
 const MAX_CONCURRENT: usize = 2;
 /// The longest text handed to the model.
 const MAX_TEXT: usize = 4_000;
 
-/// The last learning time per project.
-fn last_seen() -> &'static Mutex<HashMap<String, Instant>> {
-    static LAST: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
-    LAST.get_or_init(|| Mutex::new(HashMap::new()))
+/// The text of the last learning per project, and when it happened.
+///
+/// A fixed cooldown drops the second correction: the user says two things in
+/// a row, and the second one is never learned. Instead the texts are merged:
+/// a correction that arrives within the window joins the last one, and the
+/// next extraction sees both. Nothing is lost, and a burst still costs one
+/// model call.
+fn pending() -> &'static Mutex<HashMap<String, (String, Instant)>> {
+    static PENDING: OnceLock<Mutex<HashMap<String, (String, Instant)>>> = OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
 }
+
+/// How long a later correction still joins the last one.
+const MERGE_WINDOW: Duration = Duration::from_secs(60);
 
 /// The number of learning threads running right now.
 fn running() -> &'static AtomicUsize {
@@ -81,43 +88,103 @@ fn truncate(text: &str) -> String {
     text.chars().take(MAX_TEXT).collect()
 }
 
+
+/// The text of every tool result in the conversation.
+///
+/// A failed command is not in the assistant's answer — it is in the tool
+/// result. A gate that only reads the messages misses every one of them.
+pub fn tool_result_text(messages: &[AnthropicInputMessage]) -> String {
+    use imc_proxy_types::types::anthropic::{
+        AnthropicAssistantContentBlock, AnthropicToolResultContentBlock,
+        AnthropicUserContentBlock,
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for msg in messages {
+        match msg {
+            AnthropicInputMessage::User(um) => {
+                if let StringOrBlocks::Blocks(blocks) = &um.content {
+                    for block in blocks {
+                        if let AnthropicUserContentBlock::ToolResult(tr) = block {
+                            if tr.is_error == Some(true) {
+                                parts.push("[tool error]".to_string());
+                            }
+                            match &tr.content {
+                                StringOrBlocks::Text(s) => parts.push(s.clone()),
+                                StringOrBlocks::Blocks(inner) => {
+                                    for b in inner {
+                                        if let AnthropicToolResultContentBlock::Text(t) = b {
+                                            parts.push(t.text.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            AnthropicInputMessage::Assistant(am) => {
+                if let StringOrBlocks::Blocks(blocks) = &am.content {
+                    for block in blocks {
+                        if let AnthropicAssistantContentBlock::ToolUse(tu) = block {
+                            if let Ok(text) = serde_json::to_string(&tu.input) {
+                                parts.push(text);
+                            }
+                        }
+                    }
+                }
+            }
+            AnthropicInputMessage::System(_) => {}
+        }
+    }
+    parts.join("\n")
+}
+
 /// Whether this exchange holds something worth remembering.
 ///
 /// Cheap on purpose: substring checks, no allocation, no I/O. The expensive
 /// question is asked only after this says yes.
-pub fn is_worth_learning(query: &str, answer: &str) -> bool {
+pub fn is_worth_learning(query: &str, answer: &str, tool_output: &str) -> bool {
     imc_memory::extract::is_correction(query)
         || imc_memory::extract::has_failure(answer)
         || imc_memory::extract::has_failure(query)
+        || imc_memory::extract::has_failure(tool_output)
 }
 
 /// Learn from an exchange, in the background.
 ///
 /// Returns immediately. The caller — the request path — does not wait for the
 /// model, and nothing here can fail the request.
-pub fn learn_in_background(project_root: PathBuf, query: String, answer: String) {
+pub fn learn_in_background(
+    project_root: PathBuf,
+    query: String,
+    answer: String,
+    tool_output: String,
+) {
     let log = create_handler_logger("main");
 
     // The gate: no correction, no failure, nothing to learn.
-    if !is_worth_learning(&query, &answer) {
+    if !is_worth_learning(&query, &answer, &tool_output) {
         return;
     }
 
-    // The cooldown: one learning call per project every few minutes. A user
-    // who corrects three things in a row gets one extraction, not three.
-    {
-        let mut seen = match last_seen().lock() {
+    // The merge: a correction that arrives soon after the last one joins it,
+    // so the next extraction sees both. Nothing is dropped.
+    let key = project_root.to_string_lossy().to_string();
+    let query = {
+        let mut pending = match pending().lock() {
             Ok(g) => g,
             Err(_) => return,
         };
         let now = Instant::now();
-        if let Some(previous) = seen.get(&project_root.to_string_lossy().to_string()) {
-            if now.duration_since(*previous) < COOLDOWN {
-                return;
+        let merged = match pending.get(&key) {
+            Some((text, at)) if now.duration_since(*at) < MERGE_WINDOW => {
+                format!("{text}\n{query}")
             }
-        }
-        seen.insert(project_root.to_string_lossy().to_string(), now);
-    }
+            _ => query.clone(),
+        };
+        pending.insert(key.clone(), (merged.clone(), now));
+        merged
+    };
 
     // The cap: learning threads are bounded, so a burst of sessions cannot
     // flood the machine.
@@ -131,13 +198,13 @@ pub fn learn_in_background(project_root: PathBuf, query: String, answer: String)
     // requests while the model thinks. The handle is dropped on purpose —
     // nobody waits for it.
     tokio::task::spawn_blocking(move || {
-        learn_now(&project_root, &query, &answer);
+        learn_now(&project_root, &query, &answer, &tool_output);
         running().fetch_sub(1, Ordering::SeqCst);
     });
 }
 
 /// The extraction itself. Runs on its own thread.
-fn learn_now(project_root: &PathBuf, query: &str, answer: &str) {
+fn learn_now(project_root: &PathBuf, query: &str, answer: &str, tool_output: &str) {
     let log = create_handler_logger("main");
     let cfg = imc_core::config::Config::default();
     let db = cfg.project_db(project_root);
@@ -148,7 +215,8 @@ fn learn_now(project_root: &PathBuf, query: &str, answer: &str) {
             return;
         }
     };
-    match imc_memory::extract::learn_from_exchange(&cfg, &store, query, answer, "auto") {
+    let exchange = format!("{answer}\n\n[tool output]\n{tool_output}");
+    match imc_memory::extract::learn_from_exchange(&cfg, &store, query, &exchange, "auto") {
         Ok(0) => log.debug("[IMC Learning] nothing worth keeping"),
         Ok(n) => log.info(&format!(
             "[IMC Learning] learned {n} memory(ies) for {}",
@@ -166,18 +234,30 @@ mod tests {
     fn a_routine_exchange_is_not_worth_learning() {
         assert!(!is_worth_learning(
             "please run the tests",
-            "all 42 tests passed"
+            "all 42 tests passed",
+            ""
         ));
     }
 
     #[test]
     fn a_correction_is_worth_learning() {
-        assert!(is_worth_learning("that's wrong, use --raw", "ok, noted"));
+        assert!(is_worth_learning("that's wrong, use --raw", "ok, noted", ""));
     }
 
     #[test]
     fn a_failure_is_worth_learning() {
-        assert!(is_worth_learning("try again", "Error: command not found"));
+        assert!(is_worth_learning("try again", "Error: command not found", ""));
+    }
+
+    /// The failure usually arrives in the tool result, not in the messages.
+    /// A gate that only reads the messages misses every one of them.
+    #[test]
+    fn a_failure_in_the_tool_output_is_worth_learning() {
+        assert!(is_worth_learning(
+            "try again",
+            "let me run it",
+            "bash: cargo: command not found"
+        ));
     }
 
     #[test]

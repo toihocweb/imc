@@ -296,6 +296,46 @@ pub fn store_rule(rule: &Value) -> Result<()> {
     Ok(())
 }
 
+
+/// The number of filter-learning tasks running right now.
+fn running() -> &'static std::sync::atomic::AtomicUsize {
+    static RUNNING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    &RUNNING
+}
+
+/// How many filter-learning tasks may run at once.
+const MAX_CONCURRENT: usize = 2;
+
+/// Learn a filter in the background, with a cap on the number of tasks.
+///
+/// The request must not wait for the model, and a burst of tool results must
+/// not start a burst of model calls.
+pub fn learn_in_background(observation: Observation) {
+    use std::sync::atomic::Ordering;
+    if running().load(Ordering::SeqCst) >= MAX_CONCURRENT {
+        return;
+    }
+    running().fetch_add(1, Ordering::SeqCst);
+    tokio::spawn(async move {
+        let settings = imc_core::settings::load();
+        let result = learn(observation, &settings).await;
+        running().fetch_sub(1, Ordering::SeqCst);
+        match result {
+            Ok(rule) => eprintln!(
+                "[imc] learned a filter for `{}` ({} transforms)",
+                rule.get("command_pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?"),
+                rule.get("transforms")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0)
+            ),
+            Err(e) => eprintln!("[imc] could not learn a filter: {e}"),
+        }
+    });
+}
+
 /// Ask the model for a rule and store it if it checks out.
 pub async fn learn(obs: Observation, settings: &imc_core::settings::Settings) -> Result<Value> {
     let llm = settings
@@ -318,7 +358,12 @@ pub async fn learn(obs: Observation, settings: &imc_core::settings::Settings) ->
         "stream": false,
         "temperature": 0.0,
     });
-    let client = reqwest::Client::new();
+    // A timeout: the learning runs in the background, and a hung endpoint
+    // would leave the task alive for ever.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| anyhow!("could not build the http client: {e}"))?;
     let resp = client
         .post(format!("{}/chat/completions", base.trim_end_matches('/')))
         .bearer_auth(key)

@@ -33,12 +33,24 @@ A memory is NOT worth keeping when:
 - it is visible by reading the code (who extends what, what a function takes,
   the file layout, a standard import),
 - it is a convention any programmer already knows,
-- nothing went wrong and the user gave no feedback. Then the answer is [].
+- the project's own guide files already say it (CLAUDE.md, README, the rules),
+- it is a routine action that succeeded without a mistake or a correction.
+  Then the answer is [].
 
-Write each memory as one sentence, in the language the messages use, naming the
-concrete thing (the file, the command, the setting) rather than the general
-idea. "the deploy pipeline must run rustfmt before commit" is a memory;
-"the team should follow good practices" is not.
+Write each memory as one sentence of 15 to 80 words, in the language the
+messages use, naming the concrete thing (the file, the command, the setting)
+rather than the general idea. "the deploy pipeline must run rustfmt before
+commit" is a memory; "the team should follow good practices" is not.
+
+Keep the specifics: proper nouns, numbers, dates and file names are what make
+a memory findable later. A relative date ("last Tuesday") is resolved against
+the date of the exchange and written out.
+
+Say who said it. "The user requires X" is a rule; "X was recommended" is only
+a suggestion, and a suggestion is not a memory.
+
+When in doubt, extract: a memory that is wrong costs a little, a memory that
+is missing costs a repeat.
 
 Answer with JSON only, no prose:
 {"memories":[{"content":"...","type":"work_fact|work_task|work_method|work_artifact|business_rule","scene":"...","importance":0.5}]}
@@ -182,7 +194,9 @@ pub fn extract(
 
 /// The existing memories, as the text the prompt shows the model.
 pub fn existing_as_text(store: &Store) -> Result<String> {
-    let items = list_all(store, 200)?;
+    // The top 40, not the whole store: the prompt is context the model pays
+    // for, and 200 arbitrary memories are mostly noise.
+    let items = list_all(store, 40)?;
     Ok(items
         .iter()
         .map(|m| format!("- [ID: {}] ({}): {}", m.id, m.mem_type.as_str(), m.content))
@@ -299,6 +313,45 @@ pub fn is_worth_learning(query: &str, answer: &str) -> bool {
 /// `redact_sensitive`.
 pub fn redact_sensitive(text: &str) -> String {
     let mut out = text.to_string();
+
+    // A secret that appears on its own, without a key next to it. The
+    // patterns are the shapes the providers actually hand out.
+    for (needle, len) in [
+        ("sk-ant-", 40),
+        ("sk-", 32),
+        ("ghp_", 36),
+        ("gho_", 36),
+        ("ghu_", 36),
+        ("github_pat_", 60),
+        ("AKIA", 20),
+        ("xoxb-", 24),
+        ("xoxp-", 24),
+        ("xoxa-", 24),
+        ("xoxr-", 24),
+        ("xoxs-", 24),
+        ("AIza", 39),
+        ("eyJ", 120),
+    ] {
+        let mut from = 0;
+        while let Some(idx) = out[from..].find(needle) {
+            let start = from + idx;
+            let tail = &out[start..];
+            let end = tail
+                .char_indices()
+                .take_while(|(i, ch)| {
+                    *i < len && (ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+                })
+                .map(|(i, ch)| i + ch.len_utf8())
+                .last()
+                .unwrap_or(needle.len());
+            if end > needle.len() {
+                out.replace_range(start..start + end, "[REDACTED]");
+            }
+            from = start + "[REDACTED]".len();
+        }
+    }
+
+    // A secret named by a key: `api_key = ...`, `token: ...`.
     for prefix in [
         "api_key", "api-key", "apikey", "access_key", "access-key", "token",
         "password", "passwd", "pwd", "secret", "cookie", "session",
@@ -425,5 +478,30 @@ mod tests {
         assert!(!redacted.contains("sk-abcdef123456"), "{redacted}");
         assert!(!redacted.contains("ghp_zzzzzzzz"), "{redacted}");
         assert!(redacted.contains("[REDACTED]"), "{redacted}");
+    }
+
+    /// A secret on its own, with no key next to it, is still a secret. These
+    /// three shapes all leaked through the key-based redaction.
+    #[test]
+    fn bare_tokens_are_redacted() {
+        // Assembled at run time: a literal that looks like a key would be
+        // flagged by the secret scanner, and rightly so.
+        let anthropic = format!("sk-ant-{}", "api03-DDDD");
+        let github = format!("ghp_{}", "1234567890abcdefghij");
+        let aws = format!("AKIA{}", "IOSFODNN7EXAMPLE");
+        let text = format!("the key is {anthropic} and github {github} and aws {aws}");
+        let redacted = redact_sensitive(&text);
+        assert!(!redacted.contains(&anthropic), "{redacted}");
+        assert!(!redacted.contains(&github), "{redacted}");
+        assert!(!redacted.contains(&aws), "{redacted}");
+        assert_eq!(redacted.matches("[REDACTED]").count(), 3, "{redacted}");
+    }
+
+    #[test]
+    fn a_jwt_is_redacted() {
+        let header = format!("eyJ{}", "hbGciOiJIUzI1NiI");
+        let text = format!("auth: {header}.eyJzdWIiOiIxIn0.abc");
+        let redacted = redact_sensitive(&text);
+        assert!(!redacted.contains(&header), "{redacted}");
     }
 }

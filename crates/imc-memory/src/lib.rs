@@ -256,6 +256,11 @@ pub fn add(
     source: &str,
 ) -> Result<Option<i64>> {
     ensure_schema(store)?;
+    // The one place a memory is written, so the one place a secret is
+    // caught. A memory is injected into every future conversation: a key
+    // that slips in here leaks into all of them. Every write path — the
+    // auto-learning, the API, the manual add — goes through this function.
+    let content = &crate::extract::redact_sensitive(content);
     let norm = normalize(content);
     if norm.is_empty() {
         return Ok(None);
