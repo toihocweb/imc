@@ -507,8 +507,9 @@ fn the_rule_texts_name_the_same_commands() {
         assert!(long.contains(cmd), "the rule file misses `{cmd}`");
     }
 
-    // The third copy: the rule file that is checked into docs/. The three
-    // drift apart — the docs one had `imc pack` while the Rust ones did not.
+    // The third copy: the rule file that is checked into docs/. It must be
+    // the same text, not a paraphrase: the two drift apart, and the agent
+    // reads whichever one it finds.
     let docs = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../docs/imc-rule.md");
     let docs = std::fs::read_to_string(&docs).expect("docs/imc-rule.md");
@@ -522,6 +523,20 @@ fn the_rule_texts_name_the_same_commands() {
     ] {
         assert!(docs.contains(cmd), "docs/imc-rule.md misses `{cmd}`");
     }
+    assert_eq!(
+        docs.trim(),
+        long.trim(),
+        "docs/imc-rule.md and the shipped rule are different texts"
+    );
+}
+
+/// The rule is what the agent reads to learn the tool. A setup section in it
+/// is noise: the agent does not install things.
+#[test]
+fn the_rule_has_no_setup_section() {
+    let rule = imc_cli::claude::imc_rule_md();
+    assert!(!rule.contains("## Setup"), "the rule still has a setup section");
+    assert!(!rule.contains("imc config setup"), "the rule still has setup commands");
 }
 
 /// `imc graph` was folded into `imc trace`: the definition is the root of the
@@ -537,4 +552,45 @@ fn trace_carries_the_definition_and_the_graph_verb_is_gone() {
         !help.contains("\n  graph "),
         "`imc graph` must be gone: {help}"
     );
+}
+
+/// The rule must name the read variants: `--symbols` for the outline,
+/// `--method` for one symbol's body, `--offset`/`-l` for a line range. The
+/// `--method` one was lost when the long rule replaced the short block, so
+/// the agent could only read whole files.
+#[test]
+fn the_rule_names_every_read_variant() {
+    let rule = imc_cli::claude::imc_rule_md();
+    for flag in ["--symbols", "--method", "--offset", "-l "] {
+        assert!(rule.contains(flag), "the rule misses `imc read {flag}`");
+    }
+}
+
+/// An older `imc claude setup` wrote an imc block into CLAUDE.md. The rule
+/// file is the rule now, so the stale block has to go: left in place, the
+/// agent reads the old instructions.
+#[test]
+fn the_legacy_claude_md_block_is_removed() {
+    let dir = std::env::temp_dir().join(format!("imc-legacy-md-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let md = dir.join("CLAUDE.md");
+    std::fs::write(
+        &md,
+        "# My rules\n\n<!-- imc:begin -->\nold imc block\n<!-- imc:end -->\n\n## Mine\n",
+    )
+    .unwrap();
+
+    let removed = imc_cli::claude::remove_legacy_claude_md_block(&dir).unwrap();
+    assert!(removed, "the old block was not removed");
+    let text = std::fs::read_to_string(&md).unwrap();
+    assert!(!text.contains("imc:begin"), "{text}");
+    assert!(text.contains("# My rules"), "{text}");
+    assert!(text.contains("## Mine"), "{text}");
+
+    // A file without the marker is left alone.
+    std::fs::write(&md, "# Untouched\n").unwrap();
+    let removed = imc_cli::claude::remove_legacy_claude_md_block(&dir).unwrap();
+    assert!(!removed);
+    assert_eq!(std::fs::read_to_string(&md).unwrap(), "# Untouched\n");
+    std::fs::remove_dir_all(&dir).ok();
 }

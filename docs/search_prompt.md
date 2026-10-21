@@ -21,13 +21,16 @@ and the rule file is what the agent reads for this project.
 
 What the text has to do:
 
-1. Name the commands that answer a question, with the flags that matter.
-2. Say which of two ways to get a thing is the right one (`imc trace` over
+1. Open with a table: "you want X → run Y". The agent has one look at it.
+2. Then the commands, each with the flags that change the answer, and no flag
+   that does not.
+3. Say which of two ways to get a thing is the right one (`imc trace` over
    `imc graph`, `imc pack` over stacking `search` + `read` + `context`).
-3. Say what not to do: invent a path, cite a line you did not read, stop at hit
+4. Say what not to do: invent a path, cite a line you did not read, stop at hit
    one.
-4. Not mention MCP. The rule is about the CLI the agent has; a second surface
-   would be a second thing to keep in sync.
+5. Stay about the tool. No setup section: the agent does not install things.
+   No MCP: the rule is about the CLI the agent has, and a second surface is a
+   second thing to keep in sync.
 
 ---
 

@@ -70,7 +70,7 @@ imc trace SessionStore.rotate --callers
 ```
 
 For Claude Code, one command wires everything — index, `.claude/settings.local.json`, the
-agent rule file, `.mcp.json`, and the proxy:
+agent rule file, and the proxy:
 
 ```bash
 imc claude setup && claude

@@ -1,71 +1,78 @@
-# imc — code-intelligence rules for this repo
+# imc — code intelligence for this repo
 
-You have access to the `imc` CLI (Rust port of IndexMyCode) in this repo.
-Prefer `imc` over blind Read/Grep when you need to understand code, find
-callers, or trace HTTP routes.
+This repo is indexed by `imc`: an AST index, a call graph, a lexical/vector
+index and a project memory store. Prefer `imc` over blind Read/Grep.
 
-## Commands you should use
+## What to run, when
 
-- `imc search "<3-7 words>"` — LLM answer from indexed chunks, with `path:line`
-  citations. Needs `llm.base_url` configured. Without an LLM endpoint it prints
-  ranked hits instead.
-- `imc search "<q>" --raw` — raw ranked chunks, no LLM. Always read top 5,
-  never stop at hit 1.
-- `imc search "<exact symbol>"` — exact symbol lookup (case & `_`/camelCase
-  normalized). Use when you know the name.
-- `imc search "<q>" --raw --concise` — one line per hit, about 8x fewer tokens
-  than the full snippet; then read the file for the rest.
-- `imc search "<q>" --offset N` — page through a long result set. The output
-  says when more matches exist.
-- `imc read <file> --symbols` — outline; then read only the lines you need.
-- Tool results are filtered before they reach the model, and imc learns a
-  filter per command: a long build log arrives as its errors and its summary,
-  not as 400 progress lines.
-- `imc context <file>` — whole feature around a file: deps, endpoints, tests.
-- `imc trace <symbol> --callers --depth 3` — blast radius; run *before* you
-  rename or delete anything.
-- `imc trace "<symbol>"` — what it calls (forward). `--both` both directions.
-- `imc trace "<GET /api/path>"` — HTTP route → backend handler.
-- `imc trace <symbol>` — the call tree, rooted at the definition (kind, qualified
-  name, line range).
-- `imc memory-search "<topic>"` — conventions/decisions recorded for this repo.
-  There is a relevance floor: an empty result means "no matching memory", not
-  "this repo has no memories".
+| You want to | Run |
+|---|---|
+| know what some code does | `imc search "<3-7 words>"` |
+| find where something is defined | `imc search "<exact symbol>"`, or `imc read <file> --symbols` |
+| see one function's body | `imc read <file> --method <name>` |
+| know what calls it, before you change it | `imc trace <symbol> --callers --depth 3` |
+| know what it calls | `imc trace <symbol>` |
+| find an HTTP route's handler | `imc trace "GET /api/path"` |
+| get a lot of context at once | `imc pack "<query>"` |
+| recall a decision this repo already made | `imc memory-search "<topic>"` |
+| see the whole feature around a file | `imc context <file>` |
 
-- `imc search "<q>"` — a search that returns nothing is saved to memory
-  automatically, so the next agentic pass can surface it. `--no-on-miss`
-  turns that off.
-- `imc trace "<symbol>" --callers` — if blast radius is large, a business_rule
-  is auto-recorded to warn future editors.
-- `imc ccr tune` — analyze compression store stats and suggest MIN_SAVINGS
-  adjustments per content kind.
-- `imc pack "<query>"` — assemble retrieval + graph + memory under a token
-  budget. Shortened items carry an `imc retrieve <id>` handle.
-- `imc list` — registered projects (files, symbols, edges, chunks, memories,
-  DB size).
+## The commands
+
+**`imc search "<query>"`** — hybrid retrieval (BM25 + vector) over the chunks.
+It answers with an LLM summary citing `path:line` (needs `llm.base_url`
+configured); without an LLM it prints the ranked hits instead.
+
+- `--raw` — the ranked chunks, no LLM. **Read the top 5, never stop at hit 1.**
+- `--concise` — one line per hit (~8x fewer tokens); then read the file.
+- `--json` — machine-readable hits.
+- `--no-vector` — BM25 only: no embedding call, offline and deterministic.
+- `--offset N` — page through a long result set; the output says when more
+  matches exist.
+- `-l 20` — how many chunks to retrieve (10 by default).
+- An exact identifier is matched exactly (case and `_`/camelCase normalised).
+
+**`imc read <file>`** — the token-optimised reader.
+
+- `--symbols` — the outline. Start here.
+- `--method <name>` — one symbol's body. **Use the real name from `--symbols`,
+  including any leading underscore** (`_blended_score`, not `blended_score`).
+- `--offset N -l 200` — a line range, for the part the outline did not answer.
+- `--json` — machine-readable.
+
+**`imc trace <symbol>`** — the call tree, rooted at the definition: its first
+line carries the kind, the qualified name and the line range.
+
+- `--callers --depth 3` — the blast radius. **Run this before you rename or
+  delete anything.**
+- `--both` — both directions. `--json` — machine-readable.
+- `imc trace "GET /api/path"` — an HTTP route to its backend handler.
+
+**`imc pack "<query>"`** — one bundle under a token budget: retrieval plus the
+call-graph neighbourhood plus the project memories. Use it instead of stacking
+search + read + context. `--budget 12000` for more, `--no-memories` to leave
+the memories out.
+
+**`imc memory-search "<topic>"`** — the conventions and decisions already
+recorded for this repo. `--mem-type work_fact`, `--scene <scene>` to narrow it.
+Empty is a valid answer: it means "no matching memory", not "this repo has no
+memories".
+
+**`imc context <file>`** — the whole feature around a file: component, deps,
+endpoints, tests. `-d 2` resolves one more level of subcomponents.
 
 ## Rules
 
-1. **Search before you edit.** Never invent an API, path, or line number.
-2. **Cite `path/to/file:L10-L25`** when answering. Never cite a range you did
-   not see in an imc output.
-3. **`imc trace` has no relevance floor.** A junk query still returns hits.
-   Hits are ranked evidence, not proof — open the file before relying on it.
-4. **If search misses repeatedly, fall back to Read/Grep.** An empty result
-   means "not in the index", not "does not exist".
-0. **A bare `imc` starts the proxy and the dashboard** (the one-command
-   setup). `imc claude` does the same and then runs the `claude` binary.
-   `imc .` indexes the current directory.
+1. **Search before you edit.** Never invent an API, path or line number.
+2. **Cite `path/to/file:L10-L25`** — and only a range you actually saw in an
+   imc output.
+3. **Ranked is not proven.** `imc trace` has no relevance floor at all: a junk
+   query still returns hits. Open the file before you rely on a hit.
+4. **Empty means "not in the index"**, not "does not exist". Fall back to
+   Read/Grep.
 5. **Use `-C <project-root>`** (or `-p <id>`) when the cwd may not be the
-   project; otherwise imc answers for the globally active project and says so
-   on stderr ("using the active project …"). `imc index` without a path always
-   indexes the current directory, never the active project.
-
-## Setup
-
-- `imc config setup` — interactive setup of LLM URL, API key, models.
-- `imc config test` — verify the embedding/chat endpoint.
-- `imc claude setup` — index, wire `.claude/settings.local.json`, add this
-  rule file, and start the proxy.
-- `imc web` — open the web dashboard (starts it if needed); `--url` or
-  `IMC_WEB_URL` for a remote host.
+   project — otherwise imc answers for the globally active project and says so
+   on stderr. `imc index` without a path always indexes the current directory.
+6. Tool results are filtered before they reach you, and imc learns a filter
+   per command: a long build log arrives as its errors and its summary, not as
+   400 progress lines.

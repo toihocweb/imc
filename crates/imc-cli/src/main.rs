@@ -1483,7 +1483,15 @@ fn main() -> Result<()> {
             ClaudeAction::Wire { port } => {
                 let s = imc_cli::claude::write_claude_settings(&root, *port)?;
                 let rule = imc_cli::claude::write_imc_rule(&root)?;
-                println!("wrote {} and {}", s.display(), rule.display());
+                let mut lines = vec![
+                    format!("wrote {} and {}", s.display(), rule.display()),
+                ];
+                if imc_cli::claude::remove_legacy_claude_md_block(&root)? {
+                    lines.push("removed the old imc block from CLAUDE.md".to_string());
+                }
+                for l in lines {
+                    println!("{l}");
+                }
             }
             ClaudeAction::Start { port } => {
                 let state = imc_cli::claude::start_proxy(&cfg, *port)?;
