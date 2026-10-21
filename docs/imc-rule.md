@@ -26,7 +26,8 @@ callers, or trace HTTP routes.
   rename or delete anything.
 - `imc trace "<symbol>"` — what it calls (forward). `--both` both directions.
 - `imc trace "<GET /api/path>"` — HTTP route → backend handler.
-- `imc graph <symbol>` — definition site and kind.
+- `imc trace <symbol>` — the call tree, rooted at the definition (kind, qualified
+  name, line range).
 - `imc memory-search "<topic>"` — conventions/decisions recorded for this repo.
   There is a relevance floor: an empty result means "no matching memory", not
   "this repo has no memories".

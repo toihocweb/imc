@@ -43,6 +43,45 @@ impl<'a> ImcTracer<'a> {
     }
 }
 
+
+impl ImcTracer<'_> {
+    /// The root line of a trace: the definition of the symbol the trace starts
+    /// from — its kind, its qualified name and where it lives.
+    ///
+    /// `imc graph` used to be a separate verb for exactly this. One verb
+    /// answers the question better: the definition is the root of the tree.
+    fn root_line(&self, id: &str, name: &str, file: &str, line: Option<usize>) -> String {
+        // The node carries its own id ("file::qualname"), so the definition
+        // is looked up exactly: a name that has several definitions must not
+        // borrow the first one's line range.
+        let sym = self
+            .store
+            .find_symbols_by_name(name, 25)
+            .into_iter()
+            .find(|s| s.id == id)
+            .or_else(|| {
+                self.store
+                    .find_symbols_by_name(name, 25)
+                    .into_iter()
+                    .find(|s| s.file == file)
+            });
+        match sym {
+            Some(s) => format!(
+                "{} {}  {}:{}-{}",
+                s.kind.as_str(),
+                s.qualname,
+                s.file,
+                s.line,
+                s.end_line
+            ),
+            None => match line {
+                Some(l) => format!("{name} {file}:{l}"),
+                None => format!("{name} {file}"),
+            },
+        }
+    }
+}
+
 impl Tracer for ImcTracer<'_> {
     fn project_name(&self) -> Option<String> {
         self.project_name.clone()
@@ -89,10 +128,31 @@ impl Tracer for ImcTracer<'_> {
     fn format_ascii_tree(&self, tree: &Value, direction: Direction) -> String {
         match direction {
             Direction::Callees => serde_json::from_value::<CalleeNode>(tree.clone())
-                .map(|t| tree::format_callee_tree(&t))
+                .map(|t| {
+                    let root = self.root_line(&t.id, &t.name, &t.file, t.line);
+                    let mut out = tree::format_callee_tree(&t);
+                    // The root line carries the definition (kind, qualified
+                    // name, the line range) — what a separate `graph` verb
+                    // used to print on its own.
+                    if out.lines().next().is_some() {
+                        let mut lines = out.lines();
+                        lines.next();
+                        out = format!("{root}\n{}", lines.collect::<Vec<_>>().join("\n"));
+                    }
+                    out
+                })
                 .unwrap_or_default(),
             Direction::Callers => serde_json::from_value::<CallerNode>(tree.clone())
-                .map(|t| tree::format_caller_tree(&t))
+                .map(|t| {
+                    let root = self.root_line(&t.id, &t.name, &t.file, t.line);
+                    let mut out = tree::format_caller_tree(&t);
+                    if out.lines().next().is_some() {
+                        let mut lines = out.lines();
+                        lines.next();
+                        out = format!("{root}\n{}", lines.collect::<Vec<_>>().join("\n"));
+                    }
+                    out
+                })
                 .unwrap_or_default(),
         }
     }

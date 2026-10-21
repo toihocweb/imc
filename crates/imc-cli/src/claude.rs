@@ -49,6 +49,9 @@ code. Every command below is verified to exist in this binary.
   registered project instead of a path.
 
 **Read less**
+- `imc pack "<query>"` — one bundle of context under a token budget: retrieval
+  plus the call-graph neighbourhood plus the project memories. Use it when you
+  need a lot of context at once, instead of stacking search + read + context.
 - `imc read <file> --symbols` — outline first, then read only the lines you need.
 - `imc read <file> --method <name>` — one symbol's body. **Use the real name from
   `--symbols`, including any leading underscore** (`_blended_score`, not `blended_score`).
@@ -60,7 +63,8 @@ code. Every command below is verified to exist in this binary.
 - `imc trace <symbol>` — what it calls (forward). `--both` walks both directions.
 - `imc trace "GET /api/path"` — where an HTTP route goes: frontend caller to backend
   handler.
-- `imc graph <symbol>` — definition site and kind.
+- `imc trace <symbol>` — the call tree from a symbol, rooted at its definition
+  (kind, qualified name, line range).
 
 **Recall past decisions**
 - `imc memory-search "<topic>"` — conventions and decisions previously recorded
@@ -100,6 +104,9 @@ callers, or trace HTTP routes.
   than the full snippet; then read the file for the rest.
 - `imc search "<q>" --offset N` — page through a long result set. The output
   says when more matches exist.
+- `imc pack "<query>"` — one bundle of context under a token budget: retrieval
+  plus the call-graph neighbourhood plus the project memories. Use it when you
+  need a lot of context at once, instead of stacking search + read + context.
 - `imc read <file> --symbols` — outline; then read only the lines you need.
 - Tool results are filtered before they reach the model, and imc learns a
   filter per command: a long build log arrives as its errors and its summary,
@@ -109,7 +116,8 @@ callers, or trace HTTP routes.
   rename or delete anything. `imc callers <symbol>` / `imc blast <symbol>`.
 - `imc trace "<symbol>"` — what it calls (forward). `--both` both directions.
 - `imc trace "GET /api/path"` — HTTP route → backend handler.
-- `imc graph <symbol>` — definition site and kind.
+- `imc trace <symbol>` — the call tree from a symbol, rooted at its definition
+  (kind, qualified name, line range).
 - `imc memory-search "<topic>"` — conventions/decisions recorded for this repo.
   There is a relevance floor: an empty result means "no matching memory", not
   "this repo has no memories".

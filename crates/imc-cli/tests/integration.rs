@@ -465,3 +465,76 @@ fn instruction_block_omits_python_only_wrappers() {
         "`-d` is depth (Python parity); direction is `--callers`"
     );
 }
+
+/// The commands the agent reaches for most must be in the block that the
+/// agent actually reads. `imc pack` was missing from it: the long rule file
+/// had it, the block written into the project did not, so the agent assembled
+/// its context by hand and paid for it in tokens.
+#[test]
+fn instruction_block_mentions_the_core_commands() {
+    let block = imc_cli::claude::instruction_block();
+    for cmd in [
+        "imc search",
+        "imc pack",
+        "imc read",
+        "imc context",
+        "imc trace",
+        "imc memory-search",
+    ] {
+        assert!(
+            block.contains(cmd),
+            "`{cmd}` is missing from the instruction block"
+        );
+    }
+}
+
+/// The two rule texts are written to different places and drift apart. The
+/// short one (the instruction block) and the long one (the rule file) must
+/// name the same commands.
+#[test]
+fn the_two_rule_texts_name_the_same_commands() {
+    let short = imc_cli::claude::instruction_block();
+    let long = imc_cli::claude::imc_rule_md();
+    for cmd in [
+        "imc search",
+        "imc pack",
+        "imc read",
+        "imc context",
+        "imc trace",
+        "imc memory-search",
+    ] {
+        assert!(short.contains(cmd), "the instruction block misses `{cmd}`");
+        assert!(long.contains(cmd), "the rule file misses `{cmd}`");
+    }
+
+    // The third copy: the rule file that is checked into docs/. The three
+    // drift apart — the docs one had `imc pack` while the Rust ones did not.
+    let docs = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/imc-rule.md");
+    let docs = std::fs::read_to_string(&docs).expect("docs/imc-rule.md");
+    for cmd in [
+        "imc search",
+        "imc pack",
+        "imc read",
+        "imc context",
+        "imc trace",
+        "imc memory-search",
+    ] {
+        assert!(docs.contains(cmd), "docs/imc-rule.md misses `{cmd}`");
+    }
+}
+
+/// `imc graph` was folded into `imc trace`: the definition is the root of the
+/// tree, so one verb answers both questions.
+#[test]
+fn trace_carries_the_definition_and_the_graph_verb_is_gone() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_imc"))
+        .args(["--help"])
+        .output()
+        .expect("run imc --help");
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !help.contains("\n  graph "),
+        "`imc graph` must be gone: {help}"
+    );
+}

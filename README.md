@@ -294,7 +294,7 @@ list lives.
 | `imc [path]` / `imc index [path]` | Index incrementally; `--force` rebuilds. `imc .` is the shortcut. |
 | `imc search "<query>"` | Hybrid retrieval, then an LLM answer with `path:line` citations. |
 | `imc trace <target>` | Call tree or blast radius (`--callers`), for symbols and `GET /api/…` routes. |
-| `imc graph <symbol>` | Where a symbol is defined, what it calls, who calls it. |
+| `imc trace <symbol>` | The call tree from a symbol, rooted at its definition (kind, qualified name, line range). `--callers` for the blast radius, `--both` for both. |
 | `imc read <file>` | Token-optimised reader; `--symbols` for the outline, `--method` for one function. |
 | `imc context <target>` | Everything around a file: outline, dependencies, endpoints, tests. |
 | `imc pack "<query>"` | Retrieval + graph + memories in one bundle under a token budget. |

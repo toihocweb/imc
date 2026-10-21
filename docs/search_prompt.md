@@ -38,7 +38,8 @@ code. Every command below is verified to exist in this binary.
 - `imc trace <symbol> --callers --depth 3` — blast radius. Run this *before* renaming
   or deleting anything. `imc callers <symbol>` / `imc blast <symbol>` are shorthands.
 - `imc trace <symbol>` — what it calls (forward); `--both` walks both directions.
-- `imc graph <symbol>` — definition site and kind.
+- `imc trace <symbol>` — the call tree, rooted at the definition (kind, qualified
+  name, line range).
 
 **Recall past decisions**
 - `imc memory-search "<topic>"` — conventions and decisions previously recorded

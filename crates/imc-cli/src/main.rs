@@ -107,7 +107,6 @@ enum Command {
         no_on_miss: bool,
         },
     /// Show definitions/callees/callers for a symbol.
-    Graph { symbol: String },
     /// Compress text using the proxy compression engine (BM25/graph/CCR).
     #[command(name = "compress")]
     Compress {
@@ -631,7 +630,22 @@ fn run_trace_arm(
     match imc_cli_extra::trace_cmd::run_trace(&tracer, &opts) {
         Ok(out) => {
             if let Some(js) = out.json {
-                println!("{js}");
+                // The definitions of the target, so a JSON consumer does not
+                // have to look them up separately. `imc graph` used to be a
+                // separate verb for exactly this.
+                let mut v: serde_json::Value = match serde_json::from_str(&js) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        println!("{js}");
+                        return Ok(());
+                    }
+                };
+                if let Some(obj) = v.as_object_mut() {
+                    let defs = resolve_symbols(&store, &args.target, args.file.as_deref())
+                        .unwrap_or_default();
+                    obj.insert("definitions".to_string(), serde_json::to_value(defs)?);
+                }
+                println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 let text = &out.text;
                 print!("{text}");
@@ -973,35 +987,6 @@ fn main() -> Result<()> {
                     imc_cli::agentic::AskOutcome::Unavailable(why) => {
                         eprintln!("[imc search] {why}; showing raw hits (`-r/--raw` to skip the LLM)");
                         print_hits(&hits, query);
-                    }
-                }
-            }
-        }
-        Command::Graph { symbol } => {
-            let db = cfg.project_db(&root);
-            let store = store::open(&db)?;
-            let syms = resolve_symbols(&store, symbol, None)?;
-            if cli.json {
-                let payload = serde_json::json!({
-                    "definitions": syms,
-                    "callees": syms.iter().map(|s| store.callees(&s.id)).collect::<Vec<_>>(),
-                    "callers": syms.iter().map(|s| store.callers(&s.name)).collect::<Vec<_>>(),
-                });
-                println!("{}", serde_json::to_string_pretty(&payload)?);
-            } else {
-                for s in &syms {
-                    println!("{} {}  {}:{}-{}", s.kind.as_str(), s.qualname, s.file, s.line, s.end_line);
-                    let callees = store.callees(&s.id);
-                    if !callees.is_empty() {
-                        println!("  → calls: {}", callees.join(", "));
-                    }
-                    let callers = store.callers(&s.name);
-                    if !callers.is_empty() {
-                        let short: Vec<String> = callers
-                            .iter()
-                            .map(|c| c.rsplit("::").next().unwrap_or(c).to_string())
-                            .collect();
-                        println!("  ← called by: {}", short.join(", "));
                     }
                 }
             }
