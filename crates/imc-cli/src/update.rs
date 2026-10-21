@@ -31,6 +31,9 @@ pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Upper bound for a downloaded release binary.
+const MAX_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
+
 /// How long a fetched result stays fresh.
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 
@@ -92,6 +95,63 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
     l.resize(n, 0);
     c.resize(n, 0);
     l > c
+}
+
+/// The latest release: its version and the assets it carries.
+#[derive(Debug, Clone)]
+pub struct Release {
+    /// Version without the leading `v`.
+    pub version: String,
+    /// Asset names, e.g. `imc-darwin-aarch64`.
+    pub assets: Vec<String>,
+}
+
+impl Release {
+    /// Does this release carry the asset for the running platform?
+    pub fn has_asset_for_this_platform(&self) -> bool {
+        self.asset_for_this_platform().is_some()
+    }
+
+    /// The asset name for the running platform, if the release has it.
+    pub fn asset_for_this_platform(&self) -> Option<String> {
+        let plat = platform()?;
+        let want = format!("imc-{plat}");
+        self.assets.iter().find(|a| **a == want).cloned()
+    }
+}
+
+/// Ask GitHub for the latest published release.
+pub fn fetch_release(timeout: Duration) -> Result<Release> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .user_agent("imc-update-check")
+        .build()
+        .into();
+    let mut res = agent
+        .get(&api_latest())
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| anyhow::anyhow!("could not reach GitHub: {e}"))?;
+    let body_text = res.body_mut().read_to_string().unwrap_or_default();
+    let body: Value = serde_json::from_str(&body_text).unwrap_or(Value::Null);
+    let tag = body
+        .get("tag_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("release has no tag_name"))?;
+    let assets = body
+        .get("assets")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|a| a.get("name").and_then(Value::as_str))
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Release {
+        version: tag.trim_start_matches('v').to_string(),
+        assets,
+    })
 }
 
 /// Ask GitHub for the latest published version.
@@ -226,8 +286,27 @@ pub fn install(timeout: Duration) -> Result<(String, PathBuf)> {
     if !is_newer(&latest, current_version()) {
         bail!("already on the latest version (v{})", current_version());
     }
-    let url = asset_url(&latest)
-        .ok_or_else(|| anyhow::anyhow!("no release asset for this platform ({})", platform().unwrap_or("?")))?;
+    let release = fetch_release(timeout)?;
+    let asset = release.asset_for_this_platform().ok_or_else(|| {
+        let plat = platform().unwrap_or("unknown");
+        let have = if release.assets.is_empty() {
+            "it has no assets".to_string()
+        } else {
+            format!("it has: {}", release.assets.join(", "))
+        };
+        anyhow::anyhow!(
+            "release v{latest} has no asset for {plat} ({have}).\n\
+             Build it yourself: cargo install --path .\n\
+             Or publish the missing asset: scripts/release-macos.sh (macOS) or push \
+             .github/workflows/release.yml and tag the release."
+        )
+    })?;
+    let url = format!(
+        "https://github.com/{}/releases/download/v{}/{}",
+        repo(),
+        latest,
+        asset
+    );
 
     let exe = std::env::current_exe().context("cannot locate the running binary")?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -242,7 +321,16 @@ pub fn install(timeout: Duration) -> Result<(String, PathBuf)> {
     if res.status() != 200 {
         bail!("download failed: HTTP {}", res.status());
     }
-    let bytes = res.body_mut().read_to_vec()?;
+    // ureq caps a response body at 10 MB by default, and the imc binary is
+    // bigger than that — the download failed with "the response body is
+    // larger than request limit" every single time. The cap exists to stop
+    // a hostile server from exhausting memory; 256 MB is plenty for a
+    // release binary and still bounded.
+    let bytes = res
+        .body_mut()
+        .with_config()
+        .limit(MAX_DOWNLOAD_BYTES)
+        .read_to_vec()?;
 
     let staged = exe.with_extension("new");
     std::fs::write(&staged, &bytes).with_context(|| format!("write {}", staged.display()))?;
@@ -278,6 +366,21 @@ mod tests {
     #[test]
     fn strips_release_suffixes() {
         assert!(is_newer("0.2.0-rc1", "0.1.9"));
+    }
+
+
+    #[test]
+    fn a_release_without_the_platform_asset_is_reported() {
+        let rel = Release {
+            version: "0.2.0".to_string(),
+            assets: vec!["imc-linux-x86_64".to_string()],
+        };
+        // On a platform the release does not carry, the asset is missing.
+        let want = format!("imc-{}", platform().unwrap_or("unknown"));
+        if want != "imc-linux-x86_64" {
+            assert!(!rel.has_asset_for_this_platform());
+        }
+        assert_eq!(rel.asset_for_this_platform().as_deref(), Some("imc-linux-x86_64"));
     }
 
     #[test]

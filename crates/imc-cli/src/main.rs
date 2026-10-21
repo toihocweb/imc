@@ -1979,6 +1979,17 @@ saved to {}", st::path().display());
                 Ok(latest) => {
                     let newer = update::is_newer(&latest, update::current_version());
                     if *check {
+                        // Say whether the release can actually be installed
+                        // here: a release without this platform's asset is a
+                        // dead end for the user, and "an update exists" alone
+                        // would send them into it.
+                        let release = update::fetch_release(timeout).ok();
+                        let assets = release.as_ref().map(|r| r.assets.clone()).unwrap_or_default();
+                        let installable = release
+                            .as_ref()
+                            .map(|r| r.has_asset_for_this_platform())
+                            .unwrap_or(false);
+                        let platform = update::platform();
                         if cli.json {
                             println!(
                                 "{}",
@@ -1986,8 +1997,21 @@ saved to {}", st::path().display());
                                     "current": update::current_version(),
                                     "latest": latest,
                                     "update_available": newer,
+                                    "platform": platform,
+                                    "assets": assets,
+                                    "installable": installable,
                                 }))?
                             );
+                        } else if newer && !installable {
+                            println!(
+                                "update available: v{} → v{} — but the release has no asset for {}",
+                                update::current_version(),
+                                latest,
+                                platform.unwrap_or("this platform")
+                            );
+                            if !assets.is_empty() {
+                                println!("assets in the release: {}", assets.join(", "));
+                            }
                         } else if newer {
                             println!(
                                 "update available: v{} → v{}",

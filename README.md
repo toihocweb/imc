@@ -384,7 +384,7 @@ Per-project database: `$IMC_DATA_DIR/projects/<md5(path)[:16]>/index.db`.
 | `imc config get\|set\|list\|path\|test\|models\|migrate\|setup` | View and edit the configuration. |
 | `imc config model-map [set\|rm]` | Model mappings the proxy applies: the model a client asks for → the model the upstream serves. Also editable on the dashboard's **Model map** page. |
 | `imc doctor` | Diagnose the environment and print fix commands. |
-| `imc update [--check]` | Update to the latest release, or just check. |
+| `imc update` | Download the newest release and replace the running binary. `--check` only reports whether a newer version exists (and whether the release carries an asset for this platform). |
 | `imc install` | Copy the current build onto your PATH (and the dashboard app next to it). |
 | `imc web` | Open the dashboard, starting it if needed. |
 | `imc list` | Registered projects with counts and database size. |
@@ -489,3 +489,23 @@ Design notes, parity notes and JSON contracts live in [`docs/`](docs).
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Releasing
+
+`imc update` installs the newest release asset for the running platform
+(`imc-linux-x86_64`, `imc-linux-aarch64`, `imc-darwin-x86_64`,
+`imc-darwin-aarch64`).
+
+The assets are built by `.github/workflows/release.yml` when a `v*` tag is
+pushed. Pushing a workflow file needs a token with the `workflow` scope; the
+classic token may not have it, and then the macOS assets are built on a Mac:
+
+```bash
+./scripts/release-macos.sh --dry-run   # build both architectures, sign, check
+./scripts/release-macos.sh             # and upload them to the release
+```
+
+The script signs each binary ad-hoc (`codesign --force --sign -`): macOS
+kills an unsigned Mach-O before it can print anything, which looks like a
+hung CLI. It also runs the binary it just built, because a binary that
+cannot start is worse than no binary.
