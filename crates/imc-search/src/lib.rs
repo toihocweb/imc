@@ -534,19 +534,32 @@ pub fn search(
         }
         // Production code is more useful than test code for answering "how
         // does it work" questions; test files dominate top-K when the query
-        // matches test assertions. Penalize test files slightly, reward
-        // src/main/ slightly.
+        // matches test assertions. Penalize test files unless the query specifically
+        // targets tests, and reward src/main/.
         let is_test = path_lc.contains("/src/test/")
             || path_lc.contains("/tests/")
             || path_lc.contains("/test/")
             || path_lc.contains("_test.")
             || path_lc.contains("test_")
             || path_lc.contains("_test.rs")
-            || path_lc.contains("_test.py");
+            || path_lc.contains("_test.py")
+            || path_lc.contains(".spec.")
+            || path_lc.contains(".cy.")
+            || path_lc.contains("/cypress/")
+            || path_lc.contains("/e2e/")
+            || path_lc.ends_with("test.java")
+            || path_lc.ends_with("tests.java")
+            || path_lc.ends_with("testcase.java");
+        let query_lc = query.to_lowercase();
+        let query_wants_test = query_lc.contains("test")
+            || query_lc.contains("spec")
+            || query_lc.contains("mock")
+            || query_lc.contains("assert")
+            || query_lc.contains("cypress");
         let is_main = path_lc.contains("/src/main/");
-        if is_test {
-            s *= 0.6;
-        } else if is_main {
+        if is_test && !query_wants_test {
+            s *= 0.5;
+        } else if is_main && !query_wants_test {
             s += 0.010;
         }
         let (sym_name, sym_kind) = match &chunk.sym_id {

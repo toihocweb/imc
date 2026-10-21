@@ -67,7 +67,11 @@ enum McpAction {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Index a project (incremental).
+    /// Stop all running imc background services (proxy and web dashboard).
+    #[command(name = "stop")]
+    Stop,
+    /// Index a project (incremental). Shortcut: `imc <path>` (e.g. `imc .`).
+    #[command(hide = true)]
     Index {
         path: Option<PathBuf>,
         /// Extra gitignore-style patterns.
@@ -255,11 +259,7 @@ enum Command {
         args: Vec<String>,
     },
     /// Index the project and wire it for Claude Code, without opening it.
-    ///
-    /// `imc claude` does all of this too, but it also opens Claude Code —
-    /// which is not what you want when the point is to prepare a machine
-    /// (a server, a container, a CI step).
-    #[command(name = "setup")]
+    #[command(name = "setup", hide = true)]
     Setup {
         #[arg(long, short = 'f')]
         force: bool,
@@ -271,7 +271,7 @@ enum Command {
         no_proxy: bool,
     },
     /// Run / control the LLM proxy that Claude Code talks to.
-    #[command(name = "proxy")]
+    #[command(name = "proxy", hide = true)]
     Proxy {
         #[command(subcommand)]
         action: ProxyAction,
@@ -818,11 +818,38 @@ fn main() -> Result<()> {
     // print the "using the active project" notice.
     let notify_active = !matches!(
         &cli.command,
-        Command::Index { .. } | Command::Proxy { .. }
+        Command::Index { .. } | Command::Proxy { .. } | Command::Stop
     );
     let root = resolve_root_with(&cfg, cli.root.clone(), true, notify_active)?;
 
     match &cli.command {
+        Command::Stop => {
+            let proxy_stopped = imc_cli::claude::stop_proxy(&cfg)?;
+            let dashboard_stopped = imc_cli::web::stop_dashboard();
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "proxy_stopped": proxy_stopped.is_some(),
+                        "proxy_port": proxy_stopped,
+                        "dashboard_stopped": dashboard_stopped,
+                    })
+                );
+            } else {
+                let mut any = false;
+                if let Some(port) = proxy_stopped {
+                    println!("✓ proxy stopped (port {port})");
+                    any = true;
+                }
+                if dashboard_stopped {
+                    println!("✓ web dashboard stopped");
+                    any = true;
+                }
+                if !any {
+                    println!("no running imc services found");
+                }
+            }
+        }
         Command::Index {
             path,
             ignore,

@@ -126,32 +126,48 @@ fn running_dashboard_is_stale(dir: &Path) -> bool {
     !current.is_empty() && !recorded.is_empty() && recorded != current
 }
 
-/// Stop the dashboard that `imc` started earlier.
-fn stop_recorded_dashboard() {
+/// Stop any running web dashboard. Returns true if a running dashboard was terminated.
+pub fn stop_dashboard() -> bool {
+    let mut terminated = false;
     // The pid file of a previous run belongs to the process being replaced.
     if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if name.starts_with("imc-web-") && name.ends_with(".pid") {
+                if let Ok(raw_pid) = std::fs::read_to_string(entry.path()) {
+                    if let Ok(pid) = raw_pid.trim().parse::<i64>() {
+                        let _ = Command::new("kill")
+                            .arg(pid.to_string())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .status();
+                        terminated = true;
+                    }
+                }
                 let _ = std::fs::remove_file(entry.path());
             }
         }
     }
-    let Ok(raw) = std::fs::read_to_string(state_path()) else {
-        return;
-    };
-    let Ok(state) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return;
-    };
-    if let Some(pid) = state.get("pid").and_then(|v| v.as_i64()) {
-        let _ = Command::new("kill")
-            .arg(pid.to_string())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+    if let Ok(raw) = std::fs::read_to_string(state_path()) {
+        if let Ok(state) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(pid) = state.get("pid").and_then(|v| v.as_i64()) {
+                let _ = Command::new("kill")
+                    .arg(pid.to_string())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                terminated = true;
+            }
+        }
+        std::fs::remove_file(state_path()).ok();
     }
-    std::fs::remove_file(state_path()).ok();
+    terminated
+}
+
+/// Stop the dashboard that `imc` started earlier.
+fn stop_recorded_dashboard() {
+    stop_dashboard();
 }
 
 /// Try to bring the dashboard up. Returns a human-readable description of what

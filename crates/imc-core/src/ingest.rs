@@ -22,6 +22,9 @@ pub const DEFAULT_IGNORES: &[&str] = &[
     ".idea/",
     ".vscode/",
     "*.egg-info/",
+    "cypress/fixtures/",
+    "playwright-report/",
+    "test-results/",
 ];
 
 const EXCLUDED_FILENAMES: &[&str] = &[
