@@ -142,3 +142,63 @@ async fn a_rule_that_drops_the_failure_is_never_stored() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The safety net for a learned rule.
+///
+/// The rule was written by a model from one sample. On the next run the
+/// output differs, and a pattern that looked like noise in the sample can
+/// match a real error. The failure is the answer, so it goes back.
+#[test]
+fn a_learned_rule_may_not_drop_a_failure_line() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("imc-learn-guard-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("tmp dir");
+    let path = dir.join("learned_filters.json");
+    // A learned rule that drops every line starting with "error" — in the
+    // sample that looked like a noise pattern.
+    std::fs::write(
+        &path,
+        r#"[{"tool":"Bash","command_pattern":"mytool","match_type":"startswith","enabled":true,
+             "source":"learned",
+             "transforms":[{"type":"remove_lines","pattern":"^error"}]}]"#,
+    )
+    .expect("write the rule");
+    std::env::set_var("IMC_LEARNED_FILTERS_PATH", &path);
+
+    // The next output of the same command has a real error in it.
+    let output = "noise line\nnoise line\nERROR: the database is unreachable\nnoise line\n";
+    let filtered = imc_proxy_copilot::context_filters::filter_tool_result_content(
+        output,
+        "mytool run",
+        "Bash",
+    );
+
+    assert!(
+        filtered.contains("ERROR: the database is unreachable"),
+        "the failure must survive a learned rule: {filtered}"
+    );
+    // The noise the rule was written for is still there — it only dropped the
+    // error line, which is exactly the overfitting this net catches.
+    assert!(filtered.contains("noise line"), "{filtered}");
+    assert!(filtered.contains("kept 1 failure line(s)"), "{filtered}");
+
+    // A hand-written rule keeps its own behaviour: the user knows what they
+    // want, so nothing is rescued.
+    std::fs::write(
+        &path,
+        r#"[{"tool":"Bash","command_pattern":"mytool","match_type":"startswith","enabled":true,
+             "transforms":[{"type":"remove_lines","pattern":"^error"}]}]"#,
+    )
+    .expect("write the rule");
+    let filtered = imc_proxy_copilot::context_filters::filter_tool_result_content(
+        output,
+        "mytool run",
+        "Bash",
+    );
+    assert!(
+        !filtered.contains("ERROR: the database is unreachable"),
+        "a user's own rule is left alone: {filtered}"
+    );
+
+    std::env::remove_var("IMC_LEARNED_FILTERS_PATH");
+    let _ = std::fs::remove_dir_all(&dir);
+}

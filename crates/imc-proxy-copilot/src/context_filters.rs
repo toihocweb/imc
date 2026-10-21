@@ -323,6 +323,45 @@ pub fn collect_observations(payload: &AnthropicMessagesPayload) -> Vec<FilterObs
     out
 }
 
+
+/// Put back the failure lines a learned rule removed.
+///
+/// The rule was written by a model from one sample of one output. On the next
+/// run the output differs, and a pattern that looked like noise there can
+/// match a real error here. The failure is the answer, so it goes back — with
+/// a note, so the reader knows it was rescued rather than kept.
+fn restore_failure_lines(before: &str, after: &str) -> String {
+    let kept: std::collections::HashSet<&str> = after.lines().collect();
+    let mut rescued: Vec<&str> = Vec::new();
+    for line in before.lines() {
+        if is_failure_line(line) && !kept.contains(line) && !rescued.contains(&line) {
+            rescued.push(line);
+        }
+    }
+    if rescued.is_empty() {
+        return after.to_string();
+    }
+    let mut out = after.to_string();
+    out.push_str("\n[imc filter] kept ");
+    out.push_str(&rescued.len().to_string());
+    out.push_str(" failure line(s) the learned rule would have dropped:\n");
+    for line in rescued {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// A line that reports a failure.
+pub fn is_failure_line(line: &str) -> bool {
+    let l = line.to_lowercase();
+    l.contains("error")
+        || l.contains("fail")
+        || l.contains("panic")
+        || l.contains("exception")
+        || l.contains("fatal")
+}
+
 /// Port of `load_tool_result_filters_config`.
 ///
 /// Served from a cache keyed on file mtime; falls back to the built-in rules
@@ -1375,7 +1414,17 @@ pub fn filter_tool_result_content(text: &str, command: &str, tool_name: &str) ->
     if !matched_rules.is_empty() {
         let mut out = text.to_string();
         for r in matched_rules {
+            // A learned rule was written against one sample, so it can be
+            // right about that sample and wrong about the next output of the
+            // same command. The safety net: a rule a model wrote may only
+            // remove noise, never a failure line. A hand-written rule is left
+            // alone - the user knows what they want.
+            let learned = r.get("source").and_then(Value::as_str) == Some("learned");
+            let before = out.clone();
             out = execute_transforms_pipeline(&out, r.get("transforms").and_then(Value::as_array));
+            if learned {
+                out = restore_failure_lines(&before, &out);
+            }
         }
         return out;
     }
