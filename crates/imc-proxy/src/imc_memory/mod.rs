@@ -1,5 +1,6 @@
 //! Port of `main/proxy/lib/imc_memory.py` (the proxy-side memory bridge).
 
+pub mod learning;
 pub mod lib;
 
 pub use lib::{

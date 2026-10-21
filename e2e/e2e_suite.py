@@ -1266,6 +1266,31 @@ def suite_mcp(root, data):
 
 
 # -- main ----------------------------------------------------------------------
+
+# -- P. self-learning ----------------------------------------------------------
+def suite_learning():
+    """The proxy learns a memory from the traffic it sees.
+
+    The whole loop, against a local stub model: a request with a correction
+    -> the gate -> the background extraction -> the memory store.
+    """
+    script = Path(__file__).parent / "learn_loop.py"
+
+    def loop():
+        r = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=240,
+        )
+        assert r.returncode == 0, f"the learning loop failed:\n{r.stdout[-800:]}\n{r.stderr[-400:]}"
+        assert "extraction calls to the model: 1" in r.stdout, r.stdout[-400:]
+        assert "memories stored: 1" in r.stdout, r.stdout[-400:]
+        return "the proxy learned a memory from a correction"
+
+    check("P1 the proxy learns from the traffic it sees", loop)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--with-vectors", action="store_true",
@@ -1324,6 +1349,7 @@ def main():
     suite_web(root, data)
     print("\nN. MCP server")
     suite_mcp(root, data)
+    suite_learning()
 
     total = len(PASS) + len(FAIL)
     print("\n" + "=" * 64)

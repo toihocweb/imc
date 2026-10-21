@@ -212,8 +212,24 @@ enum Command {
     /// Delete a memory by id.
     #[command(name = "memory-delete")]
     MemoryDelete { id: i64 },
-    /// Extract and store memories from a transcript/markdown file.
-    Learn { file: PathBuf },
+    /// Learn from a transcript file, or from a lesson written as text.
+    ///
+    /// A file is mined with the rule-based extractor. Text is a lesson: the
+    /// model decides what in it is worth keeping, and `--store` keeps it
+    /// whole instead.
+    Learn {
+        /// The transcript or markdown file to learn from.
+        file: Option<PathBuf>,
+        /// A lesson as text, instead of a file.
+        #[arg(long, conflicts_with = "file")]
+        text: Option<String>,
+        /// Store the text as it is, without asking the model.
+        #[arg(long)]
+        store: bool,
+        /// The scene the memory belongs to.
+        #[arg(long, default_value = "")]
+        scene: String,
+    },
     /// One-shot Claude Code integration: index + .claude/settings + rule file + proxy.
     #[command(name = "claude")]
     Claude {
@@ -2099,9 +2115,34 @@ saved to {}", st::path().display());
         Command::Web { port, no_open, url } => {
             imc_cli::web::run(*port, *no_open, url.clone())?;
         }
-        Command::Learn { file } => {
+        Command::Learn {
+            file,
+            text: lesson,
+            store: as_is,
+            scene,
+        } => {
             let db = cfg.project_db(&root);
             let store = store::open(&db)?;
+            // A lesson written as text: the model decides what in it is
+            // worth keeping.
+            if let Some(lesson) = lesson {
+                if *as_is {
+                    match imc_memory::extract::store_lesson(&store, lesson, scene)? {
+                        Some(id) => println!("stored memory #{id}"),
+                        None => println!("nothing to store"),
+                    }
+                } else {
+                    let query = "User feedback or mistake lesson learned from this working session to record for future context:";
+                    let stored = imc_memory::extract::learn_from_exchange(
+                        &cfg, &store, query, lesson, "learn",
+                    )?;
+                    println!("stored {stored} memory(ies)");
+                }
+                return Ok(());
+            }
+            let Some(file) = file else {
+                bail!("give a transcript file, or --text \"<lesson>\"");
+            };
             let embedder = imc_embed::build(&cfg.embedding);
             let text = std::fs::read_to_string(file)?;
             let active = vec![file.to_string_lossy().to_string()];

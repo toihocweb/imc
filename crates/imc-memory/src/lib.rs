@@ -5,6 +5,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+pub mod extract;
+
 use anyhow::{Context, Result};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};

@@ -268,6 +268,24 @@ pub fn apply_prompts_and_memories(
     memory::process_tool_outcomes(project_id.as_deref(), &payload.messages, session_id);
     memory::process_user_correction(project_id.as_deref(), Some(&user_text), session_id, &payload.messages);
 
+    // Learn from the exchange, in the background.
+    //
+    // The proxy sees every correction and every failed command. When one
+    // shows up, the exchange holds a lesson worth keeping. The call must not
+    // touch the request: the gate is a few substring checks, the model call
+    // runs on its own thread, and the request returns before any of it
+    // starts.
+    if let Some(detected) = detected.as_ref() {
+        let answer = crate::imc_memory::learning::last_assistant_text(&payload.messages);
+        if !answer.is_empty() && !user_text.is_empty() {
+            crate::imc_memory::learning::learn_in_background(
+                std::path::PathBuf::from(&detected.path),
+                user_text.clone(),
+                answer,
+            );
+        }
+    }
+
     let reminder_enabled = memory::is_system_reminder_enabled(project_id.as_deref());
     let user_context = memory::get_system_reminder_prompt(project_id.as_deref());
     memory::apply_system_reminder_template(
