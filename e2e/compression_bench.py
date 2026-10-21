@@ -56,6 +56,10 @@ def main() -> int:
         ("json_array (real imc search --json, 20 hits)", json_array, "json_array"),
         ("source_code (imc-search/src/lib.rs)", load("src_imc_search.rs"), "source_code"),
         ("build_log (real cargo build output)", load("build_log_real.txt"), "build_log"),
+        ("build_log (real rustc failure)", load("build_log_with_errors.txt"), "build_log"),
+        ("plain text (a file listing)", "\n".join(f"src/module_{i}/handler.rs" for i in range(200)), "plain_text"),
+        ("plain text (a grep result)", "\n".join(f"crates/foo/src/bar_{i}.rs:42:  let x = compute({i});" for i in range(150)), "plain_text"),
+        ("plain text (prose)", "\n".join(f"The system processes the request and returns a response for case {i}." for i in range(300)), "plain_text"),
         ("git_diff (real commit e1001a3)", load("git_diff_real.txt"), "git_diff"),
     ]
 
@@ -102,14 +106,76 @@ def main() -> int:
     print("-" * 96)
     checks = []
 
-    # build log: every ERROR line must survive
-    blog = load("build_log_real.txt")
+    # A listing of files, compressed: the failure line has to survive, and
+    # the elision has to be announced.
+    listing = "\n".join(f"src/module_{i}/handler.rs" for i in range(200))
+    r = imc_compress(listing)
+    checks.append(
+        (
+            "a file listing is compressed",
+            r["compressed_tokens"] < r["original_tokens"] / 2,
+            f"{r['original_tokens']} -> {r['compressed_tokens']}",
+        )
+    )
+    checks.append(
+        (
+            "a file listing announces the elision",
+            "lines omitted" in r["compressed"],
+            "the agent can tell the list is incomplete",
+        )
+    )
+
+    # A grep result: every line names a different file, so a compressor
+    # that collapses repeated blocks leaves it alone. It is a list of
+    # matches, and it is one of the most common tool results there is.
+    grep = "\n".join(f"crates/foo/src/bar_{i}.rs:42:  let x = compute({i});" for i in range(150))
+    r = imc_compress(grep)
+    checks.append(
+        (
+            "a grep result is compressed",
+            r["compressed_tokens"] < r["original_tokens"] / 2,
+            f"{r['original_tokens']} -> {r['compressed_tokens']}",
+        )
+    )
+
+    # English prose is not source code. A keyword anywhere in a line was
+    # enough ("for ", "from ", "use "), so a document in English was handed
+    # to the code compressor and came back uncompressed.
+    prose = "\n".join(f"The system processes the request and returns a response for case {i}." for i in range(300))
+    r = imc_compress(prose)
+    checks.append(
+        (
+            "English prose is not read as code",
+            r["kind"] == "PlainText",
+            r["kind"],
+        )
+    )
+    checks.append(
+        (
+            "English prose is compressed",
+            r["compressed_tokens"] < r["original_tokens"] / 2,
+            f"{r['original_tokens']} -> {r['compressed_tokens']}",
+        )
+    )
+
+    # build log: every ERROR line must survive.
+    #
+    # The fixture has to contain a failure, or the check compares nothing
+    # with nothing and passes forever. A log of warnings only is not a
+    # build log with errors in it.
+    blog = load("build_log_with_errors.txt")
     if blog:
         r = imc_compress(blog)
         errs_in = [l for l in blog.splitlines() if "ERROR" in l or "error[" in l]
         errs_out = [l for l in r["compressed"].splitlines() if "ERROR" in l or "error[" in l]
-        ok = len(errs_out) == len(errs_in)
-        checks.append(("build_log keeps every ERROR line", ok, f"{len(errs_out)}/{len(errs_in)}"))
+        ok = len(errs_out) == len(errs_in) and len(errs_in) > 0
+        checks.append(
+            (
+                "build_log keeps every ERROR line",
+                ok,
+                f"{len(errs_out)}/{len(errs_in)}" + ("" if errs_in else " (no errors in the fixture!)"),
+            )
+        )
 
     # git diff: every +/- line must survive
     diff = load("git_diff_real.txt")

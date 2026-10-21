@@ -12,7 +12,11 @@ pub fn compress(content: &str) -> String {
     }
     let sentences: Vec<String> = split_sentences(trimmed);
     if sentences.len() <= 3 {
-        return content.to_string();
+        // No sentence structure. A file listing, a grep result, a table —
+        // many lines, none of them a sentence. The sentence-based pass
+        // would see one long "sentence" and leave the text alone, so the
+        // line-based pass gets its turn.
+        return compress_by_lines(content);
     }
     let mut keep: HashSet<usize> = HashSet::new();
     keep.insert(0);
@@ -53,6 +57,69 @@ pub fn compress(content: &str) -> String {
                 out.push_str(" …");
             }
         }
+    }
+    if out.is_empty() {
+        content.to_string()
+    } else {
+        out
+    }
+}
+
+/// Line-based compression for content that has no sentence structure.
+///
+/// A file listing, a grep result, a table: one item per line, none of them
+/// a sentence. The sentence-based pass sees a single long "sentence" and
+/// leaves the text alone, so the whole payload went to the model untouched.
+///
+/// The lines that carry the signal stay: the first, the last, and any line
+/// that looks like a failure. The routine middle is dropped, and the drop
+/// is announced — an agent that wants the full list has to be able to tell
+/// that the list is incomplete.
+fn compress_by_lines(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() <= 12 {
+        return content.to_string();
+    }
+    let keep_first = 2;
+    let keep_last = 2;
+    let mut keep: Vec<bool> = vec![false; lines.len()];
+    for i in 0..keep_first.min(lines.len()) {
+        keep[i] = true;
+    }
+    for i in (lines.len() - keep_last)..lines.len() {
+        keep[i] = true;
+    }
+    for (i, line) in lines.iter().enumerate() {
+        let l = line.to_lowercase();
+        if l.contains("error")
+            || l.contains("fail")
+            || l.contains("panic")
+            || l.contains("exception")
+            || l.contains("fatal")
+            || l.contains("denied")
+            || l.contains("not found")
+            || l.contains("warning")
+        {
+            keep[i] = true;
+        }
+    }
+
+    let mut out = String::new();
+    let mut elided = 0usize;
+    for (i, line) in lines.iter().enumerate() {
+        if keep[i] {
+            if elided > 0 {
+                out.push_str(&format!("… [{} lines omitted] …\n", elided));
+                elided = 0;
+            }
+            out.push_str(line);
+            out.push('\n');
+        } else {
+            elided += 1;
+        }
+    }
+    if elided > 0 {
+        out.push_str(&format!("… [{} lines omitted] …", elided));
     }
     if out.is_empty() {
         content.to_string()
@@ -118,5 +185,49 @@ mod tests {
     fn short_text_unchanged() {
         let input = "Just one sentence.";
         assert_eq!(compress(input), input);
+    }
+
+    /// A file listing has no sentence structure: one path per line, not one
+    /// of them ending in a full stop. The sentence-based pass saw a single
+    /// long "sentence" and left the list alone, so the whole payload went
+    /// to the model untouched.
+    #[test]
+    fn a_file_listing_is_compressed() {
+        let listing = (0..200)
+            .map(|i| format!("src/module_{i}/handler.rs\n"))
+            .collect::<String>();
+        let out = compress(&listing);
+        assert!(out.len() * 10 < listing.len(), "{} vs {}", out.len(), listing.len());
+        // The elision is announced — an agent has to be able to tell that
+        // the list is incomplete.
+        assert!(out.contains("lines omitted"), "{out}");
+    }
+
+    /// The line that says what went wrong stays, whatever else is dropped.
+    #[test]
+    fn a_failure_line_survives_the_line_compression() {
+        let mut listing = (0..100)
+            .map(|i| format!("src/module_{i}/handler.rs\n"))
+            .collect::<String>();
+        listing.push_str("src/broken.rs:10: ERROR: file not found\n");
+        listing.push_str(
+            &(100..200)
+                .map(|i| format!("src/module_{i}/handler.rs\n"))
+                .collect::<String>(),
+        );
+        let out = compress(&listing);
+        assert!(out.contains("ERROR: file not found"), "{out}");
+    }
+
+    /// The first and the last line stay: the head of a list says what the
+    /// list is, the tail says where it ended.
+    #[test]
+    fn the_edges_of_a_listing_survive() {
+        let listing = (0..100)
+            .map(|i| format!("entry_{i}\n"))
+            .collect::<String>();
+        let out = compress(&listing);
+        assert!(out.contains("entry_0"), "{out}");
+        assert!(out.contains("entry_99"), "{out}");
     }
 }

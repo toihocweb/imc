@@ -1,0 +1,28 @@
+error[E0308]: mismatched types
+ --> bad.rs:2:21
+  |
+2 |     let port: u16 = "12345";
+  |               ---   ^^^^^^^ expected `u16`, found `&str`
+  |               |
+  |               expected due to this
+
+error[E0425]: cannot find function `undefined_function` in this scope
+ --> bad.rs:3:19
+  |
+3 |     let missing = undefined_function();
+  |                   ^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error: aborting due to 2 previous errors
+
+Some errors have detailed explanations: E0308, E0425.
+For more information about an error, try `rustc --explain E0308`.
+
+warning: unused variable: `x`
+ --> src/lib.rs:10:9
+  |
+10 |     let x = 1;
+  |         ^ help: if this is intentional, prefix it with an underscore: `_x`
+  |
+  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: 1 warning emitted
