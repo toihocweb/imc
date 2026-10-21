@@ -919,6 +919,89 @@ fn slice_tail(lines: &[&str], n: usize) -> String {
 }
 
 /// Port of `_clean_terminal_noise_only` — the `strip_noise` transform.
+
+// ---------------------------------------------------------------------------
+// Repeated success lines
+// ---------------------------------------------------------------------------
+
+/// Port of `_SUCCESS_MARKER_RE` — a line that ends in a success marker.
+///
+/// The `regex` crate has no `\b` inside a `(?i)` alternation problem, so the
+/// word boundary is spelled `\b` the same way Python does.
+fn success_marker_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        RegexBuilder::new(r"(?i)\b(PASSED|PASS|OK|SUCCESS)\s*$|[\u{2713}\u{2714}]\s*$")
+            .build()
+            .expect("valid success marker regex")
+    })
+}
+
+/// Below this, a group of success lines is a coincidence, not a pattern.
+const MIN_SUCCESS_GROUP: usize = 3;
+
+/// Port of `_success_group_key` — the group a success line belongs to.
+///
+/// Only lines that start with something path-like are grouped: a bare "ok"
+/// says nothing about what it refers to. A pytest line
+/// `tests/test_api.py::test_login` groups under `tests/test_api.py`.
+pub fn success_group_key(line: &str) -> Option<String> {
+    if !success_marker_re().is_match(line) {
+        return None;
+    }
+    let first = line.split_whitespace().next()?.trim();
+    if !first.contains('/') && !first.contains('.') {
+        return None;
+    }
+    // pytest: "tests/test_api.py::test_login" -> "tests/test_api.py"
+    let first = match first.rsplit_once("::") {
+        Some((head, _)) => head,
+        None => first,
+    };
+    Some(first.to_string())
+}
+
+/// Port of `_collapse_success_lines` — collapse runs of per-item success lines
+/// that share a path.
+///
+/// A test run prints one line per test, and every line differs, so the
+/// duplicate collapse cannot touch them: a 400-test run costs 400 lines of
+/// context while the failures and the summary are buried in the middle. A
+/// group of three or more collapses to its first line plus a count. Failures
+/// are never collapsed — the failure is the answer.
+pub fn collapse_success_lines(lines: &[String]) -> (Vec<String>, usize) {
+    let keys: Vec<Option<String>> = lines.iter().map(|l| success_group_key(l)).collect();
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for k in keys.iter().flatten() {
+        *counts.entry(k.clone()).or_insert(0) += 1;
+    }
+
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut collapsed = 0usize;
+    for (line, key) in lines.iter().zip(keys.iter()) {
+        let Some(key) = key else {
+            out.push(line.clone());
+            continue;
+        };
+        let count = counts.get(key).copied().unwrap_or(0);
+        if count < MIN_SUCCESS_GROUP {
+            out.push(line.clone());
+            continue;
+        }
+        if !emitted.insert(key.clone()) {
+            collapsed += 1;
+            continue;
+        }
+        out.push(line.clone());
+        out.push(format!(
+            "[imc filter] collapsed {} more success line(s) for {key}",
+            count - 1
+        ));
+    }
+    (out, collapsed)
+}
+
 fn clean_terminal_noise_only(text: &str) -> String {
     text.split('\n')
         .map(|l| clean_line(&lineno_re().replace_all(&ansi_re().replace_all(l, ""), "")))
@@ -1178,11 +1261,14 @@ pub fn filter_tool_result_content(text: &str, command: &str, tool_name: &str) ->
         }
     }
 
+    // Step 2b: collapse per-item success lines (one line per test).
+    let (folded, success_dropped) = collapse_success_lines(&folded);
+
     // Steps 3 + 4: dedup + inline cap.
     let mut out: Vec<String> = Vec::with_capacity(folded.len());
     let mut out_keys: Vec<String> = Vec::with_capacity(folded.len());
     let mut seen_counts: HashMap<String, i64> = HashMap::new();
-    let mut dropped: i64 = 0;
+    let mut dropped: i64 = success_dropped as i64;
 
     for line in folded {
         let key = normalize_log_line(&line);

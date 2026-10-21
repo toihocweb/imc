@@ -1,0 +1,11 @@
+tests/test_mod_0.py::test_case_0 PASSED
+[imc filter] collapsed 19 more success line(s) for tests/test_mod_0.py
+tests/test_mod_1.py::test_case_20 PASSED
+[imc filter] collapsed 19 more success line(s) for tests/test_mod_1.py
+tests/test_mod_2.py::test_case_40 PASSED
+[imc filter] collapsed 19 more success line(s) for tests/test_mod_2.py
+tests/test_a.py::test_bad FAILED
+Traceback (most recent call last): File "app.py", line 42, in handler raise ValueError('boom')
+ValueError: boom
+60 passed, 1 failed in 3.2s
+[imc filter] collapsed 57 duplicate/noise log line(s)

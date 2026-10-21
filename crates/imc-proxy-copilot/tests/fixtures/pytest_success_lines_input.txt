@@ -1,0 +1,67 @@
+tests/test_mod_0.py::test_case_0 PASSED
+tests/test_mod_0.py::test_case_1 PASSED
+tests/test_mod_0.py::test_case_2 PASSED
+tests/test_mod_0.py::test_case_3 PASSED
+tests/test_mod_0.py::test_case_4 PASSED
+tests/test_mod_0.py::test_case_5 PASSED
+tests/test_mod_0.py::test_case_6 PASSED
+tests/test_mod_0.py::test_case_7 PASSED
+tests/test_mod_0.py::test_case_8 PASSED
+tests/test_mod_0.py::test_case_9 PASSED
+tests/test_mod_0.py::test_case_10 PASSED
+tests/test_mod_0.py::test_case_11 PASSED
+tests/test_mod_0.py::test_case_12 PASSED
+tests/test_mod_0.py::test_case_13 PASSED
+tests/test_mod_0.py::test_case_14 PASSED
+tests/test_mod_0.py::test_case_15 PASSED
+tests/test_mod_0.py::test_case_16 PASSED
+tests/test_mod_0.py::test_case_17 PASSED
+tests/test_mod_0.py::test_case_18 PASSED
+tests/test_mod_0.py::test_case_19 PASSED
+tests/test_mod_1.py::test_case_20 PASSED
+tests/test_mod_1.py::test_case_21 PASSED
+tests/test_mod_1.py::test_case_22 PASSED
+tests/test_mod_1.py::test_case_23 PASSED
+tests/test_mod_1.py::test_case_24 PASSED
+tests/test_mod_1.py::test_case_25 PASSED
+tests/test_mod_1.py::test_case_26 PASSED
+tests/test_mod_1.py::test_case_27 PASSED
+tests/test_mod_1.py::test_case_28 PASSED
+tests/test_mod_1.py::test_case_29 PASSED
+tests/test_mod_1.py::test_case_30 PASSED
+tests/test_mod_1.py::test_case_31 PASSED
+tests/test_mod_1.py::test_case_32 PASSED
+tests/test_mod_1.py::test_case_33 PASSED
+tests/test_mod_1.py::test_case_34 PASSED
+tests/test_mod_1.py::test_case_35 PASSED
+tests/test_mod_1.py::test_case_36 PASSED
+tests/test_mod_1.py::test_case_37 PASSED
+tests/test_mod_1.py::test_case_38 PASSED
+tests/test_mod_1.py::test_case_39 PASSED
+tests/test_mod_2.py::test_case_40 PASSED
+tests/test_mod_2.py::test_case_41 PASSED
+tests/test_mod_2.py::test_case_42 PASSED
+tests/test_mod_2.py::test_case_43 PASSED
+tests/test_mod_2.py::test_case_44 PASSED
+tests/test_mod_2.py::test_case_45 PASSED
+tests/test_mod_2.py::test_case_46 PASSED
+tests/test_mod_2.py::test_case_47 PASSED
+tests/test_mod_2.py::test_case_48 PASSED
+tests/test_mod_2.py::test_case_49 PASSED
+tests/test_mod_2.py::test_case_50 PASSED
+tests/test_mod_2.py::test_case_51 PASSED
+tests/test_mod_2.py::test_case_52 PASSED
+tests/test_mod_2.py::test_case_53 PASSED
+tests/test_mod_2.py::test_case_54 PASSED
+tests/test_mod_2.py::test_case_55 PASSED
+tests/test_mod_2.py::test_case_56 PASSED
+tests/test_mod_2.py::test_case_57 PASSED
+tests/test_mod_2.py::test_case_58 PASSED
+tests/test_mod_2.py::test_case_59 PASSED
+tests/test_a.py::test_bad FAILED
+Traceback (most recent call last):
+  File "app.py", line 42, in handler
+    raise ValueError('boom')
+ValueError: boom
+============================================================
+60 passed, 1 failed in 3.2s
