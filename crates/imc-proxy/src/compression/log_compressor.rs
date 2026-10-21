@@ -1,11 +1,10 @@
-//! Build/test log compression — keeps failures, errors, anomalies, and the
-//! first/last lines. Passing noise is dropped.
+//! Build/test log compression — keeps failures, errors, anomalies, stack traces,
+//! diagnostics, and the first/last lines. Passing noise is dropped.
+
+const MAX_DIAGNOSTIC_LOOKAHEAD: usize = 16;
 
 pub fn compress(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
-    if lines.is_empty() {
-        return content.to_string();
-    }
     if lines.len() <= 6 {
         return content.to_string();
     }
@@ -13,24 +12,45 @@ pub fn compress(content: &str) -> String {
     let keep_first = 2;
     let keep_last = 2;
     let mut keep: Vec<bool> = vec![false; lines.len()];
-    for i in 0..keep_first.min(lines.len()) {
-        keep[i] = true;
+    for slot in keep.iter_mut().take(keep_first.min(lines.len())) {
+        *slot = true;
     }
-    for i in (lines.len() - keep_last)..lines.len() {
-        keep[i] = true;
+    for slot in keep.iter_mut().skip(lines.len().saturating_sub(keep_last)) {
+        *slot = true;
     }
 
-    // Error/failure lines.
+    // Pass 1: detect error / failure trigger lines and preserve their surrounding diagnostics
     for (i, line) in lines.iter().enumerate() {
-        let l = line.to_lowercase();
-        if l.contains("error")
-            || l.contains("fail")
-            || l.contains("panic")
-            || l.contains("exception")
-            || l.contains("fatal")
-            || l.contains("reject")
-        {
+        if is_error_trigger(line) {
             keep[i] = true;
+
+            // Preserve preceding header if it introduced a traceback or failure section
+            if i > 0 && is_failure_header(lines[i - 1]) {
+                keep[i - 1] = true;
+            }
+
+            // Look forward and preserve diagnostic lines (file paths, gutter indicators,
+            // stack traces, assertion messages, and indented source lines).
+            let mut j = i + 1;
+            let mut consecutive_blank = 0;
+            while j < lines.len() && j < i + 1 + MAX_DIAGNOSTIC_LOOKAHEAD {
+                let next_line = lines[j];
+                if next_line.trim().is_empty() {
+                    consecutive_blank += 1;
+                    if consecutive_blank > 1 {
+                        break;
+                    }
+                    j += 1;
+                    continue;
+                }
+                consecutive_blank = 0;
+                if is_diagnostic_continuation(next_line) || is_error_trigger(next_line) {
+                    keep[j] = true;
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
         }
     }
 
@@ -41,11 +61,9 @@ pub fn compress(content: &str) -> String {
                 out.push('\n');
             }
             out.push_str(line);
-        } else if i > keep_first && i < lines.len() - keep_last {
-            if !out.ends_with("\n…") {
-                out.push('\n');
-                out.push_str("…");
-            }
+        } else if i > keep_first && i < lines.len() - keep_last && !out.ends_with("\n…") {
+            out.push('\n');
+            out.push('…');
         }
     }
     if out.is_empty() {
@@ -53,6 +71,57 @@ pub fn compress(content: &str) -> String {
     } else {
         out
     }
+}
+
+fn is_error_trigger(line: &str) -> bool {
+    let l = line.to_lowercase();
+    l.contains("error")
+        || l.contains("fail")
+        || l.contains("panic")
+        || l.contains("exception")
+        || l.contains("fatal")
+        || l.contains("reject")
+        || l.contains("timed out")
+        || l.contains("timeout")
+        || l.contains("segmentation fault")
+        || l.contains("sigsegv")
+        || l.contains("killed")
+        || l.contains("assertion")
+        || l.contains("traceback (most recent call last)")
+}
+
+fn is_failure_header(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with("===")
+        || t.starts_with("---")
+        || t.starts_with("___")
+        || t.to_lowercase().contains("traceback")
+        || t.to_lowercase().contains("failures")
+}
+
+fn is_diagnostic_continuation(line: &str) -> bool {
+    let t = line.trim_start();
+    if t.is_empty() {
+        return false;
+    }
+    let is_indented = line.starts_with(' ') || line.starts_with('\t');
+    let is_line_numbered_gutter = if let Some(pos) = t.find('|') {
+        let prefix = t[..pos].trim();
+        prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit())
+    } else {
+        false
+    };
+    let is_gutter = t.starts_with("-->")
+        || is_line_numbered_gutter
+        || t.starts_with('^')
+        || t.starts_with(":::")
+        || t.starts_with("= note:")
+        || t.starts_with("= help:")
+        || t.starts_with("help:")
+        || t.starts_with("note:")
+        || t.starts_with("E ")
+        || t.starts_with("> ");
+    is_indented || is_gutter
 }
 
 #[cfg(test)]
@@ -64,6 +133,26 @@ mod tests {
         let input = "ok line 1\nok line 2\nERROR something broke\nok line 3";
         let out = compress(input);
         assert!(out.contains("ERROR"));
+    }
+
+    #[test]
+    fn preserves_compiler_diagnostic_context() {
+        let input = "Compiling pkg v1.0.0\nChecking dep1 v1.0.0\nChecking dep2 v1.0.0\nChecking dep3 v1.0.0\nerror[E0308]: mismatched types\n  --> src/main.rs:12:5\n   |\n12 |     foo(bar)\n   |     ^^^ expected `u32`, found `&str`\nFor more information about this error, try `rustc --explain E0308`.\nFinished dev target";
+        let out = compress(input);
+        assert!(out.contains("error[E0308]: mismatched types"), "error header kept");
+        assert!(out.contains("--> src/main.rs:12:5"), "location line kept");
+        assert!(out.contains("foo(bar)"), "source line kept");
+        assert!(out.contains("expected `u32`, found `&str`"), "explanation kept");
+    }
+
+    #[test]
+    fn preserves_python_traceback_context() {
+        let input = "Starting app\nConnecting db\nLoading config\nTraceback (most recent call last):\n  File \"app/main.py\", line 45, in run\n    res = fetch_data()\n  File \"app/utils.py\", line 12, in fetch_data\n    raise ValueError(\"Invalid key\")\nValueError: Invalid key\nCleanup done\nExited";
+        let out = compress(input);
+        assert!(out.contains("Traceback"), "header kept");
+        assert!(out.contains("app/main.py"), "caller file kept");
+        assert!(out.contains("app/utils.py"), "origin file kept");
+        assert!(out.contains("ValueError: Invalid key"), "exception kept");
     }
 
     #[test]

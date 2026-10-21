@@ -33,8 +33,9 @@ pub fn compress(content: &str) -> String {
 /// Strip comments, drop comment-only lines, collapse blank-line runs.
 fn normalize(lines: &[&str]) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut in_backtick = false;
     for line in lines {
-        let code = strip_line_comment(line).trim_end();
+        let code = strip_line_comment_with_state(line, &mut in_backtick).trim_end();
         if code.trim().is_empty() {
             if out.last().map(|l| l.is_empty()).unwrap_or(true) {
                 continue;
@@ -94,11 +95,11 @@ fn collapse_repeats(lines: &[String]) -> Vec<String> {
 
 /// Strip a trailing `// ...` comment, keeping the code before it.
 ///
-/// String-literal aware: `"\\n// graph: {}"` is code, not a comment. We walk the
-/// line tracking quote state (with `\` escapes) and only treat `//` as a
-/// comment when it appears outside a string. Getting this wrong silently
-/// truncates real code, which is far worse than keeping a comment.
-fn strip_line_comment(line: &str) -> &str {
+/// String-literal aware: `"\\n// graph: {}"` and `` `https://${host}` `` are code,
+/// not comments. We walk the line tracking quote state (with `\` escapes) and
+/// only treat `//` as a comment when it appears outside a string or template literal.
+/// Getting this wrong silently truncates real code, which is far worse than keeping a comment.
+fn strip_line_comment_with_state<'a>(line: &'a str, in_backtick: &mut bool) -> &'a str {
     let bytes = line.as_bytes();
     let mut in_string = false;
     let mut in_char = false;
@@ -112,21 +113,25 @@ fn strip_line_comment(line: &str) -> &str {
             continue;
         }
         match c {
-            b'\\' if in_string || in_char => {
+            b'\\' if in_string || in_char || *in_backtick => {
                 escaped = true;
                 i += 1;
             }
-            b'"' if !in_char => {
+            b'`' if !in_string && !in_char => {
+                *in_backtick = !*in_backtick;
+                i += 1;
+            }
+            b'"' if !in_char && !*in_backtick => {
                 in_string = !in_string;
                 i += 1;
             }
-            b'\'' if !in_string => {
+            b'\'' if !in_string && !*in_backtick => {
                 // A lone apostrophe in prose should not swallow the line; only
                 // treat it as a char literal when it closes soon after.
                 in_char = !in_char;
                 i += 1;
             }
-            b'/' if !in_string && !in_char && i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+            b'/' if !in_string && !in_char && !*in_backtick && i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
                 // Trim trailing whitespace from the code part.
                 return line[..i].trim_end();
             }
@@ -134,6 +139,12 @@ fn strip_line_comment(line: &str) -> &str {
         }
     }
     line
+}
+
+#[allow(dead_code)]
+fn strip_line_comment(line: &str) -> &str {
+    let mut in_backtick = false;
+    strip_line_comment_with_state(line, &mut in_backtick)
 }
 
 #[cfg(test)]
@@ -222,6 +233,21 @@ mod tests {
         let input = "a();\nlet u = \"https://example.com/x\";\nb();\nc();\n";
         let out = compress(input);
         assert!(out.contains("https://example.com/x"), "got: {out}");
+    }
+
+    #[test]
+    fn url_inside_backtick_template_literal_survives() {
+        let input = "a();\nconst u = `https://example.com/x`;\nb();\nc();\n";
+        let out = compress(input);
+        assert!(out.contains("https://example.com/x"), "template literal was corrupted: {out}");
+        assert!(out.contains("`https://example.com/x`;"));
+    }
+
+    #[test]
+    fn multiline_backtick_template_survives() {
+        let input = "a();\nconst u = `first line\n// not a comment\nthird line`;\nb();\n";
+        let out = compress(input);
+        assert!(out.contains("// not a comment"), "multiline template string corrupted: {out}");
     }
 
     #[test]

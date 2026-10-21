@@ -56,11 +56,11 @@ pub fn compress(content: &str) -> CompressionResult {
     let kind = detect_kind(content);
     let original_tokens = estimate_tokens(content);
     let candidate = match kind {
-        ContentKind::JsonArray => json_compressor::compress(content),
+        ContentKind::JsonArray | ContentKind::JsonObject => json_compressor::compress(content),
         ContentKind::SourceCode => code_compressor::compress(content),
         ContentKind::BuildLog => log_compressor::compress(content),
         ContentKind::GitDiff => git_diff_compressor::compress(content),
-        ContentKind::PlainText | ContentKind::JsonObject | ContentKind::Unknown => {
+        ContentKind::PlainText | ContentKind::Unknown => {
             text_compressor::compress(content)
         }
     };

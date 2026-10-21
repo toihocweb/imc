@@ -24,26 +24,60 @@ const SAMPLE_THRESHOLD: usize = 40;
 const KEEP_FIRST: usize = 3;
 const KEEP_LAST: usize = 3;
 
-/// Compress a JSON array of tool results.
+/// Compress a JSON array or object of tool results.
 ///   * runs of identical items collapse to one item + a count marker,
 ///   * arrays of at least `SAMPLE_THRESHOLD` groups additionally keep error
 ///     items, numeric anomalies, and first/last boundaries, dropping the
 ///     routine middle.
+///   * objects with embedded arrays or oversized string fields are compressed structurally.
 pub fn compress(content: &str) -> String {
-    let arr: Value = match serde_json::from_str(content) {
+    let parsed: Value = match serde_json::from_str(content) {
         Ok(v) => v,
         Err(_) => return content.to_string(),
     };
-    let Value::Array(items) = arr else {
-        return content.to_string();
-    };
+    match parsed {
+        Value::Array(items) => compress_array(&items),
+        Value::Object(map) => compress_object(map, content),
+        _ => content.to_string(),
+    }
+}
+
+fn compress_object(mut map: serde_json::Map<String, Value>, original: &str) -> String {
+    let mut modified = false;
+    for (_k, v) in map.iter_mut() {
+        match v {
+            Value::Array(arr) if arr.len() >= 6 => {
+                let compressed_arr_str = compress_array(arr);
+                if let Ok(Value::Array(new_arr)) = serde_json::from_str::<Value>(&compressed_arr_str) {
+                    let old_len = serde_json::to_string(arr).unwrap_or_default().len();
+                    if compressed_arr_str.len() + 10 < old_len {
+                        *v = Value::Array(new_arr);
+                        modified = true;
+                    }
+                }
+            }
+            Value::String(s) if s.chars().count() > MAX_FIELD_CHARS => {
+                *v = Value::String(window_string(s));
+                modified = true;
+            }
+            _ => {}
+        }
+    }
+    if modified {
+        serde_json::to_string(&Value::Object(map)).unwrap_or_else(|_| original.to_string())
+    } else {
+        original.to_string()
+    }
+}
+
+fn compress_array(items: &[Value]) -> String {
     if items.is_empty() {
-        return content.to_string();
+        return "[]".to_string();
     }
 
     // Pass 1 — collapse consecutive identical items into (representative, count).
     let mut groups: Vec<(Value, usize)> = Vec::new();
-    for item in &items {
+    for item in items {
         match groups.last_mut() {
             Some((last, count)) if *last == *item => *count += 1,
             _ => groups.push((item.clone(), 1)),
@@ -424,5 +458,16 @@ mod tests {
     fn non_array_unchanged() {
         let input = r#"{"a":1}"#;
         assert_eq!(compress(input), input);
+    }
+
+    #[test]
+    fn compresses_object_with_embedded_array() {
+        let one = r#"{"tool":"read","file":"a.rs"}"#;
+        let items = (0..12).map(|_| one).collect::<Vec<_>>().join(",");
+        let input = format!(r#"{{"status":"ok","items":[{items}]}}"#);
+        let out = compress(&input);
+        assert!(out.contains("11 identical items omitted"), "got: {out}");
+        let val: serde_json::Value = serde_json::from_str(&out).expect("valid json output");
+        assert_eq!(val["status"], "ok");
     }
 }

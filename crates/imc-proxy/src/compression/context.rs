@@ -77,6 +77,26 @@ pub fn compress_tool_results(
         return report;
     };
 
+    // Identify tool_use_ids corresponding to retrieve operations so their output is kept intact.
+    let mut retrieve_tool_ids = std::collections::HashSet::new();
+    for msg in messages.iter() {
+        if let AnthropicInputMessage::Assistant(assistant) = msg {
+            if let StringOrBlocks::Blocks(blocks) = &assistant.content {
+                for b in blocks {
+                    if let imc_proxy_types::types::anthropic::AnthropicAssistantContentBlock::ToolUse(tu) = b {
+                        if tu.name.contains("retrieve") {
+                            retrieve_tool_ids.insert(tu.id.clone());
+                        } else if let Some(cmd) = tu.input.get("command").and_then(|v| v.as_str()) {
+                            if cmd.contains("retrieve") {
+                                retrieve_tool_ids.insert(tu.id.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for message in messages.iter_mut() {
         let AnthropicInputMessage::User(user) = message else {
             continue;
@@ -90,6 +110,10 @@ pub fn compress_tool_results(
             };
             // The error text *is* the answer.
             if result.is_error == Some(true) {
+                continue;
+            }
+            // An explicit retrieve operation means the caller wanted the full original text.
+            if retrieve_tool_ids.contains(&result.tool_use_id) {
                 continue;
             }
             match &mut result.content {
@@ -113,6 +137,12 @@ pub fn compress_tool_results(
 fn maybe_shrink(text: &mut String, store: &mut CcrStore, report: &mut CompressionReport) {
     report.considered += 1;
     if text.len() < MIN_TOKENS * 4 {
+        return;
+    }
+    // Never re-compress content that is already compressed or already carries an imc CCR handle.
+    if (text.contains("[imc: ") && text.contains("full output is id "))
+        || text.contains("## Shortened (full text on demand)")
+    {
         return;
     }
 
@@ -146,8 +176,8 @@ fn maybe_shrink(text: &mut String, store: &mut CcrStore, report: &mut Compressio
     report.original_tokens += result.original_tokens;
     report.compressed_tokens += result.compressed_tokens;
     *text = format!(
-        "{}\n\n[imc: {} -> {} tokens; full output is id {}. Retrieve with POST /v1/retrieve {{\"id\":\"{}\"}}]",
-        result.compressed, result.original_tokens, result.compressed_tokens, id, id
+        "{}\n\n[imc: {} -> {} tokens; full output is id {}. Retrieve with `imc retrieve {}` or POST /v1/retrieve {{\"id\":\"{}\"}}]",
+        result.compressed, result.original_tokens, result.compressed_tokens, id, id, id
     );
 }
 

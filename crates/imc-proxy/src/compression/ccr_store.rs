@@ -25,6 +25,8 @@ impl CcrStore {
             .with_context(|| format!("open ccr sqlite {db_path:?}"))?;
         conn.execute_batch(
             r#"
+            PRAGMA journal_mode=WAL;
+            PRAGMA busy_timeout=5000;
             CREATE TABLE IF NOT EXISTS ccr_originals (
                 id           TEXT PRIMARY KEY,
                 kind         TEXT NOT NULL,
