@@ -15,7 +15,7 @@ Suites
     C  call graph        callers + callees + blast radius; error exit codes
     D  reader            truncation header, --symbols, --method
     E  memory            typed add, recall, reinforce, prune_stale
-    F  claude wiring     settings + CLAUDE.md, idempotency, env preservation
+    F  claude wiring     settings + rule file, CLAUDE.md untouched, idempotency
     G  config            set/get roundtrip, masking, migration
     H  proxy lifecycle   start / status / stop of the daemon
     I  json contract     every command honours --json
@@ -635,22 +635,33 @@ def suite_claude(root, data):
 
     check("F1 claude wire writes .claude/settings.local.json", writes_settings)
 
-    def writes_md():
-        md = (root / "CLAUDE.md").read_text()
-        assert md.count("<!-- imc:begin -->") == 1, md[:200]
-        assert "imc search" in md and "imc trace" in md
-        return "instruction block present"
+    def writes_rule():
+        rule = (root / ".claude" / "rules" / "imc-rule.md").read_text()
+        assert "imc search" in rule and "imc trace" in rule, rule[:200]
+        return "the rule file is written"
 
-    check("F2 claude wire writes the CLAUDE.md block", writes_md)
+    check("F2 claude wire writes the rule file", writes_rule)
+
+    def leaves_claude_md_alone():
+        # CLAUDE.md is the user's own file. The rule file is enough, so the
+        # wiring must not touch it.
+        (root / "CLAUDE.md").write_text("# My project rules\n")
+        run_imc(["claude", "wire"], root, data)
+        md = (root / "CLAUDE.md").read_text()
+        assert md == "# My project rules\n", md
+        assert "imc" not in md.lower(), md
+        return "CLAUDE.md untouched"
+
+    check("F3 wiring does not touch CLAUDE.md", leaves_claude_md_alone)
 
     def idempotent():
         run_imc(["claude", "wire"], root, data)
         run_imc(["claude", "wire"], root, data)
-        md = (root / "CLAUDE.md").read_text()
-        assert md.count("<!-- imc:begin -->") == 1, f"markers duplicated: {md.count('<!-- imc:begin -->')}"
-        return "3 runs -> 1 block"
+        rule = (root / ".claude" / "rules" / "imc-rule.md").read_text()
+        assert rule.count("# imc") == 1, rule[:200]
+        return "3 runs -> 1 rule file"
 
-    check("F3 wiring is idempotent", idempotent)
+    check("F3b wiring is idempotent", idempotent)
 
     def preserves_settings():
         p = root / ".claude" / "settings.local.json"
@@ -667,14 +678,12 @@ def suite_claude(root, data):
 
     check("F4 wiring never clobbers user settings", preserves_settings)
 
-    def preserves_md():
-        (root / "CLAUDE.md").write_text("# My project rules\n\nAlways run tests.\n")
-        run_imc(["claude", "wire"], root, data)
-        md = (root / "CLAUDE.md").read_text()
-        assert "Always run tests." in md and md.count("<!-- imc:begin -->") == 1
-        return "existing content kept"
+    def no_mcp_in_rule():
+        rule = (root / ".claude" / "rules" / "imc-rule.md").read_text()
+        assert "mcp__imc" not in rule, "the rule must not talk about MCP"
+        return "the rule mentions no MCP tools"
 
-    check("F5 wiring preserves existing CLAUDE.md", preserves_md)
+    check("F5 the rule does not mention MCP", no_mcp_in_rule)
 
 
 # -- G. config -----------------------------------------------------------------

@@ -32,10 +32,6 @@ callers, or trace HTTP routes.
   There is a relevance floor: an empty result means "no matching memory", not
   "this repo has no memories".
 
-If MCP tools are available (`mcp__imc__search`, `mcp__imc__trace`, `mcp__imc__read`,
-`mcp__imc__context`, `mcp__imc__memory_search`, `mcp__imc__pack`), prefer them over
-shelling out: they carry the schema, the arguments are validated, and the project
-root is pinned. Fall back to the CLI (`imc ...`) when MCP is not wired.
 - `imc search "<q>"` — a search that returns nothing is saved to memory
   automatically, so the next agentic pass can surface it. `--no-on-miss`
   turns that off.

@@ -15,72 +15,6 @@ use imc_core::config::Config;
 pub const BEGIN_MARKER: &str = "<!-- imc:begin -->";
 pub const END_MARKER: &str = "<!-- imc:end -->";
 
-/// Instruction block for Claude Code: how to use imc search / find / trace.
-pub fn instruction_block() -> String {
-    // Kept in sync with docs/search_prompt.md. Every command named here is
-    // verified to exist in this binary (e2e/prompt_claims_check).
-    format!(
-        r#"<!-- imc:begin -->
-## imc — code intelligence for this repo
-
-Local AST + call-graph + vector index. Prefer it over blind Read/Grep to understand
-code. Every command below is verified to exist in this binary.
-
-**Find code**
-- `imc search "<3-7 words>"` — answers the question from indexed chunks with an
-  LLM (needs `llm.base_url`), citing `path:line-line`. Without an LLM endpoint it
-  prints the ranked hits instead and says so.
-- `imc search "<q>" --raw` — just the ranked `file:start-end` chunks, no LLM.
-  Measured on this repo: top-1 hit is right 52% of the time, top-5 is right 88%.
-  **Always read the top 5, never stop at hit 1.**
-- `imc search "<exact identifier>"` — for a known symbol this is exact, not fuzzy:
-  case and `_`/camelCase are normalised on both sides. Prefer it when you know the name.
-- `imc search "<q>" --json` — machine-readable hits (implies `--raw`).
-- `imc search "<q>" --raw --concise` — one line per hit (location, symbol, first
-  line) instead of the whole snippet. About 8x fewer tokens; read the file for
-  the rest.
-- `imc search "<q>" --offset N` — page through a long result set instead of
-  re-running a broad query. The output says when more matches exist.
-- `imc search "<q>" --no-vector` — BM25 only; use when no embedding endpoint is
-  configured or when you want deterministic, offline results.
-- Add `-C <project-root>` when the current directory may not be the project:
-  without it imc answers for the *globally active* project, so a stale pointer
-  silently returns another repository's files. `-p <id_or_name>` picks a
-  registered project instead of a path.
-
-**Read less**
-- `imc pack "<query>"` — one bundle of context under a token budget: retrieval
-  plus the call-graph neighbourhood plus the project memories. Use it when you
-  need a lot of context at once, instead of stacking search + read + context.
-- `imc read <file> --symbols` — outline first, then read only the lines you need.
-- `imc read <file> --method <name>` — one symbol's body. **Use the real name from
-  `--symbols`, including any leading underscore** (`_blended_score`, not `blended_score`).
-- `imc context <file>` — the whole feature around a file: component, deps, tests.
-
-**Understand impact**
-- `imc trace <symbol> --callers --depth 3` — blast radius. Run this *before* renaming
-  or deleting anything. `imc callers <symbol>` and `imc blast <symbol>` are shorthands.
-- `imc trace <symbol>` — what it calls (forward). `--both` walks both directions.
-- `imc trace "GET /api/path"` — where an HTTP route goes: frontend caller to backend
-  handler.
-- `imc trace <symbol>` — the call tree from a symbol, rooted at its definition
-  (kind, qualified name, line range).
-
-**Recall past decisions**
-- `imc memory-search "<topic>"` — conventions and decisions previously recorded
-  for this repo. Empty is a valid answer.
-
-**Rules**
-1. Search before you edit; never invent an API, path, or line number.
-2. Cite `path/to/file:L10-L25` when answering. Never cite a range you did not see.
-3. `imc trace` has no relevance floor: a junk query still returns hits. Hits are
-   ranked evidence, not proof — open the file before relying on it.
-4. If search misses repeatedly, fall back to Read/Grep. An empty result means
-   "not in the index", not "does not exist".
-<!-- imc:end -->"#
-    )
-}
-
 /// Rule file for Claude Code: project-local rules that tell Claude how to use
 /// imc. Written to `.claude/rules/imc-rule.md` by `imc claude setup` (and
 /// `imc config setup` on request) instead of being stuffed into CLAUDE.md.
@@ -121,11 +55,6 @@ callers, or trace HTTP routes.
 - `imc memory-search "<topic>"` — conventions/decisions recorded for this repo.
   There is a relevance floor: an empty result means "no matching memory", not
   "this repo has no memories".
-
-If MCP tools are available (`mcp__imc__search`, `mcp__imc__trace`, `mcp__imc__read`,
-`mcp__imc__context`, `mcp__imc__memory_search`, `mcp__imc__pack`), prefer them over
-shelling out: they carry the schema, the arguments are validated, and the project
-root is pinned. Fall back to the CLI (`imc ...`) when MCP is not wired.
 
 ## Rules
 
@@ -205,31 +134,6 @@ pub fn write_claude_settings(project_root: &Path, port: u16) -> Result<PathBuf> 
     text.push('\n');
     std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
     Ok(path)
-}
-
-/// Insert or replace the imc block in the project's CLAUDE.md.
-pub fn write_claude_md(project_root: &Path) -> Result<(PathBuf, bool)> {
-    let path = project_root.join("CLAUDE.md");
-    let block = instruction_block();
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let updated = if let (Some(b), Some(e)) = (existing.find(BEGIN_MARKER), existing.find(END_MARKER)) {
-        if b < e {
-            let mut s = existing.clone();
-            s.replace_range(b..e + END_MARKER.len(), &block);
-            s
-        } else {
-            format!("{existing}\n{block}")
-        }
-    } else {
-        if existing.trim().is_empty() {
-            block.clone()
-        } else {
-            format!("{}\n{block}", existing.trim_end())
-        }
-    };
-    let changed = updated != existing;
-    std::fs::write(&path, updated).with_context(|| format!("write {}", path.display()))?;
-    Ok((path, changed))
 }
 
 fn state_path(cfg: &Config) -> PathBuf {
@@ -402,15 +306,14 @@ pub fn setup_and_start(
     imc_core::config::upsert_project(cfg, meta)?;
     cfg.set_active(root)?;
 
-    // 3. Claude Code settings + CLAUDE.md.
+    // 3. Claude Code settings + the rule file.
+    //
+    // The rule file is enough: it is the one the agent reads for this
+    // project, and CLAUDE.md is the user's own file. Writing the block there
+    // as well duplicated the same instructions in two places, and the two
+    // copies drifted.
     let settings = write_claude_settings(root, port)?;
     log.push(format!("wrote {}", settings.display()));
-    let (md, changed) = write_claude_md(root)?;
-    log.push(format!(
-        "{} {}",
-        if changed { "updated" } else { "wrote" },
-        md.display()
-    ));
     let rule = write_imc_rule(root)?;
     log.push(format!("wrote {}", rule.display()));
 

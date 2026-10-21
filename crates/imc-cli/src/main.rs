@@ -214,7 +214,7 @@ enum Command {
     MemoryDelete { id: i64 },
     /// Extract and store memories from a transcript/markdown file.
     Learn { file: PathBuf },
-    /// One-shot Claude Code integration: index + .claude/settings + CLAUDE.md + proxy.
+    /// One-shot Claude Code integration: index + .claude/settings + rule file + proxy.
     #[command(name = "claude")]
     Claude {
         #[command(subcommand)]
@@ -351,7 +351,7 @@ struct TraceArgs {
 
 #[derive(Subcommand, Debug)]
 enum ClaudeAction {
-    /// Index the project, wire .claude/settings.local.json + CLAUDE.md, start the proxy.
+    /// Index the project, wire .claude/settings.local.json + the rule file, start the proxy.
     Setup {
         #[arg(long, short = 'f')]
         force: bool,
@@ -359,7 +359,7 @@ enum ClaudeAction {
         #[arg(long, default_value_t = 12345)]
         port: u16,
     },
-    /// Write settings + CLAUDE.md without indexing.
+    /// Write settings + the rule file without indexing.
     Wire {
         #[arg(long, default_value_t = 12345)]
         port: u16,
@@ -1482,13 +1482,8 @@ fn main() -> Result<()> {
             }
             ClaudeAction::Wire { port } => {
                 let s = imc_cli::claude::write_claude_settings(&root, *port)?;
-                let (md, changed) = imc_cli::claude::write_claude_md(&root)?;
-                println!(
-                    "wrote {} and {}{}",
-                    s.display(),
-                    md.display(),
-                    if changed { " (updated)" } else { "" }
-                );
+                let rule = imc_cli::claude::write_imc_rule(&root)?;
+                println!("wrote {} and {}", s.display(), rule.display());
             }
             ClaudeAction::Start { port } => {
                 let state = imc_cli::claude::start_proxy(&cfg, *port)?;

@@ -3,75 +3,31 @@
 Grounded in measurements on `/root/imc` (25 labelled queries, `e2e/search_bench.py`)
 and in commands verified to exist in the Rust binary (`python3 /tmp/verify_prompt.py`).
 
-Two prompts live here because `imc search` is used in two different places.
+`imc search` is used in two different places, so two prompts live here: the one the
+agent reads (section A — the shipped text now lives with the code), and the one the
+model reads when it synthesises an answer over the retrieved chunks (section B).
 
 ---
 
-## A. Prompt that gets shipped in `CLAUDE.md`
+## A. The prompt the agent reads
 
-This is the one an agent reads before calling the tool. Rules and formats, no prose.
+The shipped text lives in one place: `imc_rule_md()` in
+`crates/imc-cli/src/claude.rs`, written to `.claude/rules/imc-rule.md` by
+`imc claude setup`. The copy in `docs/imc-rule.md` is the same text, and a test
+compares the two so they cannot drift.
 
-```markdown
-<!-- imc:begin -->
-## imc — code intelligence for this repo
+It is deliberately not written into `CLAUDE.md`: that file is the user's own,
+and the rule file is what the agent reads for this project.
 
-Local AST + call-graph + vector index. Prefer it over blind Read/Grep to understand
-code. Every command below is verified to exist in this binary.
+What the text has to do:
 
-**Find code**
-- `imc search "<3-7 words>"` — answers from the indexed chunks with an LLM
-  chunks. Measured on this repo: top-1 hit is right 52% of the time, top-5 is right 80%.
-  **Always read the top 5, never stop at hit 1.**
-- `imc search "<exact identifier>"` — for a known symbol this is exact, not fuzzy:
-  case and `_`/camelCase are normalised on both sides. Prefer it when you know the name.
-- `imc search "<q>" --json` — machine-readable hits, for when you post-process.
-- `imc search "<q>" --no-vector` — BM25 only; use when no embedding endpoint is
-  configured or when you want deterministic, offline results.
-
-**Read less**
-- `imc read <file> --symbols` — outline first, then read only the lines you need.
-- `imc read <file> --method <name>` — one symbol's body. **Use the real name from
-  `--symbols`, including any leading underscore** (`_blended_score`, not `blended_score`).
-- `imc context <file>` — the whole feature around a file: component, deps, tests.
-
-**Understand impact**
-- `imc trace <symbol> --callers --depth 3` — blast radius. Run this *before* renaming
-  or deleting anything. `imc callers <symbol>` / `imc blast <symbol>` are shorthands.
-- `imc trace <symbol>` — what it calls (forward); `--both` walks both directions.
-- `imc trace <symbol>` — the call tree, rooted at the definition (kind, qualified
-  name, line range).
-
-**Recall past decisions**
-- `imc memory-search "<topic>"` — conventions and decisions previously recorded
-  for this repo. Empty is a valid answer.
-
-**Rules**
-1. Search before you edit; never invent an API, path, or line number.
-2. Cite `path/to/file:L10-L25` when answering. Never cite a range you did not see.
-3. Hits are ranked evidence, not proof — open the file before relying on it. A
-   query whose content words mostly do not exist in the index now returns nothing
-   (junk-query gate), so an empty result means "not in the index".
-4. If search misses repeatedly, fall back to Read/Grep. An empty result means
-   "not in the index", not "does not exist".
-<!-- imc:end -->
-```
-
-### What changed from the Python original, and why
-
-| Python prompt said | Reality in the Rust binary | Change |
-|---|---|---|
-| `imc trace <symbol> --both` | no `--both` flag then | added `-b/--both` (+ `-r/--callers`, `-a/--all`, `-d/--depth`) |
-| `imc callers <symbol>` | no `callers` subcommand then | added `callers` / `callees` / `blast` |
-| `imc-read <file> --method <symbol>` | command is `imc read` | corrected |
-| `"how indexing works \| ast and memory"` (directive) | directives are not evaluated; they only clamp the limit | directive guidance removed |
-| `"chunk count: \| 8 chunks or --limit N"` | `--limit` works, directive does not | kept `-l/--limit`, dropped directive claim |
-| asserted nothing about hit quality | measured 52% / 80% | told the agent to read top-5 |
-| silent on identifier matching | 6/6 exact after the boost fix | documented the exact-identifier path |
-| silent on `--method` needing real names | `_blended_score` fails as `blended_score` | explicit underscore warning |
-
-Two of the four "next command" suggestions in the original prompt would have sent
-the agent to a command that does not exist. That is the main reason this rewrite
-is not cosmetic.
+1. Name the commands that answer a question, with the flags that matter.
+2. Say which of two ways to get a thing is the right one (`imc trace` over
+   `imc graph`, `imc pack` over stacking `search` + `read` + `context`).
+3. Say what not to do: invent a path, cite a line you did not read, stop at hit
+   one.
+4. Not mention MCP. The rule is about the CLI the agent has; a second surface
+   would be a second thing to keep in sync.
 
 ---
 

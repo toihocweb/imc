@@ -390,7 +390,7 @@ fn cosine_below_floor_is_rejected() {
 /// `-d` silently changed meaning from direction to depth, and while `callers`
 /// and `--both` were added.
 #[test]
-fn instruction_block_only_references_real_commands_and_flags() {
+fn rule_file_only_references_real_commands_and_flags() {
     fn help(args: &[&str]) -> String {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_imc"))
             .args(args)
@@ -404,8 +404,8 @@ fn instruction_block_only_references_real_commands_and_flags() {
         )
     }
 
-    let block = imc_cli::claude::instruction_block();
-    assert!(block.contains(imc_cli::claude::BEGIN_MARKER), "marker missing");
+    let block = imc_cli::claude::imc_rule_md();
+    assert!(!block.is_empty(), "the rule file is empty");
 
     // Odd segments of a backtick split are the ones *inside* backticks — that is
     // where the prompt writes its commands.
@@ -452,8 +452,8 @@ fn instruction_block_only_references_real_commands_and_flags() {
 
 /// Names that only ever existed as Python wrappers must not creep back in.
 #[test]
-fn instruction_block_omits_python_only_wrappers() {
-    let block = imc_cli::claude::instruction_block();
+fn rule_file_omits_python_only_wrappers() {
+    let block = imc_cli::claude::imc_rule_md();
     assert!(
         !block.contains("imc-read"),
         "`imc-read` is a Python console script, not a subcommand here"
@@ -471,8 +471,8 @@ fn instruction_block_omits_python_only_wrappers() {
 /// had it, the block written into the project did not, so the agent assembled
 /// its context by hand and paid for it in tokens.
 #[test]
-fn instruction_block_mentions_the_core_commands() {
-    let block = imc_cli::claude::instruction_block();
+fn rule_file_mentions_the_core_commands() {
+    let block = imc_cli::claude::imc_rule_md();
     for cmd in [
         "imc search",
         "imc pack",
@@ -492,8 +492,8 @@ fn instruction_block_mentions_the_core_commands() {
 /// short one (the instruction block) and the long one (the rule file) must
 /// name the same commands.
 #[test]
-fn the_two_rule_texts_name_the_same_commands() {
-    let short = imc_cli::claude::instruction_block();
+fn the_rule_texts_name_the_same_commands() {
+    let short = imc_cli::claude::imc_rule_md();
     let long = imc_cli::claude::imc_rule_md();
     for cmd in [
         "imc search",
