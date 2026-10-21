@@ -87,6 +87,25 @@ pub fn run_with_progress(
         current: String::new(),
     });
 
+    // A different chunker, strategy, budget or embedding cap means the stored
+    // chunks are stale even though the files did not change.
+    let chunk_signature = format!(
+        "{CHUNKER_VERSION}|{}|{}|{}",
+        cfg.chunk_strategy, cfg.chunk_budget_nws, EMBED_TEXT_CAP
+    );
+    let stored_signature = store.get_meta(CHUNK_SIGNATURE_KEY)?.unwrap_or_default();
+    let chunker_changed = !force && stored_signature != chunk_signature;
+    if chunker_changed {
+        eprintln!(
+            "[imc] chunking changed ({}) — re-indexing the whole project",
+            if stored_signature.is_empty() {
+                "no version recorded".to_string()
+            } else {
+                stored_signature
+            }
+        );
+    }
+
     let known = store.all_file_hashes();
     let mut new_files: Vec<&FileEntry> = Vec::new();
     let mut modified: Vec<&FileEntry> = Vec::new();
@@ -94,7 +113,7 @@ pub fn run_with_progress(
     for f in &manifest {
         match known.iter().find(|(p, _)| p == &f.rel) {
             None => new_files.push(f),
-            Some((_, h)) if force || h != &f.hash => modified.push(f),
+            Some((_, h)) if force || chunker_changed || h != &f.hash => modified.push(f),
             _ => unchanged += 1,
         }
     }
@@ -146,7 +165,19 @@ pub fn run_with_progress(
     let embedder = imc_embed::build(&cfg.embedding);
     let embedder_name = embedder.as_ref().map(|e| e.name()).unwrap_or_else(|| "none".into());
 
+    // The embedding is one pass over every chunk, not one request per file.
+    //
+    // The indexer used to call `embed()` inside the per-file loop, so a
+    // request carried one file's chunks and the requests ran one after the
+    // other: indexing 40 files took 67 seconds, almost all of it waiting on
+    // the endpoint. Collecting the texts first lets the embedder fill its
+    // batches and run them concurrently; the database writes stay in file
+    // order, single-threaded, as before.
     let parsed_total = parsed.len();
+    let mut embed_texts: Vec<String> = Vec::new();
+    // (chunk id, index into embed_texts)
+    let mut pending: Vec<(i64, usize)> = Vec::new();
+
     for (done, (rel, symbols, edges, chunks)) in parsed.into_iter().enumerate() {
         progress(Progress {
             phase: Phase::Embed,
@@ -157,30 +188,43 @@ pub fn run_with_progress(
         store.clear_file(&rel)?;
         store.insert_symbols(&rel, &symbols)?;
         store.insert_edges(&rel, &edges)?;
-        // The embedding sees at most ~4 KB of the chunk: the vector leg only
-        // needs the head of the code (signature + docstring), and the API
-        // rejects a huge input. The stored text stays whole, so the lexical
-        // leg still matches the tail of a long function.
-        let texts: Vec<String> = chunks
-            .iter()
-            .map(|c| cap_for_embedding(&c.text, EMBED_TEXT_CAP))
-            .collect();
-        let vectors = match &embedder {
-            Some(e) => e.embed(&texts)?,
-            None => Vec::new(),
-        };
-        for (i, c) in chunks.iter().enumerate() {
+        for c in chunks.iter() {
             // Path + line range inside the indexed text: filename queries
             // (`parser.py`, `mcp/server.py`) must hit FTS directly.
             let text = format!("{}:{}-{}\n{}", rel, c.start_line, c.end_line, c.text);
             let cid = store.insert_chunk(&rel, c.start_line, c.end_line, &text, c.sym_id.as_deref())?;
+            if embedder.is_some() {
+                // The embedding sees at most ~4 KB of the chunk: the vector leg
+                // only needs the head of the code (signature + docstring), and
+                // the API rejects a huge input. The stored text stays whole,
+                // so the lexical leg still matches the tail of a long function.
+                embed_texts.push(cap_for_embedding(&c.text, EMBED_TEXT_CAP));
+                pending.push((cid, embed_texts.len() - 1));
+            }
+        }
+    }
+
+    if !pending.is_empty() {
+        progress(Progress {
+            phase: Phase::Embed,
+            done: 0,
+            total: pending.len(),
+            current: format!("{} chunks", pending.len()),
+        });
+        let vectors = match &embedder {
+            Some(e) => e.embed(&embed_texts)?,
+            None => Vec::new(),
+        };
+        for (cid, idx) in pending {
             // A failed input comes back as an empty vector — skip rather than
             // persist a 0-dim row that cosine can never score.
-            if let Some(v) = vectors.get(i).filter(|v| !v.is_empty()) {
+            if let Some(v) = vectors.get(idx).filter(|v| !v.is_empty()) {
                 store.insert_embedding(cid, v.len(), v)?;
             }
         }
     }
+
+    store.set_meta(CHUNK_SIGNATURE_KEY, &chunk_signature)?;
 
     progress(Progress {
         phase: Phase::Finalize,
@@ -203,6 +247,19 @@ pub fn run_with_progress(
         elapsed_ms: start.elapsed().as_millis(),
     })
 }
+
+/// Bumped whenever the chunk text changes shape.
+///
+/// The chunker's output is what the index stores, and an incremental run only
+/// re-embeds the files whose content changed. A chunker change therefore
+/// leaves the old chunks in place: the index ends up half old, half new, and
+/// the vectors no longer match the text. The version is written into the
+/// project database and compared on the next run, so a chunker change
+/// re-indexes the project by itself.
+pub const CHUNKER_VERSION: &str = "2";
+
+/// The meta key the chunk signature is stored under.
+pub const CHUNK_SIGNATURE_KEY: &str = "chunk_signature";
 
 /// How much of a chunk is sent to the embedding model.
 const EMBED_TEXT_CAP: usize = 4096;

@@ -140,7 +140,31 @@ impl RemoteEmbedder {
 const MAX_INPUT_CHARS: usize = 6_000;
 
 /// Inputs sent per request.
-const BATCH: usize = 64;
+///
+/// The default was 64, but the batch was never full: the indexer called
+/// `embed()` once per file, so a request carried one file's chunks. Smaller
+/// batches mean more requests that can run at the same time, and smaller
+/// payloads per request.
+fn batch_size() -> usize {
+    std::env::var("IMC_EMBED_BATCH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(32)
+}
+
+/// How many embedding requests may be in flight at once.
+///
+/// Embedding is network-bound, not CPU-bound, so the useful concurrency is
+/// well above the core count — but not unbounded, or the endpoint rate-limits
+/// and every request comes back 429.
+fn concurrency() -> usize {
+    std::env::var("IMC_EMBED_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(8)
+}
 
 /// ureq 3 maps non-2xx to `Error::StatusCode(u16)` and throws the body away,
 /// which is exactly the information needed to debug a 400. Build an Agent that
@@ -249,13 +273,20 @@ impl Embedder for RemoteEmbedder {
 
         let clean: Vec<String> = texts.iter().map(|t| sanitize(t)).collect();
 
-        // Batches run concurrently — a shared endpoint that serialises them
-        // costs nothing but wall-clock time.
-        let batches: Vec<&[String]> = clean.chunks(BATCH).collect();
-        let results: Vec<Result<Vec<Vec<f32>>>> = batches
-            .par_iter()
-            .map(|b| embed_with_retry(&agent, &url, key, &self.cfg.model, b))
-            .collect();
+        // Batches run concurrently on their own pool: the work is waiting on
+        // the network, so the limit is how many requests the endpoint
+        // tolerates, not how many cores the machine has.
+        let batches: Vec<&[String]> = clean.chunks(batch_size()).collect();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(concurrency().min(batches.len().max(1)))
+            .build()
+            .map_err(|e| anyhow!("cannot build the embedding pool: {e}"))?;
+        let results: Vec<Result<Vec<Vec<f32>>>> = pool.install(|| {
+            batches
+                .par_iter()
+                .map(|b| embed_with_retry(&agent, &url, key, &self.cfg.model, b))
+                .collect()
+        });
 
         let mut out = Vec::with_capacity(clean.len());
         for r in results {

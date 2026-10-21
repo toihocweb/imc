@@ -92,6 +92,28 @@ impl Store {
         rows
     }
 
+
+    /// Read a value from the `meta` table.
+    pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare("SELECT value FROM meta WHERE key = ?1")?;
+        let mut rows = stmt.query(params![key])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Write a value into the `meta` table.
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+
     pub fn upsert_file(&self, rel: &str, hash: &str, lang: Option<&str>, size: u64) -> Result<()> {
         self.conn.execute(
             "INSERT INTO files(path, hash, lang, size) VALUES (?1,?2,?3,?4)
