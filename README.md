@@ -200,6 +200,11 @@ A learned rule is checked before it is stored: it has to shrink the output,
 it must not empty it, its patterns have to compile, and it may not remove a
 failure line. The model call runs in the background, off the request path.
 
+A rule that was checked against one sample can still be wrong about the next
+output of the same command, so the apply side has a net: after a learned rule
+runs, a line that reads as a failure and is no longer there is put back, with
+a note. A hand-written rule is never second-guessed.
+
 ```bash
 cat ~/.indexmycode/learned_filters.json   # what has been learned
 IMC_NO_LEARNED_FILTERS=1                   # turn the learning off
