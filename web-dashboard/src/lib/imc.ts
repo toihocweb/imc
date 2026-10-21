@@ -136,7 +136,7 @@ export interface TraceResult {
 
 function runImc(
   args: string[],
-  options: { root?: string; input?: string } = {}
+  options: { root?: string; input?: string; timeoutMs?: number } = {}
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const env: NodeJS.ProcessEnv = { ...process.env };
@@ -154,6 +154,7 @@ function runImc(
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
 
     child.stdout.on("data", (data: Buffer) => {
       stdout += data.toString();
@@ -162,7 +163,42 @@ function runImc(
       stderr += data.toString();
     });
 
+    // A spawn failure arrives as an "error" event, not as a throw: the
+    // binary can be missing (a rebuild replaces it), unreadable, or not
+    // executable. Without this listener Node treats the event as an
+    // unhandled exception and the whole dashboard process dies — the browser
+    // then waits for an answer that never comes, and the page spins on
+    // "Loading" forever. So the error becomes a rejected promise, the route
+    // turns it into a 500 with a message, and the page shows it.
+    child.on("error", (err: NodeJS.ErrnoException) => {
+      if (settled) return;
+      settled = true;
+      reject(
+        new Error(
+          err.code === "ENOENT"
+            ? `the imc binary is not there (${IMC_BINARY}) — is a build in progress?`
+            : `could not run imc: ${err.message}`,
+        ),
+      );
+    });
+
+    // A CLI that never answers must not hold the request open for ever.
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // the process may already be gone
+      }
+      reject(new Error(`imc ${args[0] ?? ""} did not answer in time`));
+    }, options.timeoutMs ?? 60_000);
+    if (typeof timer.unref === "function") timer.unref();
+
     child.on("close", (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code !== 0) {
         reject(new Error(stderr || `Command failed with code ${code}`));
       } else {
