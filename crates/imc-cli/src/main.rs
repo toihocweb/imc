@@ -230,11 +230,19 @@ enum Command {
         #[arg(long, default_value = "")]
         scene: String,
     },
-    /// One-shot Claude Code integration: index + .claude/settings + rule file + proxy.
-    #[command(name = "claude")]
+    /// Open Claude Code on this machine, with the index wired in.
+    ///
+    /// `imc claude` starts the proxy, writes the settings and the rule
+    /// file, and hands the terminal to the `claude` binary. Every argument
+    /// goes straight through, so `imc claude --print "..."` works the way
+    /// `claude --print "..."` does.
+    #[command(name = "claude", trailing_var_arg = true, allow_hyphen_values = true)]
     Claude {
         #[command(subcommand)]
-        action: ClaudeAction,
+        action: Option<ClaudeAction>,
+        /// Arguments for the `claude` binary.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Run / control the LLM proxy that Claude Code talks to.
     #[command(name = "proxy")]
@@ -1485,8 +1493,8 @@ fn main() -> Result<()> {
             // Python used print(), which terminates the dossier with a newline.
             println!("{out}");
         }
-        Command::Claude { action } => match action {
-            ClaudeAction::Setup { force, port } => {
+        Command::Claude { action, args } => match action {
+            Some(ClaudeAction::Setup { force, port }) => {
                 let lines = imc_cli::claude::setup_and_start(&cfg, &root, *port, *force)?;
                 if cli.json {
                     println!("{}", serde_json::json!({"ok": true, "log": lines}));
@@ -1496,7 +1504,7 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            ClaudeAction::Wire { port } => {
+            Some(ClaudeAction::Wire { port }) => {
                 let s = imc_cli::claude::write_claude_settings(&root, *port)?;
                 let rule = imc_cli::claude::write_imc_rule(&root)?;
                 let mut lines = vec![
@@ -1509,15 +1517,15 @@ fn main() -> Result<()> {
                     println!("{l}");
                 }
             }
-            ClaudeAction::Start { port } => {
+            Some(ClaudeAction::Start { port }) => {
                 let state = imc_cli::claude::start_proxy(&cfg, *port)?;
                 println!("proxy started: pid={} http://127.0.0.1:{}", state["pid"], state["port"]);
             }
-            ClaudeAction::Stop => match imc_cli::claude::stop_proxy(&cfg)? {
+            Some(ClaudeAction::Stop) => match imc_cli::claude::stop_proxy(&cfg)? {
                 Some(p) => println!("proxy stopped (was :{p})"),
                 None => println!("no proxy state file — nothing to stop"),
             },
-            ClaudeAction::Status => {
+            Some(ClaudeAction::Status) => {
                 let s = imc_cli::claude::proxy_status(&cfg);
                 if cli.json {
                     println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
@@ -1528,7 +1536,12 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            ClaudeAction::Run { args } => {
+            Some(ClaudeAction::Run { args: sub_args }) => {
+                imc_cli::claude::run_claude_bin(&cfg, &root, sub_args)?;
+            }
+            None => {
+                // No subcommand: open Claude Code, with every argument
+                // passed through.
                 imc_cli::claude::run_claude_bin(&cfg, &root, &args)?;
             }
         },

@@ -73,7 +73,7 @@ For Claude Code, one command wires everything — index, `.claude/settings.local
 agent rule file, and the proxy:
 
 ```bash
-imc claude setup && claude
+imc claude          # wires the project, starts the proxy, opens Claude Code
 ```
 
 ---
@@ -142,7 +142,7 @@ the project's root, so a tool call can never answer for a different repository.
 
 ```bash
 imc            # starts the proxy (12345) and the dashboard (4789)
-imc claude     # same, then hands over to the claude binary
+imc claude     # wire + proxy, then hands the terminal to `claude` (args pass through)
 ```
 
 `imc .` still indexes the current directory; `imc index <path>` indexes something else.

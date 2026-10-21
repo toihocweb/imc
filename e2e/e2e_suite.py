@@ -1318,6 +1318,51 @@ def suite_memory_eval():
     check("Q1 the memory subsystem behaves as specified", eval_runs)
 
 
+
+# -- R. imc claude -----------------------------------------------------------
+def suite_claude_launch():
+    """`imc claude` must open Claude Code on this machine.
+
+    It used to redirect the child's output into a log file, close its
+    stdin and return immediately: Claude Code is a terminal program, so that
+    is not a session, it is a process nobody sees and nobody can type into.
+    """
+    def launch():
+        root = new_case("claude")
+        fake = Path(tempfile.mkdtemp(prefix="imc-e2e-fakeclaude-")) / "claude"
+        fake.write_text(
+            "#!/usr/bin/env bash\n"
+            "echo \"ARGS:$*\"\n"
+            "echo \"BASE:${ANTHROPIC_BASE_URL:-none}\"\n"
+            "read -r line\n"
+            "echo \"STDIN:[$line]\"\n"
+            "exit 7\n"
+        )
+        fake.chmod(0o755)
+
+        env = dict(os.environ)
+        env["IMC_CLAUDE_BIN"] = str(fake)
+        r = subprocess.run(
+            [str(IMC), "-C", str(root), "claude", "--print", "hello"],
+            input="typed by the user\n",
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+        assert "ARGS:--print hello" in r.stdout, r.stdout[-400:]
+        assert "BASE:http://127.0.0.1:12345" in r.stdout, r.stdout[-400:]
+        assert "STDIN:[typed by the user]" in r.stdout, r.stdout[-400:]
+        # The exit code is claude's, not imc's.
+        assert r.returncode == 7, f"exit code {r.returncode}"
+        # The project was wired.
+        assert (root / ".claude" / "settings.local.json").exists()
+        assert (root / ".claude" / "rules" / "imc-rule.md").exists()
+        return "the terminal, the arguments and the exit code all belong to claude"
+
+    check("R1 imc claude opens Claude Code on this machine", launch)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--with-vectors", action="store_true",
@@ -1378,6 +1423,7 @@ def main():
     suite_mcp(root, data)
     suite_learning()
     suite_memory_eval()
+    suite_claude_launch()
 
     total = len(PASS) + len(FAIL)
     print("\n" + "=" * 64)

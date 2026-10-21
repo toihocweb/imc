@@ -389,10 +389,13 @@ pub fn setup_and_start(
     Ok(log)
 }
 
-/// Run the `claude` binary directly, passing all args through.
-/// Ensures the imc proxy is running first (starts it on port 12345 if needed),
-/// then spawns `claude` detached so it survives terminal close.
-pub fn run_claude_bin(cfg: &Config, _root: &Path, args: &[String]) -> Result<()> {
+/// Run the `claude` binary on this machine, with all arguments passed
+/// through.
+///
+/// Ensures the proxy is running (so Claude Code talks to it rather than to
+/// the upstream), wires the project's settings and rule file, and then hands
+/// the terminal over to Claude Code.
+pub fn run_claude_bin(cfg: &Config, root: &Path, args: &[String]) -> Result<()> {
     // Ensure the proxy is running so Claude Code talks to our compression
     // proxy instead of hitting the upstream LLM directly.
     if !proxy_is_running(cfg) {
@@ -407,39 +410,53 @@ pub fn run_claude_bin(cfg: &Config, _root: &Path, args: &[String]) -> Result<()>
         println!("proxy already running on http://127.0.0.1:12345");
     }
 
+    // The settings and the rule file are what make Claude Code use imc. A
+    // project that was never wired would run Claude Code against the
+    // upstream and know nothing about the index, so they are written here
+    // too — wiring is cheap, and a stale rule is worse than a fresh one.
+    let settings = write_claude_settings(root, 12345)?;
+    let rule = write_imc_rule(root)?;
+    remove_legacy_claude_md_block(root)?;
+    println!("wired {} and {}", settings.display(), rule.display());
+
     let exe = which_claude_bin()?;
     let exe_disp = exe.display().to_string();
 
-    let log_dir = imc_core::settings::path()
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("claude_sessions");
-    std::fs::create_dir_all(&log_dir)
-        .with_context(|| format!("create {}", log_dir.display()))?;
-    let log = std::fs::File::create(log_dir.join("claude.log"))
-        .with_context(|| format!("create {}", log_dir.join("claude.log").display()))?;
-    let err = log.try_clone()?;
-
-    // Build the command with detached flags so it survives terminal close.
+    // Claude Code is a terminal program. It needs the terminal: a child
+    // whose output goes to a log file and whose input is closed is not a
+    // session, it is a process nobody sees and nobody can type into. So the
+    // standard streams are inherited, the working directory is the project
+    // (so Claude Code reads that project's settings and rules), and the
+    // parent waits for it — the exit code belongs to the caller.
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::from(log))
-        .stderr(std::process::Stdio::from(err));
+        .current_dir(root)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0); // new process group, survives terminal close
+    // The proxy is where Claude Code sends its traffic. The settings file
+    // says the same thing, but the environment says it for sure.
+    let port = proxy_status(cfg)
+        .and_then(|s| s.get("state").and_then(|st| st.get("port")).cloned())
+        .and_then(|v| v.as_u64())
+        .unwrap_or(12345) as u16;
+    cmd.env("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}"));
+    cmd.env("ANTHROPIC_AUTH_TOKEN", "dummy");
+    cmd.env("ANTHROPIC_MODEL", "claude-pro-max");
+
+    let status = cmd
+        .status()
+        .with_context(|| format!("run `{exe_disp}`"))?;
+    if !status.success() {
+        // The exit code belongs to the caller: `imc claude` is a wrapper
+        // around `claude`, so `imc claude --print ...` fails the way
+        // `claude --print ...` fails.
+        if let Some(code) = status.code() {
+            std::process::exit(code);
+        }
+        bail!("claude was killed by a signal");
     }
-
-    let child = cmd.spawn().with_context(|| format!("spawn `{exe_disp}`"))?;
-    let pid = child.id();
-
-    // Do not wait — return immediately. The child keeps running.
-    std::mem::forget(child);
-
-    println!("claude started: pid={} (background, survives terminal close)", pid);
     Ok(())
 }
 
