@@ -169,7 +169,7 @@ full text back verbatim.
 | Kind | What it does |
 |---|---|
 | `json_array` | Collapses runs of identical items, elides a field that duplicates a sibling, windows fields over 1.5 KB to head+tail. |
-| `build_log` | Keeps every `ERROR` / `WARN` / failure line and the diagnostic gutters; drops routine progress. |
+| `build_log` | Keeps every `ERROR` / `WARN` / failure line and the diagnostic gutters; drops routine progress. A test runner's per-test line (`tests/test_api.py::test_login PASSED`) counts as a log line, so a whole pytest run is compressed instead of being mistaken for source code. |
 | `source_code` | String-literal-aware comment stripping, repeat collapse, blank-line runs. |
 | `git_diff` | Dedupes identical file sections, elides the commit-message body, trims long unchanged runs. **Every changed line is preserved.** |
 | `plain_text` | Drops redundant sentences, keeps the first, the last and the keyword-dense middle. |

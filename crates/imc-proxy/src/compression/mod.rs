@@ -155,6 +155,9 @@ fn is_log_line(line: &str) -> bool {
             return true;
         }
     }
+    if is_test_status_line(line) {
+        return true;
+    }
     // Bare pipe / caret gutter lines that only appear in diagnostics.
     if t == "|" || t.starts_with("| ") || t.starts_with("^") {
         return true;
@@ -178,9 +181,37 @@ fn is_log_line(line: &str) -> bool {
 }
 
 /// A line that looks like a source statement rather than prose.
+/// A test runner's per-test line: a path, then a status marker at the end
+/// ("tests/test_api.py::test_login PASSED").
+///
+/// Neither half looks like a log record on its own — the status is at the
+/// end, not the start — so a whole pytest run was classified as plain text
+/// and never compressed. The path also contains "::", which used to make the
+/// line look like code, so the log and the code count cancelled out.
+fn is_test_status_line(line: &str) -> bool {
+    let t = line.trim_start();
+    let Some(first) = t.split_whitespace().next() else {
+        return false;
+    };
+    if !(first.contains('/') || first.contains('.')) || first.contains('=') {
+        return false;
+    }
+    let last = t.split_whitespace().last().unwrap_or("").to_uppercase();
+    matches!(
+        last.as_str(),
+        "PASSED" | "PASS" | "OK" | "SUCCESS" | "FAILED" | "FAIL" | "ERROR" | "SKIPPED" | "XFAIL"
+            | "XPASS"
+    )
+}
+
 fn is_code_line(line: &str) -> bool {
     let t = line.trim();
     if t.is_empty() {
+        return false;
+    }
+    // A per-test status line is a log record, not code, even though its path
+    // contains "::".
+    if is_test_status_line(line) {
         return false;
     }
     if t.starts_with("//") || t.starts_with('#') || t.starts_with("/*") || t.starts_with('*') {
@@ -235,6 +266,39 @@ mod tests {
     #[test]
     fn detects_json_object() {
         assert_eq!(detect_kind(r#"{"tool":"read"}"#), ContentKind::JsonObject);
+    }
+
+
+    /// A pytest run prints one line per test. The status is at the *end* of
+    /// the line, so neither half looked like a log record, and the path
+    /// contains "::", which made the line look like code. The whole run was
+    /// classified as source code and came back untouched.
+    #[test]
+    fn a_test_run_is_a_build_log() {
+        let mut log = String::new();
+        for i in 0..40 {
+            log.push_str(&format!("tests/test_mod_{}.py::test_case_{i} PASSED\n", i / 20));
+        }
+        log.push_str("tests/test_a.py::test_bad FAILED\n");
+        log.push_str("40 passed, 1 failed in 3.2s\n");
+
+        assert_eq!(detect_kind(&log), ContentKind::BuildLog);
+
+        // The failure and the summary survive the compression.
+        let out = log_compressor::compress(&log);
+        assert!(out.contains("FAILED"), "{out}");
+        assert!(out.contains("40 passed, 1 failed"), "{out}");
+        assert!(out.len() * 10 < log.len(), "{} vs {}", out.len(), log.len());
+    }
+
+    /// A per-test status line is a log record, not code — the "::" in the
+    /// path must not make it look like a Rust path.
+    #[test]
+    fn a_test_status_line_is_not_code() {
+        assert!(!is_code_line("tests/test_api.py::test_login PASSED"));
+        assert!(is_log_line("tests/test_api.py::test_login PASSED"));
+        // Real code is still code.
+        assert!(is_code_line("fn main() {"));
     }
 
     #[test]
