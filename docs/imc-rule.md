@@ -18,6 +18,9 @@ callers, or trace HTTP routes.
 - `imc search "<q>" --offset N` — page through a long result set. The output
   says when more matches exist.
 - `imc read <file> --symbols` — outline; then read only the lines you need.
+- Tool results are filtered before they reach the model, and imc learns a
+  filter per command: a long build log arrives as its errors and its summary,
+  not as 400 progress lines.
 - `imc context <file>` — whole feature around a file: deps, endpoints, tests.
 - `imc trace <symbol> --callers --depth 3` — blast radius; run *before* you
   rename or delete anything.

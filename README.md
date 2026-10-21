@@ -187,6 +187,24 @@ imc ccr stats                                    # totals + overall ratio
 The store is `<data dir>/proxy_ccr.db` (`IMC_CCR_DB` overrides). `POST /v1/compress`,
 `POST /v1/retrieve` and `GET /v1/stats` expose the same thing over HTTP.
 
+### Learned filters
+
+Three commands ship with a rule (Cypress, Maven, GitHub Actions). For
+everything else, imc writes the rule itself: when a command produces a large
+result that no rule matched, the command and a sample of its output are kept
+and the configured model is asked for the filter that keeps the signal and
+drops the noise. The answer is a rule in the same format as the built-in
+ones, so the next run of that command is filtered by it.
+
+A learned rule is checked before it is stored: it has to shrink the output,
+it must not empty it, its patterns have to compile, and it may not remove a
+failure line. The model call runs in the background, off the request path.
+
+```bash
+cat ~/.indexmycode/learned_filters.json   # what has been learned
+IMC_NO_LEARNED_FILTERS=1                   # turn the learning off
+```
+
 ### Prompt capture
 
 Every payload the proxy sends upstream is written verbatim — system prompt, tools, injected
@@ -255,6 +273,7 @@ never indexed, a proxy that is not running.
 | `IMC_EMBED_MODEL` | `text-embedding-3-small` | Embedding model |
 | `IMC_MAX_FILE_BYTES` | `1048576` | Skip files larger than this |
 | `IMC_CCR_DB` | `<data dir>/proxy_ccr.db` | Compression store |
+| `IMC_NO_LEARNED_FILTERS` | unset | Set to any value to stop imc from learning filter rules |
 
 Per-project database: `$IMC_DATA_DIR/projects/<md5(path)[:16]>/index.db`.
 
