@@ -75,18 +75,33 @@ pub fn compress(content: &str) -> String {
 
 fn is_error_trigger(line: &str) -> bool {
     let l = line.to_lowercase();
-    l.contains("error")
+    if l.contains("error")
         || l.contains("fail")
         || l.contains("panic")
         || l.contains("exception")
         || l.contains("fatal")
         || l.contains("reject")
-        || l.contains("timed out")
-        || l.contains("timeout")
+    {
+        return true;
+    }
+    // The rest are phrases, not loose words. A log that says
+    // "request completed (timeout=30s configured)" or "container not killed
+    // yet" is a log of things going *well*, and matching the single word
+    // "timeout" or "killed" in it keeps every line of the log — which is
+    // the same as not compressing it at all. A failure says "timed out",
+    // "was killed", "assertion failed".
+    l.contains("timed out")
+        || l.contains("timeout exceeded")
+        || l.contains("timeout error")
+        || l.contains("deadline exceeded")
         || l.contains("segmentation fault")
         || l.contains("sigsegv")
-        || l.contains("killed")
-        || l.contains("assertion")
+        || l.contains("was killed")
+        || l.contains("killed by")
+        || l.contains("out of memory")
+        || l.contains("oom killer")
+        || l.contains("assertion failed")
+        || l.contains("assertionerror")
         || l.contains("traceback (most recent call last)")
 }
 
@@ -153,6 +168,45 @@ mod tests {
         assert!(out.contains("app/main.py"), "caller file kept");
         assert!(out.contains("app/utils.py"), "origin file kept");
         assert!(out.contains("ValueError: Invalid key"), "exception kept");
+    }
+
+    /// A word that can appear in a routine line must not keep the whole
+    /// log. "timeout=30s configured" and "container not killed yet" are
+    /// things going well, and a log full of them is exactly the log worth
+    /// compressing.
+    #[test]
+    fn a_routine_line_is_not_a_failure() {
+        let routine = (0..100)
+            .map(|_| "2026-10-21 10:00:00 INFO request completed (timeout=30s configured)\n".to_string())
+            .collect::<String>();
+        let out = compress(&routine);
+        assert!(out.len() * 10 < routine.len(), "{} vs {}", out.len(), routine.len());
+
+        for phrase in ["not killed yet", "assertion passed", "no timeout occurred"] {
+            let t = (0..100)
+                .map(|_| format!("2026-10-21 10:00:00 INFO {phrase}\n"))
+                .collect::<String>();
+            let out = compress(&t);
+            assert!(out.len() * 10 < t.len(), "{phrase}: {} vs {}", out.len(), t.len());
+        }
+    }
+
+    /// The failures the new phrases cover still have to be kept.
+    #[test]
+    fn a_phrase_failure_is_still_a_failure() {
+        for phrase in [
+            "request timed out after 30s",
+            "process was killed by the OOM killer",
+            "assertion failed: left == right",
+            "deadline exceeded",
+        ] {
+            let mut t = (0..50)
+                .map(|i| format!("2026-10-21 10:00:00 INFO routine {i}\n"))
+                .collect::<String>();
+            t.push_str(&format!("2026-10-21 10:05:00 ERROR {phrase}\n"));
+            let out = compress(&t);
+            assert!(out.contains(phrase), "{phrase} was dropped: {out}");
+        }
     }
 
     #[test]
