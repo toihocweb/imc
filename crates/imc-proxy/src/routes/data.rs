@@ -623,6 +623,54 @@ async fn captures_post(Json(body): Json<Value>) -> Response {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// GET /api/memory/stats
+// ---------------------------------------------------------------------------
+/// The state of the memory store.
+///
+/// The numbers a memory subsystem should be measured by: how much is stored,
+/// how much of it is used, how much of it is unproven, and how fast it grows.
+/// The contents never leave the machine.
+async fn memory_stats(Query(q): Query<HashMap<String, String>>) -> Response {
+    let cfg = config();
+    let root = project_root(&cfg, q.get("root").map(String::as_str));
+    let db = cfg.project_db(&root);
+    if !db.exists() {
+        return Json(json!({
+            "project": root.display().to_string(),
+            "total": 0, "active": 0, "pending": 0, "used": 0,
+            "hit_rate": 0.0, "avg_importance": 0.0, "db_bytes": 0,
+        }))
+        .into_response();
+    }
+    let store = match imc_core::store::open(&db) {
+        Ok(s) => s,
+        Err(e) => return error(format!("{e:#}")),
+    };
+    let all = imc_memory::list_all(&store, 100_000).unwrap_or_default();
+    let total = all.len();
+    let pending = all.iter().filter(|m| m.state == "pending").count();
+    let used = all.iter().filter(|m| m.use_count > 0).count();
+    let avg_importance = if total > 0 {
+        all.iter().map(|m| m.importance).sum::<f64>() / total as f64
+    } else {
+        0.0
+    };
+    let db_bytes = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
+    Json(json!({
+        "project": root.display().to_string(),
+        "total": total,
+        "active": total - pending,
+        "pending": pending,
+        "used": used,
+        "hit_rate": if total > 0 { used as f64 / total as f64 } else { 0.0 },
+        "avg_importance": avg_importance,
+        "db_bytes": db_bytes,
+    }))
+    .into_response()
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -632,6 +680,7 @@ pub fn router() -> Router {
         .route("/api/search", get(search_get).post(search_post))
         .route("/api/trace", post(trace))
         .route("/api/memory", get(memory_list).post(memory_add))
+        .route("/api/memory/stats", get(memory_stats))
         .route("/api/config", get(config_get).post(config_set))
         .route("/api/config/test", get(config_test))
         .route("/api/models", get(models))

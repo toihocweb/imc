@@ -438,10 +438,21 @@ fn row_to_memory(r: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
 /// for ever, which is the point: an unproven lesson is worse than none.
 pub fn promote_pending(store: &Store, query: &str) -> Result<usize> {
     ensure_schema(store)?;
+    // Only content words count. A success that says "the test passed" says
+    // nothing about which lesson it confirms, and a wrong promotion is worse
+    // than no promotion: an unproven lesson in the context is exactly what
+    // the state is there to prevent.
+    const GENERIC: &[&str] = &[
+        "that", "this", "with", "from", "have", "been", "were", "they", "them",
+        "then", "than", "when", "what", "which", "will", "would", "could",
+        "should", "about", "into", "also", "just", "like", "some", "more",
+        "most", "only", "very", "test", "tests", "passed", "success", "error",
+        "sai", "khong", "duoc", "roi",
+    ];
     let terms: Vec<String> = query
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .map(|t| t.to_lowercase())
-        .filter(|t| t.len() >= 4)
+        .filter(|t| t.len() >= 4 && !GENERIC.contains(&t.as_str()))
         .collect();
     if terms.is_empty() {
         return Ok(0);
@@ -459,7 +470,7 @@ pub fn promote_pending(store: &Store, query: &str) -> Result<usize> {
             .iter()
             .filter(|t| lower.contains(t.as_str()))
             .count();
-        if hits >= 2 {
+        if hits >= 2 && hits * 2 >= terms.len() {
             store.conn.execute(
                 "UPDATE memories SET state = 'active', importance = MIN(1.0, importance + 0.1) WHERE id = ?1",
                 params![id],
