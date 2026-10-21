@@ -67,6 +67,34 @@ fn try_add_mem(
     .unwrap_or(-1)
 }
 
+
+/// A memory written with an explicit source — the source decides whether the
+/// lesson starts proven (`active`) or unproven (`pending`).
+fn try_add_mem_with_source(
+    store: &imc_core::store::Store,
+    content: &str,
+    mem_type: MemoryType,
+    scene: &str,
+    paths: &[&str],
+    importance: f64,
+    source: &str,
+) -> i64 {
+    let paths: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
+    imc_memory::add_typed(
+        store,
+        content,
+        mem_type,
+        scene,
+        "test_category",
+        &paths,
+        &[],
+        importance,
+        source,
+    )
+    .unwrap()
+    .unwrap_or(-1)
+}
+
 #[test]
 fn mem_type_filter_excludes_non_matching() {
     let store = make_store("typefilter");
@@ -394,4 +422,71 @@ fn a_near_duplicate_reinforces_the_stored_memory() {
     assert!(use_count >= 1, "the existing memory was reinforced: {use_count}");
     assert!(importance >= 0.6, "importance kept: {importance}");
     assert!(last_used > 0, "seen recently: {last_used}");
+}
+
+/// A lesson that came from a failure is stored, but not injected: nobody
+/// knows yet whether the replacement works. A success promotes it.
+#[test]
+fn a_pending_lesson_is_not_injected_until_a_success_promotes_it() {
+    let store = make_store("state");
+    let id = try_add_mem_with_source(
+        &store,
+        "use cargo check instead of cargo build for verification",
+        MemoryType::WorkMethod,
+        "verification",
+        &[],
+        0.7,
+        "auto",
+    );
+    assert!(id > 0, "stored");
+    let row: (String,) = store
+        .conn
+        .query_row("SELECT state FROM memories WHERE id = ?1", [id], |r| {
+            Ok((r.get(0)?,))
+        })
+        .unwrap();
+    assert_eq!(row.0, "pending", "a failure-derived lesson starts unproven");
+
+    // Not injected yet.
+    let hits = imc_memory::retrieve(&store, None, "cargo check verification", &[], None, None, 5).unwrap();
+    assert!(
+        !hits.iter().any(|h| h.memory.id == id),
+        "an unproven lesson must not reach the context"
+    );
+
+    // A later run that succeeds with the same words promotes it.
+    let promoted = imc_memory::promote_pending(
+        &store,
+        "cargo check verification now passes, 42 tests passed",
+    )
+    .unwrap();
+    assert_eq!(promoted, 1, "the success did not promote the lesson");
+    let hits = imc_memory::retrieve(&store, None, "cargo check verification", &[], None, None, 5).unwrap();
+    assert!(
+        hits.iter().any(|h| h.memory.id == id),
+        "a proven lesson must reach the context"
+    );
+}
+
+/// A success is a lesson too: it is stored active, not pending.
+#[test]
+fn a_success_lesson_is_active_right_away() {
+    let store = make_store("success");
+    let id = try_add_mem_with_source(
+        &store,
+        "cargo check is the fast verification",
+        MemoryType::WorkMethod,
+        "verification",
+        &[],
+        0.7,
+        "confirmed",
+    );
+    assert!(id > 0, "stored");
+    let row: (String,) = store
+        .conn
+        .query_row("SELECT state FROM memories WHERE id = ?1", [id], |r| {
+            Ok((r.get(0)?,))
+        })
+        .unwrap();
+    assert_eq!(row.0, "active");
 }

@@ -65,6 +65,9 @@ pub struct Memory {
     /// Python `last_used` (unix seconds); drives the recency decay.
     pub last_used: i64,
     pub source: String,
+    /// `active` (proven or stated), `pending` (from a failure, not yet
+    /// proven). A pending memory is stored but not injected.
+    pub state: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -92,7 +95,8 @@ CREATE TABLE IF NOT EXISTS memories (
     use_count INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     last_used INTEGER NOT NULL DEFAULT 0,
-    source TEXT NOT NULL DEFAULT 'manual'
+    source TEXT NOT NULL DEFAULT 'manual',
+    state TEXT NOT NULL DEFAULT 'active'
 );
 CREATE INDEX IF NOT EXISTS idx_memories_cat ON memories(category);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
@@ -136,6 +140,9 @@ pub fn ensure_schema(store: &Store) -> Result<()> {
     for (name, ddl) in [
         ("mem_type", "ALTER TABLE memories ADD COLUMN mem_type TEXT NOT NULL DEFAULT 'work_fact'"),
         ("scene", "ALTER TABLE memories ADD COLUMN scene TEXT NOT NULL DEFAULT ''"),
+        // A lesson that came from a failure starts unproven: it is only
+        // injected once a later run shows it working.
+        ("state", "ALTER TABLE memories ADD COLUMN state TEXT NOT NULL DEFAULT 'active'"),
     ] {
         let has: i64 = store
             .conn
@@ -290,10 +297,14 @@ pub fn add(
         )?;
         return Ok(None);
     }
+    // A lesson that came from a failure starts unproven: it is stored, and
+    // injected only once a later run shows the replacement working. What the
+    // user stated, and what worked, are proven already.
+    let state = if source == "auto" { "pending" } else { "active" };
     store.conn.execute(
         "INSERT INTO memories
-         (content, content_norm, mem_type, scene, category, paths, tags, importance, created_at, source)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+         (content, content_norm, mem_type, scene, category, paths, tags, importance, created_at, source, state)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         params![
             content,
             norm,
@@ -304,7 +315,8 @@ pub fn add(
             serde_json::to_string(tags)?,
             importance.clamp(0.0, 1.0),
             now(),
-            source
+            source,
+            state
         ],
     )?;
     Ok(Some(store.conn.last_insert_rowid()))
@@ -386,7 +398,7 @@ pub fn get(store: &Store, id: i64) -> Result<Option<Memory>> {
     Ok(store
         .conn
         .query_row(
-            "SELECT id, content, mem_type, scene, category, paths, tags, importance, use_count, created_at, last_used, source
+            "SELECT id, content, mem_type, scene, category, paths, tags, importance, use_count, created_at, last_used, source, state
              FROM memories WHERE id=?1",
             params![id],
             row_to_memory,
@@ -412,13 +424,56 @@ fn row_to_memory(r: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
         created_at: r.get(9)?,
         last_used: r.get(10)?,
         source: r.get(11)?,
+        state: r.get(12).unwrap_or_else(|_| "active".to_string()),
     })
+}
+
+
+/// Promote the pending lessons a success confirms.
+///
+/// A lesson that came from a failure is stored as `pending` and not
+/// injected: nobody knows yet whether the replacement works. When a later
+/// run succeeds with the same words in it, the lesson is proven — promote
+/// it. A pending lesson that never gets confirmed stays out of the context
+/// for ever, which is the point: an unproven lesson is worse than none.
+pub fn promote_pending(store: &Store, query: &str) -> Result<usize> {
+    ensure_schema(store)?;
+    let terms: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .map(|t| t.to_lowercase())
+        .filter(|t| t.len() >= 4)
+        .collect();
+    if terms.is_empty() {
+        return Ok(0);
+    }
+    let mut stmt = store.conn.prepare(
+        "SELECT id, content FROM memories WHERE state = 'pending'",
+    )?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut promoted = 0;
+    for (id, content) in rows {
+        let lower = content.to_lowercase();
+        let hits = terms
+            .iter()
+            .filter(|t| lower.contains(t.as_str()))
+            .count();
+        if hits >= 2 {
+            store.conn.execute(
+                "UPDATE memories SET state = 'active', importance = MIN(1.0, importance + 0.1) WHERE id = ?1",
+                params![id],
+            )?;
+            promoted += 1;
+        }
+    }
+    Ok(promoted)
 }
 
 pub fn list(store: &Store, limit: usize) -> Result<Vec<Memory>> {
     ensure_schema(store)?;
     let mut stmt = store.conn.prepare(
-        "SELECT id, content, mem_type, scene, category, paths, tags, importance, use_count, created_at, last_used, source
+        "SELECT id, content, mem_type, scene, category, paths, tags, importance, use_count, created_at, last_used, source, state
          FROM memories ORDER BY importance DESC, created_at DESC LIMIT ?1",
     )?;
     let rows = stmt.query_map(params![limit as i64], row_to_memory)?;
@@ -433,7 +488,7 @@ pub fn list(store: &Store, limit: usize) -> Result<Vec<Memory>> {
 pub fn list_all(store: &Store, cap: usize) -> Result<Vec<Memory>> {
     ensure_schema(store)?;
     let mut stmt = store.conn.prepare(
-        "SELECT id, content, mem_type, scene, category, paths, tags, importance, use_count, created_at, last_used, source
+        "SELECT id, content, mem_type, scene, category, paths, tags, importance, use_count, created_at, last_used, source, state
          FROM memories ORDER BY created_at DESC LIMIT ?1",
     )?;
     let rows = stmt.query_map(params![cap as i64], row_to_memory)?;
@@ -674,14 +729,21 @@ pub fn retrieve(
 ) -> Result<Vec<MemoryHit>> {
     ensure_schema(store)?;
 
+    // A pending memory (from a failure, not yet proven) is stored but not
+    // injected: "relevance is a gate, not a ranking" — and an unproven
+    // lesson is worse than no lesson.
+    let all: Vec<Memory> = list_all(store, CANDIDATE_CAP)?
+        .into_iter()
+        .filter(|m| m.state != "pending")
+        .collect();
+    if all.is_empty() {
+        return Ok(Vec::new());
+    }
+
     // Candidates: every memory, not `limit * 6` rows pre-cut by importance.
     // The old candidate query silently hid any low-priority memory from
     // ranking, so an exact lexical hit could lose to irrelevant filler.
     const CANDIDATE_CAP: usize = 50_000;
-    let all = list_all(store, CANDIDATE_CAP)?;
-    if all.is_empty() {
-        return Ok(Vec::new());
-    }
 
     let lex = lexical_scores(store, query, CANDIDATE_CAP)?;
 

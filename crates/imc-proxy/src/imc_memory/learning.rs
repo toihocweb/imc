@@ -139,6 +139,28 @@ pub fn tool_result_text(messages: &[AnthropicInputMessage]) -> String {
     parts.join("\n")
 }
 
+
+/// A command that clearly succeeded.
+///
+/// A success trajectory transfers better than a failure: the failure says
+/// what went wrong, the success says what reliably works. So both are worth
+/// learning — and a success is also the proof that a pending lesson (one
+/// that came from a failure) is right.
+pub fn has_success(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    const PATTERNS: &[&str] = &[
+        "exit code 0",
+        "exit status 0",
+        "success",
+        "successful",
+        "completed",
+        "passed",
+        "all tests passed",
+        "ok",
+    ];
+    PATTERNS.iter().any(|p| lower.contains(p))
+}
+
 /// Whether this exchange holds something worth remembering.
 ///
 /// Cheap on purpose: substring checks, no allocation, no I/O. The expensive
@@ -148,6 +170,7 @@ pub fn is_worth_learning(query: &str, answer: &str, tool_output: &str) -> bool {
         || imc_memory::extract::has_failure(answer)
         || imc_memory::extract::has_failure(query)
         || imc_memory::extract::has_failure(tool_output)
+        || has_success(tool_output)
 }
 
 /// Learn from an exchange, in the background.
@@ -216,12 +239,28 @@ fn learn_now(project_root: &PathBuf, query: &str, answer: &str, tool_output: &st
         }
     };
     let exchange = format!("{answer}\n\n[tool output]\n{tool_output}");
-    match imc_memory::extract::learn_from_exchange(&cfg, &store, query, &exchange, "auto") {
+    // A failure is a lesson that is not proven yet: stored as `pending`, not
+    // injected. A success — or a correction from the user — is a lesson that
+    // is proven, and it also promotes the pending lessons it confirms.
+    let failed = imc_memory::extract::has_failure(tool_output)
+        || imc_memory::extract::has_failure(query)
+        || imc_memory::extract::has_failure(answer);
+    let source = if failed { "auto" } else { "confirmed" };
+    match imc_memory::extract::learn_from_exchange(&cfg, &store, query, &exchange, source) {
         Ok(0) => log.debug("[IMC Learning] nothing worth keeping"),
-        Ok(n) => log.info(&format!(
-            "[IMC Learning] learned {n} memory(ies) for {}",
-            project_root.display()
-        )),
+        Ok(n) => {
+            // A success proves the pending lessons it shares words with.
+            let promoted = imc_memory::promote_pending(&store, &exchange).unwrap_or(0);
+            log.info(&format!(
+                "[IMC Learning] learned {n} memory(ies) for {}{}",
+                project_root.display(),
+                if promoted > 0 {
+                    format!(" (promoted {promoted} pending)")
+                } else {
+                    String::new()
+                }
+            ));
+        }
         Err(e) => log.warning(&format!("[IMC Learning] extraction failed: {e}")),
     }
 }
