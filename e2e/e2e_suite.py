@@ -1291,6 +1291,33 @@ def suite_learning():
     check("P1 the proxy learns from the traffic it sees", loop)
 
 
+
+# -- Q. memory eval -----------------------------------------------------------
+def suite_memory_eval():
+    """The memory subsystem, measured.
+
+    A memory system you cannot measure is a memory system you cannot tune.
+    The situations cover what can go wrong: a routine conversation must not
+    produce a memory, a correction must, a failure-derived lesson must not be
+    injected until a success proves it, the same lesson twice must stay one
+    memory, and a secret must not survive into the store.
+    """
+    script = Path(__file__).parent / "memory_eval.py"
+
+    def eval_runs():
+        r = subprocess.run(
+            [sys.executable, str(script), "--stub"],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        assert r.returncode == 0, f"the memory eval failed:\n{r.stdout[-1200:]}"
+        assert "18/18 passed" in r.stdout, r.stdout[-400:]
+        return "18 situations, all as expected"
+
+    check("Q1 the memory subsystem behaves as specified", eval_runs)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--with-vectors", action="store_true",
@@ -1350,6 +1377,7 @@ def main():
     print("\nN. MCP server")
     suite_mcp(root, data)
     suite_learning()
+    suite_memory_eval()
 
     total = len(PASS) + len(FAIL)
     print("\n" + "=" * 64)
