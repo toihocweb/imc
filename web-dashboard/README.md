@@ -76,7 +76,7 @@ dashboard that is opened from another machine must not need the proxy exposed.
 Start the proxy first:
 
 ```bash
-imc claude start     # or: imc proxy serve --port 12345
+imc proxy serve --port 12345   # the proxy, in the foreground
 ```
 
 If it is not answering, the pages say so instead of spinning on "Loading".

@@ -234,15 +234,41 @@ enum Command {
     ///
     /// `imc claude` starts the proxy, writes the settings and the rule
     /// file, and hands the terminal to the `claude` binary. Every argument
-    /// goes straight through, so `imc claude --print "..."` works the way
-    /// `claude --print "..."` does.
-    #[command(name = "claude", trailing_var_arg = true, allow_hyphen_values = true)]
+    /// goes straight through — flags, subcommands and all — so
+    /// `imc claude --dangerously-skip-permissions` is
+    /// `claude --dangerously-skip-permissions`, and `imc claude agents`
+    /// is `claude agents`.
+    ///
+    /// Nothing is intercepted: the options and the subcommands belong to
+    /// Claude Code, and a second set of them here would be a second thing
+    /// to keep in sync — and a name collision waiting to happen
+    /// (`claude stop`, `claude mcp`, `claude doctor` all exist).
+    #[command(
+        name = "claude",
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        disable_help_flag = true
+    )]
     Claude {
-        #[command(subcommand)]
-        action: Option<ClaudeAction>,
-        /// Arguments for the `claude` binary.
+        /// Arguments for the `claude` binary. Everything, unchanged.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+    /// Index the project and wire it for Claude Code, without opening it.
+    ///
+    /// `imc claude` does all of this too, but it also opens Claude Code —
+    /// which is not what you want when the point is to prepare a machine
+    /// (a server, a container, a CI step).
+    #[command(name = "setup")]
+    Setup {
+        #[arg(long, short = 'f')]
+        force: bool,
+        /// Proxy port (default 12345).
+        #[arg(long, default_value_t = 12345)]
+        port: u16,
+        /// Wire the project without starting the proxy.
+        #[arg(long)]
+        no_proxy: bool,
     },
     /// Run / control the LLM proxy that Claude Code talks to.
     #[command(name = "proxy")]
@@ -374,38 +400,6 @@ struct TraceArgs {
 }
 
 #[derive(Subcommand, Debug)]
-enum ClaudeAction {
-    /// Index the project, wire .claude/settings.local.json + the rule file, start the proxy.
-    Setup {
-        #[arg(long, short = 'f')]
-        force: bool,
-        /// Proxy port (default 12345).
-        #[arg(long, default_value_t = 12345)]
-        port: u16,
-    },
-    /// Write settings + the rule file without indexing.
-    Wire {
-        #[arg(long, default_value_t = 12345)]
-        port: u16,
-    },
-    /// Start the proxy in the background.
-    Start {
-        #[arg(long, default_value_t = 12345)]
-        port: u16,
-    },
-    /// Stop the background proxy.
-    Stop,
-    /// Show proxy status.
-    Status,
-    /// Run the `claude` binary directly, passing all args through.
-    /// `imc claude` with no subcommand falls through to this.
-    Run {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
-}
-
-#[derive(Subcommand, Debug)]
 enum ModelMapAction {
     /// Add or replace one mapping.
     Set { from: String, to: String },
@@ -415,7 +409,7 @@ enum ModelMapAction {
 
 #[derive(Subcommand, Debug)]
 enum ProxyAction {
-    /// Serve the proxy in the foreground (used by `imc claude start`).
+    /// Serve the proxy in the foreground (the background one is started by `imc setup`).
     Serve {
         #[arg(long, default_value_t = 0)]
         port: u16,
@@ -813,18 +807,10 @@ fn main() -> Result<()> {
             args.insert(1, "index".to_string());
         }
     }
-    // `imc claude` on its own runs the claude binary (that is what the help
-    // promises); `imc claude setup|wire|start|stop|status|run` stay explicit.
-    if args.len() >= 2 && args[1] == "claude" {
-        let first = args.get(2).map(String::as_str).unwrap_or("");
-        let is_sub = matches!(
-            first,
-            "setup" | "wire" | "start" | "stop" | "status" | "run" | "help" | "--help" | "-h"
-        );
-        if !is_sub {
-            args.insert(2, "run".to_string());
-        }
-    }
+    // `imc claude` is a passthrough: every argument after it belongs to
+    // Claude Code. Nothing is rewritten here — a second set of subcommands
+    // under `imc claude` would collide with Claude Code's own (`stop`,
+    // `mcp`, `doctor`, ...) and would need keeping in sync for no gain.
     let cli = Cli::parse_from(&args);
     let cfg = Config::default();
     cfg.ensure_dirs()?;
@@ -1493,70 +1479,74 @@ fn main() -> Result<()> {
             // Python used print(), which terminates the dossier with a newline.
             println!("{out}");
         }
-        Command::Claude { action, args } => match action {
-            Some(ClaudeAction::Setup { force, port }) => {
-                let lines = imc_cli::claude::setup_and_start(&cfg, &root, *port, *force)?;
-                if cli.json {
-                    println!("{}", serde_json::json!({"ok": true, "log": lines}));
-                } else {
-                    for l in &lines {
-                        println!("  ✓ {l}");
-                    }
+        Command::Claude { args } => {
+            // Everything goes to Claude Code, unchanged: the flags, the
+            // subcommands, the prompt. imc only prepares the ground before
+            // handing over the terminal.
+            imc_cli::claude::run_claude_bin(&cfg, &root, &args)?;
+        }
+        Command::Setup {
+            force,
+            port,
+            no_proxy,
+        } => {
+            let lines =
+                imc_cli::claude::setup_and_start(&cfg, &root, *port, *force, !*no_proxy)?;
+            if cli.json {
+                println!("{}", serde_json::json!({"ok": true, "log": lines}));
+            } else {
+                for l in &lines {
+                    println!("  ✓ {l}");
                 }
             }
-            Some(ClaudeAction::Wire { port }) => {
-                let s = imc_cli::claude::write_claude_settings(&root, *port)?;
-                let rule = imc_cli::claude::write_imc_rule(&root)?;
-                let mut lines = vec![
-                    format!("wrote {} and {}", s.display(), rule.display()),
-                ];
-                if imc_cli::claude::remove_legacy_claude_md_block(&root)? {
-                    lines.push("removed the old imc block from CLAUDE.md".to_string());
-                }
-                for l in lines {
-                    println!("{l}");
-                }
-            }
-            Some(ClaudeAction::Start { port }) => {
-                let state = imc_cli::claude::start_proxy(&cfg, *port)?;
-                println!("proxy started: pid={} http://127.0.0.1:{}", state["pid"], state["port"]);
-            }
-            Some(ClaudeAction::Stop) => match imc_cli::claude::stop_proxy(&cfg)? {
-                Some(p) => println!("proxy stopped (was :{p})"),
-                None => println!("no proxy state file — nothing to stop"),
-            },
-            Some(ClaudeAction::Status) => {
-                let s = imc_cli::claude::proxy_status(&cfg);
-                if cli.json {
-                    println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
-                } else {
-                    match s {
-                        Some(v) => println!("proxy: {} (pid={}, port={})", if v["running"] == true { "RUNNING" } else { "NOT REACHABLE" }, v["state"]["pid"], v["state"]["port"]),
-                        None => println!("proxy: not started"),
-                    }
-                }
-            }
-            Some(ClaudeAction::Run { args: sub_args }) => {
-                imc_cli::claude::run_claude_bin(&cfg, &root, sub_args)?;
-            }
-            None => {
-                // No subcommand: open Claude Code, with every argument
-                // passed through.
-                imc_cli::claude::run_claude_bin(&cfg, &root, &args)?;
-            }
-        },
+        }
         Command::Proxy { action } => match action {
             ProxyAction::Serve { port } => {
                 // The proxy runs in this process — there is no separate
                 // daemon binary any more.
-                if let Err(e) = imc_proxy::run(*port) {
+                //
+                // The state file is written here so that `imc proxy status`
+                // and `imc proxy stop` see a proxy started this way, the
+                // same as one started in the background. Without it, a
+                // foreground proxy was invisible to the two commands that
+                // exist to manage it.
+                // A port that is already taken is a second proxy trying to
+                // start. Say so instead of letting the bind fail with
+                // something the caller has to decode — and before the
+                // state file is touched, because that file is the record
+                // of the proxy that is already serving.
+                if imc_cli::claude::port_in_use(*port) {
+                    eprintln!(
+                        "[imc proxy] port {port} is already in use — another proxy is serving there"
+                    );
+                    std::process::exit(1);
+                }
+                if let Err(e) = imc_cli::claude::write_proxy_state(&cfg, *port, std::process::id())
+                {
+                    eprintln!("[imc proxy] could not write the state file: {e:#}");
+                }
+                let result = imc_proxy::run(*port);
+                imc_cli::claude::clear_proxy_state(&cfg);
+                if let Err(e) = result {
                     eprintln!("[imc proxy] {e:#}");
                     std::process::exit(1);
                 }
             }
             ProxyAction::Status => {
                 let s = imc_cli::claude::proxy_status(&cfg);
-                println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
+                } else {
+                    match s {
+                        Some(v) => println!(
+                            "proxy: {} (pid={}, port={})",
+                            if v["running"] == true { "RUNNING" } else { "NOT REACHABLE" },
+                            v["state"]["pid"],
+                            v["state"]["port"]
+                        ),
+                        None => println!("proxy: not started"),
+                    }
+                }
             }
             ProxyAction::Stop => {
                 match imc_cli::claude::stop_proxy(&cfg)? {
@@ -1745,7 +1735,7 @@ fn main() -> Result<()> {
                     println!("
 saved to {}", st::path().display());
                     println!("Now run: imc config test  (to verify the endpoint)");
-                    println!("Then:  imc claude setup   (to wire a project for Claude Code)");
+                    println!("Then:  imc setup   (to index and wire a project for Claude Code)");
                 }
                 ConfigAction::ModelMap { action } => {
                     // The proxy's own config file: the CLI edits it through the
@@ -2208,7 +2198,7 @@ saved to {}", st::path().display());
 /// Point Claude Code at the proxy, and make sure the model it asks for
 /// exists upstream.
 ///
-/// `imc claude setup` writes `.claude/settings.local.json` with
+/// `imc setup` writes `.claude/settings.local.json` with
 /// `ANTHROPIC_BASE_URL` pointing at the proxy; without it Claude Code talks to
 /// the API directly and the proxy never sees a request. The placeholder model
 /// name it uses (`claude-pro-max`) is not a model any upstream serves, so a

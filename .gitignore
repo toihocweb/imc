@@ -8,6 +8,6 @@ __pycache__/
 CLAUDE.md
 .env
 .env.*
-captures/
+/captures/
 *.log
 scripts/repo_guard.local.*

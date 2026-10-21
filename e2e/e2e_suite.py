@@ -627,26 +627,26 @@ def suite_memory(vectors, root, data):
 # -- F. claude wiring ----------------------------------------------------------
 def suite_claude(root, data):
     def writes_settings():
-        run_imc(["claude", "wire", "--port", "12345"], root, data)
+        run_imc(["setup", "--no-proxy", "--port", "12345"], root, data)
         s = json.loads((root / ".claude" / "settings.local.json").read_text())
         assert s["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:12345", s
         assert s["env"]["ANTHROPIC_MODEL"] == "claude-pro-max", s
         return "base_url points at the proxy"
 
-    check("F1 claude wire writes .claude/settings.local.json", writes_settings)
+    check("F1 setup writes .claude/settings.local.json", writes_settings)
 
     def writes_rule():
         rule = (root / ".claude" / "rules" / "imc-rule.md").read_text()
         assert "imc search" in rule and "imc trace" in rule, rule[:200]
         return "the rule file is written"
 
-    check("F2 claude wire writes the rule file", writes_rule)
+    check("F2 setup writes the rule file", writes_rule)
 
     def leaves_claude_md_alone():
         # CLAUDE.md is the user's own file. The rule file is enough, so the
         # wiring must not touch it.
         (root / "CLAUDE.md").write_text("# My project rules\n")
-        run_imc(["claude", "wire"], root, data)
+        run_imc(["setup", "--no-proxy"], root, data)
         md = (root / "CLAUDE.md").read_text()
         assert md == "# My project rules\n", md
         assert "imc" not in md.lower(), md
@@ -655,8 +655,8 @@ def suite_claude(root, data):
     check("F3 wiring does not touch CLAUDE.md", leaves_claude_md_alone)
 
     def idempotent():
-        run_imc(["claude", "wire"], root, data)
-        run_imc(["claude", "wire"], root, data)
+        run_imc(["setup", "--no-proxy"], root, data)
+        run_imc(["setup", "--no-proxy"], root, data)
         rule = (root / ".claude" / "rules" / "imc-rule.md").read_text()
         assert rule.count("# imc") == 1, rule[:200]
         return "3 runs -> 1 rule file"
@@ -669,7 +669,7 @@ def suite_claude(root, data):
         s["env"]["MY_TOKEN"] = "keep-me"
         s["permissions"] = {"allow": ["Bash"]}
         p.write_text(json.dumps(s, indent=2))
-        run_imc(["claude", "wire"], root, data)
+        run_imc(["setup", "--no-proxy"], root, data)
         after = json.loads(p.read_text())
         assert after["env"]["MY_TOKEN"] == "keep-me", after
         assert after["permissions"] == {"allow": ["Bash"]}, after
@@ -743,11 +743,12 @@ def suite_proxy(root, data):
 
     def lifecycle():
         env = imc_env(data, False)
-        start = subprocess.run(
-            [str(IMC), "claude", "start", "--port", "12399"], cwd=str(root),
-            env=env, capture_output=True, text=True, timeout=120,
+        # The proxy serves in the foreground; it is started as a child here
+        # so the test can stop it again.
+        proc = subprocess.Popen(
+            [str(IMC), "proxy", "serve", "--port", "12399"], cwd=str(root),
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
-        assert start.returncode == 0, start.stderr[:400]
         deadline = time.time() + 20
         up = False
         while time.time() < deadline:
@@ -758,23 +759,24 @@ def suite_proxy(root, data):
                     break
             time.sleep(0.3)
         if not up:
-            subprocess.run([str(IMC), "claude", "stop"], cwd=str(root), env=env, capture_output=True)
+            proc.terminate()
             raise AssertionError("proxy never opened port 12399")
 
         st = subprocess.run(
-            [str(IMC), "claude", "status"], cwd=str(root), env=env,
+            [str(IMC), "proxy", "status"], cwd=str(root), env=env,
             capture_output=True, text=True, timeout=60,
         )
         assert "RUNNING" in st.stdout, st.stdout[:300]
 
         stop = subprocess.run(
-            [str(IMC), "claude", "stop"], cwd=str(root), env=env,
+            [str(IMC), "proxy", "stop"], cwd=str(root), env=env,
             capture_output=True, text=True, timeout=60,
         )
         assert "stopped" in stop.stdout, stop.stdout[:300]
-        return "start -> port reachable -> status RUNNING -> stop"
+        proc.wait(timeout=20)
+        return "serve -> port reachable -> status RUNNING -> stop"
 
-    check("H1 proxy start/status/stop", lifecycle)
+    check("H1 proxy serve/status/stop", lifecycle)
 
 
 # -- I. json contract ----------------------------------------------------------
@@ -1361,6 +1363,54 @@ def suite_claude_launch():
         return "the terminal, the arguments and the exit code all belong to claude"
 
     check("R1 imc claude opens Claude Code on this machine", launch)
+
+    def passthrough():
+        """Every option and every subcommand belongs to Claude Code.
+
+        The proxy used to have its own set of subcommands under `imc
+        claude`, and one of them was `stop` — which Claude Code also has.
+        The wrapper now forwards everything and intercepts nothing, so
+        the two sets can never collide.
+        """
+        root = new_case("claude-passthrough")
+        fake = Path(tempfile.mkdtemp(prefix="imc-e2e-fakeclaude-")) / "claude"
+        fake.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf 'ARGS:'\n"
+            "for a in \"$@\"; do printf ' [%s]' \"$a\"; done\n"
+            "echo\n"
+        )
+        fake.chmod(0o755)
+
+        env = dict(os.environ)
+        env["IMC_CLAUDE_BIN"] = str(fake)
+        # The cases below are the ones that used to be impossible: Claude
+        # Code's own flags, and Claude Code's own subcommands.
+        cases = [
+            ["--dangerously-skip-permissions"],
+            ["--print", "--dangerously-skip-permissions", "hello world"],
+            ["--model", "claude-opus-4", "--verbose"],
+            ["--add-dir", "/tmp", "--permission-mode", "bypassPermissions"],
+            ["--help"],
+            ["agents"],
+            ["mcp", "list"],
+            ["doctor"],
+            ["stop", "abc123"],
+        ]
+        for args in cases:
+            r = subprocess.run(
+                [str(IMC), "-C", str(root), "claude", *args],
+                capture_output=True, text=True, timeout=120, env=env,
+                cwd=str(root),
+            )
+            line = [l for l in r.stdout.splitlines() if l.startswith("ARGS:")]
+            assert line, f"nothing reached claude for {args}: {r.stdout[-300:]}"
+            got = line[0][len("ARGS:"):].strip()
+            want = " ".join(f"[{a}]" for a in args)
+            assert got == want, f"{args} -> {got!r}, want {want!r}"
+        return f"{len(cases)} cases forwarded unchanged"
+
+    check("R2 imc claude forwards every option to Claude Code", passthrough)
 
 
 def main():

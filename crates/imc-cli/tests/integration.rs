@@ -566,7 +566,7 @@ fn the_rule_names_every_read_variant() {
     }
 }
 
-/// An older `imc claude setup` wrote an imc block into CLAUDE.md. The rule
+/// An older `imc setup` wrote an imc block into CLAUDE.md. The rule
 /// file is the rule now, so the stale block has to go: left in place, the
 /// agent reads the old instructions.
 #[test]

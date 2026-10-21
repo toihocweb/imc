@@ -68,7 +68,7 @@ without it imc guesses a default model that most endpoints do not serve"
         ok.push("imc proxy: running on http://127.0.0.1:12345".to_string());
     } else {
         issues.push(
-            "imc proxy not running — run `imc proxy serve --port 12345` or `imc claude setup`"
+            "imc proxy not running — run `imc proxy serve --port 12345` or `imc setup`"
                 .to_string(),
         );
     }
@@ -91,7 +91,7 @@ without it imc guesses a default model that most endpoints do not serve"
         ok.push("claude settings: .claude/settings.local.json exists".to_string());
     } else {
         issues.push(
-            ".claude/settings.local.json missing — run `imc claude setup`".to_string(),
+            ".claude/settings.local.json missing — run `imc setup`".to_string(),
         );
     }
 
@@ -101,7 +101,7 @@ without it imc guesses a default model that most endpoints do not serve"
         ok.push("imc rule: .claude/rules/imc-rule.md exists".to_string());
     } else {
         issues.push(
-            ".claude/rules/imc-rule.md missing — run `imc claude setup`".to_string(),
+            ".claude/rules/imc-rule.md missing — run `imc setup`".to_string(),
         );
     }
 
@@ -124,7 +124,7 @@ without it imc guesses a default model that most endpoints do not serve"
         println!("Run `imc config setup` for interactive configuration.");
         bail!("doctor found {} issue(s)", issues.len());
     } else {
-        println!("Everything looks good. Run `imc claude setup` to wire Claude Code.");
+        println!("Everything looks good. Run `imc claude` to open Claude Code, or `imc setup` to wire it without opening.");
         Ok(())
     }
 }

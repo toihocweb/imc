@@ -74,7 +74,13 @@ agent rule file, and the proxy:
 
 ```bash
 imc claude          # wires the project, starts the proxy, opens Claude Code
+imc setup           # the same, without opening Claude Code (a server, a CI step)
 ```
+
+`imc claude` is a passthrough: every flag and every subcommand belongs to Claude Code.
+`imc claude --dangerously-skip-permissions` is `claude --dangerously-skip-permissions`,
+and `imc claude mcp` is `claude mcp` — nothing is intercepted, so the two sets of
+subcommands can never collide.
 
 ---
 
@@ -143,6 +149,8 @@ the project's root, so a tool call can never answer for a different repository.
 ```bash
 imc            # starts the proxy (12345) and the dashboard (4789)
 imc claude     # wire + proxy, then hands the terminal to `claude` (args pass through)
+imc setup      # wire + proxy, without opening `claude`
+imc proxy serve --port 12345   # the proxy alone, in the foreground
 ```
 
 `imc .` still indexes the current directory; `imc index <path>` indexes something else.
@@ -302,7 +310,7 @@ list lives.
 | `imc pack "<query>"` | Retrieval + graph + memories in one bundle under a token budget. |
 | `imc memory-…` / `imc learn <file>` | Project memory: add, search, list, delete, prune; extract from a transcript. |
 | `imc compress` / `retrieve <id>` / `ccr …` | Compress text, expand a handle, inspect the store. |
-| `imc claude …` / `imc proxy …` | Claude Code integration; the LLM proxy on its own. |
+| `imc claude …` / `imc setup` / `imc proxy …` | Claude Code integration (a passthrough to `claude`); the LLM proxy on its own. |
 | `imc mcp [install]` / `imc web` / `imc list` | MCP server, dashboard, registered projects. |
 | `imc config …` / `imc doctor` / `imc update` / `imc install` | Configuration and model mappings, diagnostics, self-update, PATH install. |
 

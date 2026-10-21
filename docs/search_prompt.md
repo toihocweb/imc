@@ -13,7 +13,7 @@ model reads when it synthesises an answer over the retrieved chunks (section B).
 
 The shipped text lives in one place: `imc_rule_md()` in
 `crates/imc-cli/src/claude.rs`, written to `.claude/rules/imc-rule.md` by
-`imc claude setup`. The copy in `docs/imc-rule.md` is the same text, and a test
+`imc setup`. The copy in `docs/imc-rule.md` is the same text, and a test
 compares the two so they cannot drift.
 
 It is deliberately not written into `CLAUDE.md`: that file is the user's own,

@@ -27,7 +27,7 @@ async function proxy<T = unknown>(
     });
   } catch (e: any) {
     throw new Error(
-      `the imc proxy is not answering on ${PROXY_URL} — start it with \`imc claude start\` (${e?.message ?? e})`
+      `the imc proxy is not answering on ${PROXY_URL} — start it with \`imc proxy serve --port 12345\` (${e?.message ?? e})`
     );
   }
   const text = await res.text();

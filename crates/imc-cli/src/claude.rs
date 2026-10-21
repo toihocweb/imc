@@ -1,7 +1,14 @@
-//! `imc claude` — one-shot Claude Code integration: index the project, point
-//! Claude Code at our own proxy (127.0.0.1:12345), inject the CLAUDE.md
-//! instruction block, and run/stop the proxy. Port target for the settings +
-//! instruction text: main/cli/commands/index.py::_setup_claude_code and
+//! Claude Code integration: point Claude Code at our own proxy
+//! (127.0.0.1:12345), write the rule file, and hand the terminal over to
+//! the `claude` binary.
+//!
+//! `imc claude` is a passthrough — every flag and every subcommand belongs
+//! to Claude Code, because Claude Code has subcommands of its own (`stop`,
+//! `mcp`, `doctor`, ...) and a second set of them here would collide.
+//! `imc setup` does the same wiring without opening Claude Code.
+//!
+//! Port target for the settings + instruction text:
+//! main/cli/commands/index.py::_setup_claude_code and
 //! main/cli/commands/claude_templates.py.
 
 use std::io::Write;
@@ -16,7 +23,7 @@ pub const BEGIN_MARKER: &str = "<!-- imc:begin -->";
 pub const END_MARKER: &str = "<!-- imc:end -->";
 
 /// Rule file for Claude Code: project-local rules that tell Claude how to use
-/// imc. Written to `.claude/rules/imc-rule.md` by `imc claude setup` (and
+/// imc. Written to `.claude/rules/imc-rule.md` by `imc setup` (and
 /// `imc config setup` on request) instead of being stuffed into CLAUDE.md.
 pub fn imc_rule_md() -> &'static str {
     r#"# imc — code intelligence for this repo
@@ -152,7 +159,7 @@ pub fn write_claude_settings(project_root: &Path, port: u16) -> Result<PathBuf> 
 }
 
 
-/// Remove the imc block an older `imc claude setup` wrote into CLAUDE.md.
+/// Remove the imc block an older `imc setup` wrote into CLAUDE.md.
 ///
 /// The rule file is the rule now. A block left behind in CLAUDE.md is a
 /// second copy of the same instructions, frozen at the moment it was written:
@@ -216,6 +223,21 @@ pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
         let _ = stop_proxy(cfg);
         std::thread::sleep(std::time::Duration::from_millis(400));
     }
+    // A proxy that is already serving is the proxy. Starting a second one
+    // on the same port would fail to bind and — worse — overwrite the
+    // state file that says where the running one is.
+    if let Some(status) = proxy_status(cfg) {
+        if status.get("running").and_then(|v| v.as_bool()).unwrap_or(false) {
+            let port_now = status
+                .get("state")
+                .and_then(|s| s.get("port"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(port as u64) as u16;
+            if port_now == port {
+                return Ok(status.get("state").cloned().unwrap_or(json!({})));
+            }
+        }
+    }
     let exe_disp = exe.display().to_string();
     let log_dir = cfg.data_dir.join("logs");
     std::fs::create_dir_all(&log_dir).ok();
@@ -230,11 +252,33 @@ pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
         .spawn()
         .with_context(|| format!("spawn `{exe_disp} proxy serve --port {port}`"))?;
     let pid = child.id();
+    let _ = &exe_disp;
+    let state = write_proxy_state(cfg, port, pid)?;
+    // The state file says the proxy is running; the port says whether it
+    // is. A caller that starts the proxy and then talks to it needs the
+    // second, so wait for it — a few hundred milliseconds at most.
+    for _ in 0..50 {
+        if port_open(port) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(state)
+}
+
+/// Record a running proxy in the state file.
+///
+/// The background starter and the foreground server both write it: a
+/// proxy that is running is a proxy that `imc proxy status` should see and
+/// `imc proxy stop` should be able to stop, no matter which way it was
+/// started.
+pub fn write_proxy_state(cfg: &Config, port: u16, pid: u32) -> Result<Value> {
+    let exe = proxy_bin()?;
     let state = json!({
         "pid": pid,
         "port": port,
         "started_at": chrono_now(),
-        "server_path": exe_disp,
+        "server_path": exe.display().to_string(),
         "server_mtime": file_mtime_secs(&exe),
         "upstream": {
             "base_url": cfg.llm_base_url(),
@@ -245,6 +289,26 @@ pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
     std::fs::create_dir_all(&cfg.data_dir).ok();
     std::fs::write(state_path(cfg), serde_json::to_vec_pretty(&state)?)?;
     Ok(state)
+}
+
+/// Forget the proxy in the state file — it is no longer running.
+///
+/// Only when the state file still points at this process. A second proxy
+/// that failed to bind the port (the first one is still there) must not
+/// delete the record of the one that is actually serving: the state file
+/// is the only record of where the proxy is, and losing it turns
+/// `imc proxy stop` into "no proxy state file" while the proxy keeps
+/// running.
+pub fn clear_proxy_state(cfg: &Config) {
+    let path = state_path(cfg);
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let state: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
+    let mine = state.get("pid").and_then(|v| v.as_u64());
+    if mine == Some(std::process::id() as u64) {
+        std::fs::remove_file(&path).ok();
+    }
 }
 
 /// True when the running proxy was started from an older build.
@@ -306,6 +370,11 @@ pub fn proxy_status(cfg: &Config) -> Option<Value> {
     Some(json!({ "running": port_open(port), "state": state }))
 }
 
+/// True when something is already listening on the port.
+pub fn port_in_use(port: u16) -> bool {
+    port_open(port)
+}
+
 fn port_open(port: u16) -> bool {
     use std::net::{SocketAddr, TcpStream};
     use std::time::Duration;
@@ -313,12 +382,17 @@ fn port_open(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
 }
 
-/// Full setup: index → Claude settings → CLAUDE.md → start proxy.
+/// Full setup: index → Claude settings → the rule file → start the proxy.
+///
+/// The proxy is optional: a machine that only needs the project wired (a
+/// container, a CI step, a second checkout that talks to a proxy running
+/// elsewhere) does not want a daemon it cannot see.
 pub fn setup_and_start(
     cfg: &Config,
     root: &Path,
     port: u16,
     force_index: bool,
+    start_the_proxy: bool,
 ) -> Result<Vec<String>> {
     let mut log = Vec::new();
 
@@ -380,11 +454,15 @@ pub fn setup_and_start(
             imc_core::settings::path().display()
         ));
     }
-    let state = start_proxy(cfg, port)?;
-    log.push(format!(
-        "proxy running: pid={} http://127.0.0.1:{} → upstream {}",
-        state["pid"], state["port"], state["upstream"]["base_url"]
-    ));
+    if start_the_proxy {
+        let state = start_proxy(cfg, port)?;
+        log.push(format!(
+            "proxy running: pid={} http://127.0.0.1:{} → upstream {}",
+            state["pid"], state["port"], state["upstream"]["base_url"]
+        ));
+    } else {
+        log.push("proxy not started (--no-proxy)".to_string());
+    }
     log.push("done — just run `claude` in this directory".to_string());
     Ok(log)
 }
