@@ -288,15 +288,17 @@ pub fn apply_prompts_and_memories(
         }
     }
 
-    let reminder_enabled = memory::is_system_reminder_enabled(project_id.as_deref());
-    let user_context = memory::get_system_reminder_prompt(project_id.as_deref());
-    memory::apply_system_reminder_template(
-        payload,
-        project_id.as_deref(),
-        user_context.as_deref(),
-        reminder_enabled,
-    );
-    if reminder_enabled {
+    // The system reminder is not injected any more.
+    //
+    // Claude Code loads the project's CLAUDE.md and its rule files itself,
+    // and puts them in a `<system-reminder>` of its own. imc used to add
+    // another one with the same text: the model read the same instructions
+    // twice, and the prompt was longer for nothing. The project's own
+    // instructions are the client's business.
+    //
+    // The memories are still injected — those are the ones the client
+    // cannot know about.
+    if memory::is_system_reminder_enabled(project_id.as_deref()) {
         memory::append_learned_memories_to_payload(payload, project_id.as_deref(), Some(&user_text), 4);
     }
 

@@ -253,54 +253,8 @@ fn memory_block_shape() {
     assert!(block.ends_with("</system-reminder>"));
 }
 
-#[test]
-fn apply_system_reminder_template_overrides_existing_reminder() {
-    let mut payload = payload_with(
-        "",
-        vec![user_msg(
-            "<system-reminder>\nold template\n</system-reminder>\n\nplease refactor",
-        )],
-    );
-    let ok = apply_system_reminder_template(
-        &mut payload,
-        Some("proj"),
-        Some("Today's date is 2020-01-01.\nnew template"),
-        true,
-    );
-    assert!(ok);
-    let AnthropicInputMessage::User(um) = &payload.messages[0] else {
-        panic!("user message");
-    };
-    let content = um.content.as_text().unwrap();
-    assert!(content.contains("new template"));
-    assert!(!content.contains("old template"));
-    assert!(
-        content.contains("Today's date is 20"),
-        "the date placeholder must be refreshed"
-    );
-}
 
-#[test]
-fn apply_system_reminder_template_prepends_when_missing() {
-    let mut payload = payload_with("", vec![user_msg("do the thing")]);
-    let ok = apply_system_reminder_template(&mut payload, None, Some("template body"), true);
-    assert!(ok);
-    let AnthropicInputMessage::User(um) = &payload.messages[0] else {
-        panic!("user message");
-    };
-    assert_eq!(um.content.as_text().unwrap(), "template body\n\ndo the thing");
-}
 
-#[test]
-fn apply_system_reminder_template_is_a_noop_when_disabled() {
-    let mut payload = payload_with("", vec![user_msg("do the thing")]);
-    let ok = apply_system_reminder_template(&mut payload, None, Some("template"), false);
-    assert!(!ok);
-    let AnthropicInputMessage::User(um) = &payload.messages[0] else {
-        panic!("user message");
-    };
-    assert_eq!(um.content.as_text().unwrap(), "do the thing");
-}
 
 #[test]
 fn attach_memory_appends_block_and_refuses_duplicates() {

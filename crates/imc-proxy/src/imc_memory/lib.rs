@@ -440,105 +440,6 @@ pub fn attach_memory_to_message(msg: &mut AnthropicInputMessage, memory_text: &s
     true
 }
 
-/// Port of `apply_system_reminder_template`.
-///
-/// Rewrites the `<system-reminder>` Claude Code already injected with the
-/// project's prompt template (date refreshed), or — when no reminder exists —
-/// prepends it to the first user message.
-pub fn apply_system_reminder_template(
-    payload: &mut AnthropicMessagesPayload,
-    project_id: Option<&str>,
-    user_context: Option<&str>,
-    reminder_enabled: bool,
-) -> bool {
-    let log = create_handler_logger("main");
-    if payload.messages.is_empty() {
-        return false;
-    }
-    if !reminder_enabled || user_context.unwrap_or("").is_empty() {
-        return false;
-    }
-
-    let today = imc_proxy_types::utils::format_date_now();
-    let re = Regex::new(r"Today's date is \d{4}-\d{2}-\d{2}\.").expect("date regex");
-    let final_context = re
-        .replace_all(user_context.unwrap_or(""), format!("Today's date is {today}."))
-        .to_string();
-
-    let mut injected = false;
-    for msg in payload.messages.iter_mut() {
-        let AnthropicInputMessage::User(um) = msg else {
-            continue;
-        };
-        match &mut um.content {
-            StringOrBlocks::Blocks(blocks) => {
-                for block in blocks.iter_mut() {
-                    let text: &mut String = match block {
-                        AnthropicUserContentBlock::Text(t) => &mut t.text,
-                        AnthropicUserContentBlock::ToolResult(tr) => match &mut tr.content {
-                            StringOrBlocks::Text(t) => t,
-                            StringOrBlocks::Blocks(_) => continue,
-                        },
-                        _ => continue,
-                    };
-                    if text.contains("<system-reminder>") {
-                        *text = final_context.clone();
-                        injected = true;
-                        break;
-                    }
-                }
-            }
-            StringOrBlocks::Text(text) => {
-                if text.contains("<system-reminder>") {
-                    *text = final_context.clone();
-                    injected = true;
-                }
-            }
-        }
-        if injected {
-            log.info(&format!(
-                "[Proxy] Overrode <system-reminder> with template (project: {})",
-                project_id.unwrap_or("global")
-            ));
-            return true;
-        }
-    }
-
-    if !injected {
-        for msg in payload.messages.iter_mut() {
-            let AnthropicInputMessage::User(um) = msg else {
-                continue;
-            };
-            match &mut um.content {
-                StringOrBlocks::Blocks(blocks) => {
-                    blocks.insert(
-                        0,
-                        AnthropicUserContentBlock::Text(AnthropicTextBlock {
-                            r#type: "text".to_string(),
-                            text: final_context.clone(),
-                            cache_control: None,
-                        }),
-                    );
-                    log.info(&format!(
-                        "[Proxy] Prepended <system-reminder> template (project: {})",
-                        project_id.unwrap_or("global")
-                    ));
-                    return true;
-                }
-                StringOrBlocks::Text(existing) => {
-                    let taken = std::mem::take(existing);
-                    um.content = StringOrBlocks::Text(format!("{final_context}\n\n{taken}"));
-                    log.info(&format!(
-                        "[Proxy] Prepended <system-reminder> template (project: {})",
-                        project_id.unwrap_or("global")
-                    ));
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
 
 /// Port of the `<working-memory>` wrapper built in
 /// `append_learned_memories_to_payload`.
@@ -1284,24 +1185,7 @@ pub fn set_session_project(session_id: &str, project_id: &str) {
 // Prompt templates (Python `main.core.prompts.PromptStore`)
 // ---------------------------------------------------------------------------
 
-fn user_prompts_dir() -> PathBuf {
-    imc_home().join(".indexmycode").join("prompts")
-}
 
-/// Port of `PromptStore.get("system_reminder", project_id=...)` — project
-/// override first, then `~/.indexmycode/prompts/system_reminder.md`.
-pub fn get_system_reminder_prompt(project_id: Option<&str>) -> Option<String> {
-    if let Some(pid) = project_id {
-        let p = user_prompts_dir()
-            .join("projects")
-            .join(pid)
-            .join("system_reminder.md");
-        if let Ok(text) = std::fs::read_to_string(&p) {
-            return Some(text);
-        }
-    }
-    std::fs::read_to_string(user_prompts_dir().join("system_reminder.md")).ok()
-}
 
 /// Port of `is_system_reminder_enabled` — `~/.indexmycode/system_reminder_config.json`.
 pub fn is_system_reminder_enabled(project_id: Option<&str>) -> bool {
