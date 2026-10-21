@@ -355,7 +355,53 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
     // 3. Tool management, context filters, prompt templates + memory injection.
     filter_tools_by_config(&mut payload);
     if is_context_filters_enabled() {
+        // The learning pass needs the *original* tool results, so they are
+        // collected before the filter runs. A result that no rule matched and
+        // that is big enough to be worth a model call becomes a sample; the
+        // model writes the rule, the rule is checked against the sample, and
+        // from then on this command is filtered by it.
+        let observations = if crate::context_learning::enabled() {
+            imc_proxy_copilot::context_filters::collect_observations(&payload)
+        } else {
+            Vec::new()
+        };
         process_context_filters(&mut payload);
+
+        for obs in observations {
+            if obs.matched_rule || obs.chars < crate::context_learning::MIN_LEARN_CHARS {
+                continue;
+            }
+            if obs.command.trim().is_empty() {
+                continue;
+            }
+            let observation = crate::context_learning::Observation {
+                tool: obs.tool,
+                command: obs.command,
+                chars_before: obs.chars,
+                sample: obs.sample,
+            };
+            // Off the request path: the model call must not delay the answer.
+            tokio::spawn(async move {
+                let settings = imc_core::settings::load();
+                match crate::context_learning::learn(observation, &settings).await {
+                    Ok(rule) => {
+                        eprintln!(
+                            "[imc] learned a filter for `{}` ({} transforms)",
+                            rule.get("command_pattern")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?"),
+                            rule.get("transforms")
+                                .and_then(|v| v.as_array())
+                                .map(|a| a.len())
+                                .unwrap_or(0)
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("[imc] could not learn a filter: {e}");
+                    }
+                }
+            });
+        }
     }
 
     // 3b. Shrink oversized tool results before they go upstream. The original

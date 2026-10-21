@@ -3,6 +3,7 @@
 //! context (system_reminder) and filters noisy tool results.
 
 pub mod compression;
+pub mod context_learning;
 pub mod github;
 pub mod hyperspace;
 pub mod imc_memory;

@@ -176,6 +176,153 @@ const DEFAULT_FILTERS_JSON: &str = r#"[
 static TOOL_RESULT_FILTERS_CACHE: Mutex<(Option<SystemTime>, Option<Vec<Value>>)> =
     Mutex::new((None, None));
 
+/// Where the learned rules are kept.
+///
+/// The user's own rules live in `tool_result_filters.json`; the rules a
+/// model learned live in their own file so that editing the user's file
+/// never loses them.
+pub fn learned_filters_path() -> PathBuf {
+    // The override exists so a test never writes into the real home.
+    if let Ok(p) = std::env::var("IMC_LEARNED_FILTERS_PATH") {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    config_dir().join("learned_filters.json")
+}
+
+/// Load the rules a model learned.
+///
+/// Read fresh on every call: the file is tiny, it is written by a background
+/// task, and a rule that is one request late is better than a rule that
+/// never arrives.
+pub fn load_learned_filters() -> Vec<Value> {
+    let path = learned_filters_path();
+    read_json_file(&path)
+        .and_then(|d| d.as_array().cloned())
+        .unwrap_or_default()
+}
+
+
+/// A tool result the learning pass may look at.
+#[derive(Debug, Clone)]
+pub struct FilterObservation {
+    /// The tool that produced it, e.g. `Bash`.
+    pub tool: String,
+    /// The command that was run.
+    pub command: String,
+    /// How many characters the result has.
+    pub chars: usize,
+    /// The head of the result.
+    pub sample: String,
+    /// Whether a rule already matched it.
+    pub matched_rule: bool,
+}
+
+/// The `tool_use_id` -> (tool name, command) index of a payload.
+pub fn tool_use_index(payload: &AnthropicMessagesPayload) -> HashMap<String, (String, String)> {
+    let mut tool_uses: HashMap<String, (String, String)> = HashMap::new();
+    for msg in &payload.messages {
+        match msg {
+            AnthropicInputMessage::User(m) => {
+                for block in &blocks_of_user(&m.content) {
+                    if let ContentBlock::ToolUse { id, input, .. } = block {
+                        if !id.is_empty() {
+                            let command = input
+                                .get("command")
+                                .or_else(|| input.get("cmd"))
+                                .or_else(|| input.get("query"))
+                                .and_then(|v| match v {
+                                    Value::String(s) => Some(s.clone()),
+                                    _ => None,
+                                })
+                                .unwrap_or_default();
+                            let name = input
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            tool_uses.insert(id.clone(), (name, command));
+                        }
+                    }
+                }
+            }
+            AnthropicInputMessage::Assistant(m) => {
+                for block in &blocks_of_assistant(&m.content) {
+                    if let ContentBlock::ToolUse { id, name, input } = block {
+                        if !id.is_empty() {
+                            let command = input
+                                .get("command")
+                                .or_else(|| input.get("cmd"))
+                                .or_else(|| input.get("query"))
+                                .and_then(|v| match v {
+                                    Value::String(s) => Some(s.clone()),
+                                    _ => None,
+                                })
+                                .unwrap_or_default();
+                            tool_uses.insert(id.clone(), (name.clone(), command));
+                        }
+                    }
+                }
+            }
+            AnthropicInputMessage::System(_) => {}
+        }
+    }
+    tool_uses
+}
+
+/// The tool results of a payload, before any filtering.
+///
+/// The learning pass needs the original text: after the filter has run, the
+/// noise is already gone and the model would learn from the wrong thing.
+pub fn collect_observations(payload: &AnthropicMessagesPayload) -> Vec<FilterObservation> {
+    let tool_uses = tool_use_index(payload);
+    let rules = load_tool_result_filters_config();
+    let mut out = Vec::new();
+    for msg in &payload.messages {
+        let AnthropicInputMessage::User(m) = msg else {
+            continue;
+        };
+        let StringOrBlocks::Blocks(blocks) = &m.content else {
+            continue;
+        };
+        for block in blocks {
+            let AnthropicUserContentBlock::ToolResult(b) = block else {
+                continue;
+            };
+            let (tool, command) = tool_uses
+                .get(&b.tool_use_id)
+                .cloned()
+                .unwrap_or_else(|| (String::new(), String::new()));
+            let text = match &b.content {
+                StringOrBlocks::Text(s) => s.clone(),
+                StringOrBlocks::Blocks(sub) => sub
+                    .iter()
+                    .filter_map(|c| match tool_result_content_block_view(c) {
+                        ContentBlock::Text(t) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            };
+            if text.trim().is_empty() {
+                continue;
+            }
+            let matched = rules
+                .iter()
+                .any(|r| match_tool_result_rule(r, &command, &tool));
+            out.push(FilterObservation {
+                tool,
+                command,
+                chars: text.chars().count(),
+                sample: text.chars().take(8_000).collect(),
+                matched_rule: matched,
+            });
+        }
+    }
+    out
+}
+
 /// Port of `load_tool_result_filters_config`.
 ///
 /// Served from a cache keyed on file mtime; falls back to the built-in rules
@@ -194,7 +341,7 @@ pub fn load_tool_result_filters_config() -> Vec<Value> {
             _ => None,
         });
     if let Some(rules) = cached {
-        return rules;
+        return with_learned(rules);
     }
 
     if mtime.is_some() {
@@ -202,13 +349,23 @@ pub fn load_tool_result_filters_config() -> Vec<Value> {
             if let Ok(mut g) = TOOL_RESULT_FILTERS_CACHE.lock() {
                 *g = (mtime, Some(rules.clone()));
             }
-            return rules;
+            return with_learned(rules);
         }
     }
 
     // Fallback to default and persist if file does not exist.
     let rules = default_tool_result_filters();
     save_tool_result_filters_config(&rules);
+    with_learned(rules)
+}
+
+/// Append the learned rules after the user's own, so a hand-written rule
+/// always wins over a learned one.
+fn with_learned(mut rules: Vec<Value>) -> Vec<Value> {
+    let learned = load_learned_filters();
+    if !learned.is_empty() {
+        rules.extend(learned);
+    }
     rules
 }
 
