@@ -1,54 +1,50 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
-import { existsSync } from "fs";
-import { join } from "path";
-
 /**
- * Find the imc binary the API routes shell out to.
+ * The dashboard's data comes from the imc proxy, not from a subprocess.
  *
- * A hardcoded path only works on the machine that built the dashboard, so it
- * is the last resort, not the first. Order:
- *
- *   1. `IMC_BIN` — explicit override.
- *   2. The binary next to the app: a repo checkout (`<repo>/target/release/imc`)
- *      or a global install (`~/.local/share/imc/web-dashboard` →
- *      `~/.local/bin/imc`).
- *   3. `imc` on `PATH`.
- *   4. The old absolute path, for a dashboard that was deployed elsewhere.
+ * It used to shell out to the `imc` binary for every request: one process
+ * per click, and a rebuild in progress was a dead page ("Loading projects..."
+ * for ever). The proxy is already running and already holds the state, so the
+ * data is asked for over HTTP. The dashboard's own `/api/*` routes stay where
+ * they are — the browser talks to the same origin, the server talks to the
+ * proxy — so nothing is exposed publicly and no CORS dance is needed.
  */
-function resolveImcBinary(): string {
-  const fromEnv = process.env.IMC_BIN;
-  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+const PROXY_URL = (
+  process.env.IMC_PROXY_URL || "http://127.0.0.1:12345"
+).replace(/\/$/, "");
 
-  const cwd = process.cwd();
-  const candidates = [
-    join(cwd, "..", "target", "release", "imc"), // repo checkout
-    join(cwd, "..", "..", "..", "bin", "imc"), // ~/.local/share/imc/web-dashboard
-    join(cwd, "..", "imc"), // binary beside the app directory
-    "/root/imc-rs/target/release/imc", // this server
-  ];
-  for (const candidate of candidates) {
-    try {
-      if (existsSync(candidate)) return candidate;
-    } catch {
-      // an unreadable path is simply not a candidate
-    }
+async function proxy<T = unknown>(
+  path: string,
+  init?: RequestInit
+): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${PROXY_URL}${path}`, {
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        ...(init?.headers || {}),
+      },
+    });
+  } catch (e: any) {
+    throw new Error(
+      `the imc proxy is not answering on ${PROXY_URL} — start it with \`imc claude start\` (${e?.message ?? e})`
+    );
   }
-
-  const path = process.env.PATH || "";
-  for (const dir of path.split(":").filter(Boolean)) {
-    const candidate = join(dir, "imc");
-    try {
-      if (existsSync(candidate)) return candidate;
-    } catch {
-      // keep looking
-    }
+  const text = await res.text();
+  let body: any = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = text;
   }
-
-  // Last resort: let the OS resolve it when the process is spawned.
-  return "imc";
+  if (!res.ok) {
+    throw new Error(
+      (body && typeof body === "object" && body.error) ||
+        `the imc proxy answered ${res.status}`
+    );
+  }
+  return body as T;
 }
-
-const IMC_BINARY = resolveImcBinary();
 
 export interface ProjectCounts {
   files: number;
@@ -134,122 +130,48 @@ export interface TraceResult {
   results: TraceArm[];
 }
 
-function runImc(
-  args: string[],
-  options: { root?: string; input?: string; timeoutMs?: number } = {}
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    delete env.IMC_DATA_DIR;
-    delete env.IMC_CONFIG;
-    delete env.IMC_VECTOR;
-    delete env.IMC_EMBED_API_KEY;
-    delete env.OPENAI_API_KEY;
-
-    const child = spawn(IMC_BINARY, args, {
-      env,
-      cwd: options.root,
-      stdio: ["pipe", "pipe", "pipe"],
-    }) as ChildProcessWithoutNullStreams;
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-
-    child.stdout.on("data", (data: Buffer) => {
-      stdout += data.toString();
-    });
-    child.stderr.on("data", (data: Buffer) => {
-      stderr += data.toString();
-    });
-
-    // A spawn failure arrives as an "error" event, not as a throw: the
-    // binary can be missing (a rebuild replaces it), unreadable, or not
-    // executable. Without this listener Node treats the event as an
-    // unhandled exception and the whole dashboard process dies — the browser
-    // then waits for an answer that never comes, and the page spins on
-    // "Loading" forever. So the error becomes a rejected promise, the route
-    // turns it into a 500 with a message, and the page shows it.
-    child.on("error", (err: NodeJS.ErrnoException) => {
-      if (settled) return;
-      settled = true;
-      reject(
-        new Error(
-          err.code === "ENOENT"
-            ? `the imc binary is not there (${IMC_BINARY}) — is a build in progress?`
-            : `could not run imc: ${err.message}`,
-        ),
-      );
-    });
-
-    // A CLI that never answers must not hold the request open for ever.
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // the process may already be gone
-      }
-      reject(new Error(`imc ${args[0] ?? ""} did not answer in time`));
-    }, options.timeoutMs ?? 60_000);
-    if (typeof timer.unref === "function") timer.unref();
-
-    child.on("close", (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(stderr || `Command failed with code ${code}`));
-      } else {
-        resolve(stdout);
-      }
-    });
-
-    if (options.input) {
-      child.stdin.write(options.input);
-    }
-    child.stdin.end();
-  });
-}
-
 export async function listProjects(root?: string): Promise<Project[]> {
-  const stdout = await runImc(["-C", root || ".", "list", "--json"], { root });
-  return JSON.parse(stdout);
+  const projects = await proxy<Project[]>("/api/projects");
+  if (!root) return projects;
+  return projects.filter((p) => p.path === root);
 }
 
 export async function search(
   query: string,
   options: { root?: string; limit?: number; noVector?: boolean } = {}
 ): Promise<SearchHit[]> {
-  const args = ["search", query, "--json", "-l", String(options.limit || 10)];
-  if (options.noVector) args.push("--no-vector");
-  const stdout = await runImc(["-C", options.root || ".", ...args], {
-    root: options.root,
+  return proxy<SearchHit[]>("/api/search", {
+    method: "POST",
+    body: JSON.stringify({
+      query,
+      root: options.root,
+      limit: options.limit || 10,
+      noVector: options.noVector,
+    }),
   });
-  return JSON.parse(stdout);
 }
 
 export async function trace(
   target: string,
   options: { root?: string; callers?: boolean; both?: boolean; depth?: number } = {}
 ): Promise<TraceResult> {
-  const args = ["trace", target, "--json"];
-  if (options.callers) args.push("--callers");
-  if (options.both) args.push("--both");
-  if (options.depth) args.push("-d", String(options.depth));
-  const stdout = await runImc(["-C", options.root || ".", ...args], {
-    root: options.root,
+  return proxy<TraceResult>("/api/trace", {
+    method: "POST",
+    body: JSON.stringify({
+      target,
+      root: options.root,
+      callers: options.callers,
+      both: options.both,
+      depth: options.depth,
+    }),
   });
-  return JSON.parse(stdout);
 }
 
 export async function memoryList(root?: string, limit: number = 50): Promise<MemoryEntry[]> {
-  const stdout = await runImc(
-    ["-C", root || ".", "memory-list", "--json", "-l", String(limit)],
-    { root }
-  );
-  return JSON.parse(stdout);
+  const q = new URLSearchParams();
+  if (root) q.set("root", root);
+  q.set("limit", String(limit));
+  return proxy<MemoryEntry[]>(`/api/memory?${q.toString()}`);
 }
 
 export async function memoryAdd(
@@ -262,43 +184,39 @@ export async function memoryAdd(
   tags: string[] = [],
   importance: number = 0.5
 ) {
-  const args = [
-    "memory-add",
-    content,
-    "--category",
-    category,
-    "--type",
-    memType,
-    "--scene",
-    scene,
-    "--importance",
-    String(importance),
-  ];
-  for (const p of paths) args.push("-p", p);
-  for (const t of tags) args.push("-t", t);
-  const stdout = await runImc(["-C", root, ...args], { root });
-  return stdout;
+  const result = await proxy<{ id: number | null; stored: boolean }>(
+    "/api/memory",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        root,
+        content,
+        category,
+        mem_type: memType,
+        scene,
+        paths,
+        tags,
+        importance,
+      }),
+    }
+  );
+  return result.stored ? `stored memory #${result.id}` : "not stored";
 }
 
 export async function ccrStats(root?: string): Promise<CcrStats> {
-  const stdout = await runImc(["-C", root || ".", "ccr", "stats", "--json"], { root });
-  return JSON.parse(stdout);
+  return proxy<CcrStats>("/api/compression/stats");
 }
 
 export async function ccrList(root?: string, limit: number = 20): Promise<CcrEntry[]> {
-  const stdout = await runImc(
-    ["-C", root || ".", "ccr", "list", "--json", "-l", String(limit)],
-    { root }
-  );
-  return JSON.parse(stdout);
+  return proxy<CcrEntry[]>(`/api/compression?limit=${limit}`);
 }
 
 export async function compressText(text: string, root?: string): Promise<string> {
-  const stdout = await runImc(["-C", root || ".", "compress", "--raw"], {
-    root,
-    input: text,
+  const result = await proxy<{ output: string }>("/api/compress", {
+    method: "POST",
+    body: JSON.stringify({ text }),
   });
-  return stdout;
+  return result.output;
 }
 
 export interface ConfigStatus {
@@ -316,41 +234,23 @@ export interface ConfigStatus {
 
 /** Read the effective imc config (secrets stay masked: the CLI masks them). */
 export async function configStatus(): Promise<ConfigStatus> {
-  const raw = JSON.parse(
-    await runImc(["--json", "config", "list"])
-  ) as Record<string, string | null>;
-  const path = (await runImc(["config", "path"])).trim();
-
-  const base_url = raw["llm.base_url"] || "";
-  const model = raw["llm.model"] || "";
-  const api_key_masked = raw["llm.api_key"] || "";
-  const embedding_model = raw["embedding.model"] || "";
-
-  const missing: string[] = [];
-  if (!base_url) missing.push("llm.base_url");
-  if (!model) missing.push("llm.model");
-  if (!api_key_masked) missing.push("llm.api_key");
-
-  return {
-    base_url,
-    model,
-    api_key_masked,
-    api_key_set: api_key_masked.length > 0,
-    embedding_model,
-    config_path: path,
-    complete: missing.length === 0,
-    missing,
-  };
+  const raw = await proxy<ConfigStatus>("/api/config");
+  return raw;
 }
 
 /** Write one dotted config key (`llm.base_url`, `llm.model`, ...). */
 export async function configSet(key: string, value: string): Promise<string> {
-  return runImc(["config", "set", key, value]);
+  await proxy("/api/config", {
+    method: "POST",
+    body: JSON.stringify({ key, value }),
+  });
+  return `${key} saved`;
 }
 
 /** Probe the configured endpoint. Returns the CLI's report as text. */
 export async function configTest(): Promise<string> {
-  return runImc(["config", "test"]);
+  const result = await proxy<{ ok: boolean; output: string }>("/api/config/test");
+  return result.output;
 }
 
 export interface ModelList {
@@ -366,7 +266,7 @@ export interface ModelList {
  * The key stays in the config file — the CLI sends it, the browser never sees it.
  */
 export async function fetchModels(): Promise<ModelList> {
-  const raw = JSON.parse(await runImc(["--json", "config", "models"]));
+  const raw = await proxy<ModelList>("/api/models");
   return {
     url: raw.url || "",
     models: Array.isArray(raw.models) ? raw.models : [],

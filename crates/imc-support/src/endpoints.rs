@@ -37,6 +37,11 @@ re!(re_spring_var, r"\{[a-zA-Z0-9_]+\}");
 re!(re_angle_var, r"<[^>]+>");
 re!(re_colon_var, r":[a-zA-Z0-9_]+");
 re!(re_slashes, r"/+");
+re!(re_fetch_backtick, r#"(?:fetch|axios\.(?:get|post|put|delete|patch)|api\.(?:get|post|put|delete|patch))\s*\(\s*`(.*?)`"#);
+re!(re_fetch_dquote, r#"(?:fetch|axios\.(?:get|post|put|delete|patch)|api\.(?:get|post|put|delete|patch))\s*\(\s*"(.*?)""#);
+re!(re_fetch_squote, r#"(?:fetch|axios\.(?:get|post|put|delete|patch)|api\.(?:get|post|put|delete|patch))\s*\(\s*'(.*?)'"#);
+
+
 
 /// Standardize any API path or template URL to a universal wildcard path.
 ///
@@ -1201,11 +1206,12 @@ re!(
 /// exclusive on the opening character, so running them separately and merging
 /// by match offset reproduces the original left-to-right `finditer` order.
 fn fetch_like_urls(line: &str) -> Vec<String> {
-    let base = r"(?:fetch|axios\.(?:get|post|put|delete|patch)|api\.(?:get|post|put|delete|patch))\s*\(\s*";
     let mut hits: Vec<(usize, String)> = Vec::new();
-    for q in ["`", "\"", "'"] {
-        let pattern = format!("{base}{q}(.*?){q}");
-        let Ok(re) = Regex::new(&pattern) else { continue };
+    // The three quote flavours are three compiled regexes, not three per
+    // line: this runs over every line of every file in the project, and
+    // compiling a regex 45,000 times turned a two-second trace into a
+    // twelve-second one.
+    for re in [re_fetch_backtick(), re_fetch_dquote(), re_fetch_squote()] {
         for caps in re.captures_iter(line) {
             if let Some(m) = caps.get(1) {
                 hits.push((m.start(), m.as_str().to_string()));

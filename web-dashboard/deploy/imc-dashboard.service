@@ -6,8 +6,8 @@ After=network.target
 Type=simple
 WorkingDirectory=/opt/imc/web-dashboard
 Environment=NODE_ENV=production
-# Point IMC_BIN at the imc binary; it is on PATH for most installs.
-Environment=IMC_BIN=/usr/local/bin/imc
+# The dashboard asks the imc proxy for its data (default http://127.0.0.1:12345).
+#Environment=IMC_PROXY_URL=http://127.0.0.1:12345
 ExecStart=/usr/bin/node /opt/imc/web-dashboard/node_modules/next/dist/bin/next start -p 4789 -H 0.0.0.0
 Restart=always
 RestartSec=3

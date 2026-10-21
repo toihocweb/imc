@@ -59,16 +59,27 @@ npm run dev            # http://localhost:3000
 npm run build && npm run start -- -p 4789
 ```
 
-The binary is resolved from `IMC_BIN`, defaulting to `/root/imc-rs/target/release/imc`.
-Point it elsewhere when imc is installed system-wide:
+## The data comes from the proxy
 
-```bash
-IMC_BIN=$(command -v imc) npm run start -- -p 4789
+The dashboard does not shell out to the `imc` binary. It asks the proxy, over
+HTTP, on `http://127.0.0.1:12345` (`IMC_PROXY_URL` to change it):
+
+```
+browser ──► dashboard /api/* ──► imc proxy :12345 ──► the index
 ```
 
-Every call unsets `IMC_DATA_DIR`, `IMC_CONFIG`, `IMC_VECTOR`, `IMC_EMBED_API_KEY` and
-`OPENAI_API_KEY` so the dashboard never accidentally targets a different project or
-calls a real embedding endpoint.
+The proxy is already running and already holds the state, so one request is one
+HTTP call instead of one subprocess. The browser still talks to the dashboard's
+own origin: the proxy holds the API keys and binds to localhost, and a
+dashboard that is opened from another machine must not need the proxy exposed.
+
+Start the proxy first:
+
+```bash
+imc claude start     # or: imc proxy serve --port 12345
+```
+
+If it is not answering, the pages say so instead of spinning on "Loading".
 
 ## Configuration reminder
 
@@ -95,8 +106,8 @@ The same check exists on the CLI: `imc doctor` lists `llm.model not set` as an i
 
 ## Run as a service (systemd)
 
-`deploy/imc-dashboard.service` is a ready unit. Adjust `WorkingDirectory`, `ExecStart`
-(node path) and `IMC_BIN`, then:
+`deploy/imc-dashboard.service` is a ready unit. Adjust `WorkingDirectory` and `ExecStart`
+(node path), then:
 
 ```bash
 sudo cp deploy/imc-dashboard.service /etc/systemd/system/

@@ -150,8 +150,10 @@ Indexing progress goes to stderr, so a long run is not a black box.
 
 ### Web dashboard
 
-A shadcn/ui dashboard over the same CLI: projects, search, trace, memory, the compression
-store, prompt captures, model mappings and the endpoint configuration.
+A shadcn/ui dashboard over the same index: projects, search, trace, memory, the
+compression store, prompt captures, model mappings and the endpoint configuration.
+The data is served by the proxy on port 12345 — the dashboard asks it over HTTP
+instead of starting a process per click.
 
 ```bash
 imc web     # opens http://localhost:4789, starting it if needed (--url for a remote host)

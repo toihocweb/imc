@@ -12,6 +12,7 @@ use axum::Router;
 use futures::StreamExt;
 
 pub mod chat;
+pub mod data;
 pub use crate::compression;
 pub mod mcp;
 pub mod messages;
@@ -178,6 +179,7 @@ pub fn app(db_path: PathBuf) -> Router {
         .merge(system::router())
         .merge(models::router())
         .merge(mcp::router())
+        .merge(data::router())
         .merge(messages::router())
         .merge(chat::router())
         .merge(crate::compression::router::router(db_path.clone()))

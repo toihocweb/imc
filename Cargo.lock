@@ -1152,6 +1152,7 @@ dependencies = [
  "dirs",
  "eventsource-stream",
  "futures",
+ "imc-cli-extra",
  "imc-core",
  "imc-embed",
  "imc-mcp",
@@ -1166,6 +1167,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tower-http 0.7.1",
 ]
 
