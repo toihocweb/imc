@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useProject } from "@/components/project-context";
+import { formatNumber } from "@/lib/format";
 
 export default function ProjectsPage() {
   const router = useRouter();
@@ -97,19 +98,19 @@ export default function ProjectsPage() {
 
                   <div className="grid grid-cols-4 gap-1 rounded-lg bg-muted/30 p-2.5 text-center text-xs">
                     <div>
-                      <div className="font-mono font-semibold text-foreground">{p.counts.files}</div>
+                      <div className="font-mono font-semibold text-foreground">{formatNumber(p.counts.files)}</div>
                       <div className="text-[10px] text-muted-foreground">Files</div>
                     </div>
                     <div>
-                      <div className="font-mono font-semibold text-foreground">{p.counts.symbols}</div>
+                      <div className="font-mono font-semibold text-foreground">{formatNumber(p.counts.symbols)}</div>
                       <div className="text-[10px] text-muted-foreground">Symbols</div>
                     </div>
                     <div>
-                      <div className="font-mono font-semibold text-foreground">{p.counts.edges}</div>
+                      <div className="font-mono font-semibold text-foreground">{formatNumber(p.counts.edges)}</div>
                       <div className="text-[10px] text-muted-foreground">Edges</div>
                     </div>
                     <div>
-                      <div className="font-mono font-semibold text-foreground">{p.counts.chunks}</div>
+                      <div className="font-mono font-semibold text-foreground">{formatNumber(p.counts.chunks)}</div>
                       <div className="text-[10px] text-muted-foreground">Chunks</div>
                     </div>
                   </div>
@@ -188,10 +189,10 @@ export default function ProjectsPage() {
                       <TableCell className="max-w-[200px] truncate font-mono text-muted-foreground">
                         {p.path}
                       </TableCell>
-                      <TableCell className="text-right font-mono">{p.counts.files}</TableCell>
-                      <TableCell className="text-right font-mono">{p.counts.symbols}</TableCell>
-                      <TableCell className="text-right font-mono">{p.counts.edges}</TableCell>
-                      <TableCell className="text-right font-mono">{p.counts.chunks}</TableCell>
+                      <TableCell className="text-right font-mono">{formatNumber(p.counts.files)}</TableCell>
+                      <TableCell className="text-right font-mono">{formatNumber(p.counts.symbols)}</TableCell>
+                      <TableCell className="text-right font-mono">{formatNumber(p.counts.edges)}</TableCell>
+                      <TableCell className="text-right font-mono">{formatNumber(p.counts.chunks)}</TableCell>
                       <TableCell className="text-right font-mono">{p.db_size_mb.toFixed(1)} MB</TableCell>
                       <TableCell className="text-center">
                         <Link

@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Trash2, Plus, RefreshCw } from "lucide-react";
+import { formatNumber } from "@/lib/format";
 
 interface Mappings {
   path: string;
@@ -150,7 +151,7 @@ export default function ModelMapPage() {
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <div>
             <CardTitle className="text-lg">Active mappings</CardTitle>
-            <CardDescription>{rows.length} mapping(s)</CardDescription>
+            <CardDescription>{formatNumber(rows.length)} mapping(s)</CardDescription>
           </div>
           <Button variant="outline" size="sm" onClick={load} disabled={busy}>
             <RefreshCw className="mr-1.5 h-4 w-4" />

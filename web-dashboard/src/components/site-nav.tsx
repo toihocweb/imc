@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import {
   Boxes,
   LayoutDashboard,
+  Layers,
   Search,
   Network,
   Cpu,
@@ -22,14 +23,12 @@ import {
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useProject } from "@/components/project-context";
+import { formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Overview", icon: LayoutDashboard },
-  { href: "/search", label: "Search", icon: Search },
-  { href: "/trace", label: "Trace", icon: Network },
-  { href: "/compression", label: "Compression", icon: Cpu },
-  { href: "/memory", label: "Memory", icon: Brain },
+  { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/search", label: "Studio", icon: Layers },
   { href: "/projects", label: "Projects", icon: FolderGit2 },
 ];
 
@@ -78,7 +77,7 @@ export function SiteNav() {
             </div>
             <div className="flex flex-col">
               <div className="flex items-center gap-1.5 leading-none">
-                <span className="font-bold text-sm tracking-tight text-foreground">imc</span>
+                <span className="font-bold text-sm tracking-tight text-foreground">Dashboard</span>
                 <span className="rounded bg-primary/15 px-1 py-0.2 text-[10px] font-semibold text-primary">
                   v0.2
                 </span>
@@ -100,7 +99,7 @@ export function SiteNav() {
               >
                 {projects.map((p) => (
                   <option key={p.id} value={p.path}>
-                    {p.name} ({p.counts.files} files)
+                    {p.name} ({formatNumber(p.counts.files)} files)
                   </option>
                 ))}
               </select>

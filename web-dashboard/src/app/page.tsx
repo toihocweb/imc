@@ -24,6 +24,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useProject } from "@/components/project-context";
+import { formatNumber } from "@/lib/format";
 
 export default function Home() {
   const router = useRouter();
@@ -318,19 +319,19 @@ export default function Home() {
 
                     <div className="grid grid-cols-4 gap-1 rounded-lg bg-muted/30 p-2 text-center text-xs">
                       <div>
-                        <div className="font-mono font-semibold text-foreground">{p.counts.files}</div>
+                        <div className="font-mono font-semibold text-foreground">{formatNumber(p.counts.files)}</div>
                         <div className="text-[10px] text-muted-foreground">Files</div>
                       </div>
                       <div>
-                        <div className="font-mono font-semibold text-foreground">{p.counts.symbols}</div>
+                        <div className="font-mono font-semibold text-foreground">{formatNumber(p.counts.symbols)}</div>
                         <div className="text-[10px] text-muted-foreground">Symbols</div>
                       </div>
                       <div>
-                        <div className="font-mono font-semibold text-foreground">{p.counts.edges}</div>
+                        <div className="font-mono font-semibold text-foreground">{formatNumber(p.counts.edges)}</div>
                         <div className="text-[10px] text-muted-foreground">Edges</div>
                       </div>
                       <div>
-                        <div className="font-mono font-semibold text-foreground">{p.counts.chunks}</div>
+                        <div className="font-mono font-semibold text-foreground">{formatNumber(p.counts.chunks)}</div>
                         <div className="text-[10px] text-muted-foreground">Chunks</div>
                       </div>
                     </div>

@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatNumber } from "@/lib/format";
 
 interface Project {
   id: string;
@@ -130,7 +131,7 @@ export default function ProjectDetail({ id }: { id: string }) {
           <Badge variant="secondary" className="text-[10px]">{node.type}</Badge>
           <span className="font-mono text-sm">{node.name}</span>
           <span className="text-xs text-muted-foreground">
-            {node.file}:{node.line}
+            {node.file}:{formatNumber(node.line)}
           </span>
         </div>
         {kids.map((k) => renderTree(k, depth + 1))}
@@ -184,7 +185,7 @@ export default function ProjectDetail({ id }: { id: string }) {
         <TabsList>
           <TabsTrigger value="search">Search</TabsTrigger>
           <TabsTrigger value="trace">Trace</TabsTrigger>
-          <TabsTrigger value="memory">Memory ({memories.length})</TabsTrigger>
+          <TabsTrigger value="memory">Memory ({formatNumber(memories.length)})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="search" className="space-y-4">
@@ -198,12 +199,12 @@ export default function ProjectDetail({ id }: { id: string }) {
           </form>
           {hits.length > 0 && (
             <Card>
-              <CardHeader><CardTitle>Results ({hits.length})</CardTitle></CardHeader>
+              <CardHeader><CardTitle>Results ({formatNumber(hits.length)})</CardTitle></CardHeader>
               <CardContent className="space-y-4">
                 {hits.map((h, i) => (
                   <div key={i} className="border-b pb-4 last:border-0">
                     <div className="flex justify-between items-start gap-2">
-                      <div className="font-mono text-sm break-all">{h.file}:{h.start_line}-{h.end_line}</div>
+                      <div className="font-mono text-sm break-all">{h.file}:{formatNumber(h.start_line)}-{formatNumber(h.end_line)}</div>
                       <Badge variant="secondary">{h.source}</Badge>
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
@@ -249,7 +250,7 @@ export default function ProjectDetail({ id }: { id: string }) {
                       <div className="flex gap-2 items-center flex-wrap">
                         <Badge variant="secondary">{m.mem_type}</Badge>
                         <Badge variant="outline" className="text-[10px]">{m.category}</Badge>
-                        <span className="text-xs text-muted-foreground">source={m.source} · used {m.use_count}× · imp {m.importance}</span>
+                        <span className="text-xs text-muted-foreground">source={m.source} · used {formatNumber(m.use_count)}× · imp {m.importance}</span>
                       </div>
                       <div className="text-sm mt-1">{m.content}</div>
                     </div>

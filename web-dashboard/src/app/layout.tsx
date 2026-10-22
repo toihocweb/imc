@@ -7,8 +7,8 @@ import { SiteNav } from "@/components/site-nav";
 import { ConfigBanner } from "@/components/config-banner";
 
 export const metadata: Metadata = {
-  title: "imc Dashboard",
-  description: "IndexMyCode dashboard - code intelligence for coding agents",
+  title: "Dashboard",
+  description: "Code intelligence dashboard for coding agents",
 };
 
 export const viewport: Viewport = {

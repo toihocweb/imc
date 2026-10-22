@@ -1,9 +1,12 @@
 "use client";
+
 import { useEffect, useState } from "react";
+import { Terminal, Trash2, Power, Eye, X, Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatNumber, formatBytes } from "@/lib/format";
 
 interface CaptureInfo {
   id: string;
@@ -27,6 +30,7 @@ export default function CapturesPage() {
   const [payload, setPayload] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = async () => {
     try {
@@ -82,17 +86,25 @@ export default function CapturesPage() {
     }
   };
 
+  const copyPayload = () => {
+    if (!payload) return;
+    navigator.clipboard.writeText(payload);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   const fmtTime = (sec: number) =>
-    sec ? new Date(sec * 1000).toLocaleString("vi-VN", { hour12: false }) : "—";
+    sec ? new Date(sec * 1000).toLocaleString("en-US", { hour12: false }) : "—";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-6xl mx-auto">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Prompt capture</h1>
-          <p className="text-sm text-muted-foreground">
-            Lưu nguyên payload mà proxy gửi lên model — system prompt, tools, memory block,
-            tool result. Bật để xem agent thực sự gửi gì.
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl flex items-center gap-2">
+            <Terminal className="h-6 w-6 text-primary" /> Prompt Captures
+          </h1>
+          <p className="text-xs sm:text-sm text-muted-foreground">
+            Raw payload logging for upstream LLM requests: system prompt, tool schemas, memory injections, and tool results.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -100,95 +112,117 @@ export default function CapturesPage() {
             variant={status?.enabled ? "destructive" : "default"}
             onClick={() => act({ action: status?.enabled ? "off" : "on" })}
             disabled={busy}
+            className="text-xs h-8 cursor-pointer gap-1.5"
           >
-            {status?.enabled ? "Tắt capture" : "Bật capture"}
+            <Power className="h-3.5 w-3.5" />
+            {status?.enabled ? "Disable Capture" : "Enable Capture"}
           </Button>
           <Button
             variant="outline"
             onClick={() => act({ action: "clear" })}
             disabled={busy || captures.length === 0}
+            className="text-xs h-8 cursor-pointer gap-1.5"
           >
-            Xoá tất cả
+            <Trash2 className="h-3.5 w-3.5" />
+            Clear All
           </Button>
         </div>
       </div>
 
       {error && (
-        <Card>
-          <CardContent className="pt-6 text-destructive">{error}</CardContent>
+        <Card className="border-destructive/40 bg-destructive/10 text-destructive">
+          <CardContent className="p-4 text-xs font-medium">{error}</CardContent>
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center justify-between">
-            <span>Trạng thái</span>
+      <Card className="border-border/80 shadow-xs">
+        <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
+          <CardTitle className="text-sm font-semibold flex items-center justify-between">
+            <span>Capture Engine Status</span>
             {status?.enabled ? (
-              <Badge>đang bật</Badge>
+              <Badge className="bg-emerald-500/15 text-emerald-500 border-emerald-500/20">
+                Active (Recording)
+              </Badge>
             ) : (
-              <Badge variant="secondary">đang tắt</Badge>
+              <Badge variant="secondary">Disabled</Badge>
             )}
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-1 text-sm">
-          <div className="flex justify-between gap-4">
-            <span className="text-muted-foreground">Đã lưu</span>
-            <span className="font-mono">{status?.captures ?? captures.length} payload</span>
+        <CardContent className="p-5 space-y-2 text-xs">
+          <div className="flex justify-between gap-4 border-b border-border/40 pb-2">
+            <span className="text-muted-foreground">Recorded Payloads</span>
+            <span className="font-mono font-semibold text-foreground">
+              {formatNumber(status?.captures ?? captures.length)} entries
+            </span>
           </div>
-          <div className="flex justify-between gap-4">
-            <span className="text-muted-foreground">Thư mục</span>
-            <span className="font-mono text-xs break-all text-right">{status?.dir}</span>
+          <div className="flex justify-between gap-4 border-b border-border/40 pb-2">
+            <span className="text-muted-foreground">Storage Directory</span>
+            <span className="font-mono text-muted-foreground break-all text-right">{status?.dir}</span>
           </div>
-          <p className="text-xs text-muted-foreground pt-2">
-            Tương đương CLI: <code className="font-mono">imc capture on|off|list|show|rm|clear</code>.
-            Bật qua web có hiệu lực ngay — proxy đọc trạng thái ở mỗi request.
+          <p className="text-[11px] text-muted-foreground pt-1">
+            Equivalent CLI commands: <code className="font-mono bg-muted px-1.5 py-0.5 rounded">imc capture on|off|list|show|rm|clear</code>.
+            Takes effect immediately without restarting the proxy.
           </p>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Captured prompts ({captures.length})</CardTitle>
+      <Card className="border-border/80 shadow-xs">
+        <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
+          <CardTitle className="text-sm font-semibold flex items-center justify-between">
+            <span>Captured Payloads ({formatNumber(captures.length)})</span>
+          </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0 overflow-x-auto scroll-thin">
           {captures.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              Chưa có gì. Bật capture rồi gửi một request qua proxy là sẽ có.
-            </p>
+            <div className="p-8 text-center text-xs text-muted-foreground">
+              No captures recorded yet. Enable capture and send a request through the proxy to inspect payloads.
+            </div>
           ) : (
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead className="whitespace-nowrap">ID</TableHead>
-                  <TableHead className="whitespace-nowrap">Time</TableHead>
-                  <TableHead className="whitespace-nowrap">Model</TableHead>
-                  <TableHead className="whitespace-nowrap">Size</TableHead>
+                <TableRow className="text-xs">
+                  <TableHead className="w-24">ID</TableHead>
+                  <TableHead>Timestamp</TableHead>
+                  <TableHead>Model</TableHead>
+                  <TableHead className="text-right">Payload Size</TableHead>
                   <TableHead>Preview</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Actions</TableHead>
+                  <TableHead className="text-right w-24">Actions</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody>
+              <TableBody className="text-xs">
                 {captures.map((c) => (
-                  <TableRow key={c.id}>
-                    <TableCell className="font-mono text-xs">{c.id}</TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">{fmtTime(c.modified)}</TableCell>
-                    <TableCell className="font-mono text-xs">{c.model || "—"}</TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">{c.size} B</TableCell>
-                    <TableCell className="max-w-[320px] truncate text-xs text-muted-foreground">
+                  <TableRow key={c.id} className="hover:bg-muted/40 transition-colors">
+                    <TableCell className="font-mono font-medium text-foreground">#{c.id}</TableCell>
+                    <TableCell className="whitespace-nowrap font-mono text-muted-foreground text-[11px]">
+                      {fmtTime(c.modified)}
+                    </TableCell>
+                    <TableCell className="font-mono">{c.model || "—"}</TableCell>
+                    <TableCell className="whitespace-nowrap text-right font-mono">
+                      {formatBytes(c.size)}
+                    </TableCell>
+                    <TableCell className="max-w-[280px] truncate text-muted-foreground font-mono text-[11px]">
                       {c.preview || "—"}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-right">
-                      <Button variant="ghost" size="sm" onClick={() => view(c.id)}>
-                        View
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => act({ action: "delete", id: c.id })}
-                        disabled={busy}
-                      >
-                        Delete
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => view(c.id)}
+                          className="h-7 px-2 text-xs cursor-pointer"
+                        >
+                          <Eye className="h-3.5 w-3.5 mr-1" /> View
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => act({ action: "delete", id: c.id })}
+                          disabled={busy}
+                          className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive cursor-pointer"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -199,22 +233,40 @@ export default function CapturesPage() {
       </Card>
 
       {selected && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center justify-between">
-              <span>{selected}</span>
-              <Button variant="ghost" size="sm" onClick={() => setSelected(null)}>
-                Đóng
-              </Button>
+        <Card className="border-border/80 shadow-xs">
+          <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
+            <CardTitle className="text-sm font-semibold flex items-center justify-between">
+              <span className="font-mono">Payload Inspection #{selected}</span>
+              <div className="flex items-center gap-2">
+                {payload && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={copyPayload}
+                    className="h-7 text-xs gap-1 cursor-pointer"
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? "Copied" : "Copy JSON"}
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelected(null)}
+                  className="h-7 w-7 p-0 cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-4">
             {payload ? (
-              <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-[11px] leading-relaxed">
+              <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap rounded-lg bg-background/60 border border-border p-4 font-mono text-xs leading-relaxed text-foreground scroll-thin">
                 {payload}
               </pre>
             ) : (
-              <p className="text-sm text-muted-foreground">Đang tải…</p>
+              <p className="text-xs text-muted-foreground italic">Loading payload content...</p>
             )}
           </CardContent>
         </Card>

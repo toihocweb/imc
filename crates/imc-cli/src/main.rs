@@ -1559,17 +1559,16 @@ fn main() -> Result<()> {
                 // same as one started in the background. Without it, a
                 // foreground proxy was invisible to the two commands that
                 // exist to manage it.
-                // A port that is already taken is a second proxy trying to
-                // start. Say so instead of letting the bind fail with
-                // something the caller has to decode — and before the
-                // state file is touched, because that file is the record
-                // of the proxy that is already serving.
-                if imc_cli::claude::port_in_use(*port) {
-                    eprintln!(
-                        "[imc proxy] port {port} is already in use — another proxy is serving there"
-                    );
-                    std::process::exit(1);
-                }
+                // The bind is the test. A port that is taken fails there,
+                // with the real reason, and the state file is left alone —
+                // it is the record of the proxy that is already serving.
+                //
+                // (A "is the port in use?" probe before the bind was wrong
+                // twice over: it guessed instead of asking the kernel, and
+                // a socket in TIME_WAIT answers a connect long after the
+                // port is bindable again. So a proxy that had just died
+                // could not be replaced — the new one refused to start
+                // because the old one's port still answered.)
                 if let Err(e) = imc_cli::claude::write_proxy_state(&cfg, *port, std::process::id())
                 {
                     eprintln!("[imc proxy] could not write the state file: {e:#}");

@@ -47,17 +47,17 @@ export function ConfigBanner() {
       <div className="mx-auto flex max-w-[1400px] items-start gap-3 px-3 py-2.5 sm:px-6 lg:px-8">
         <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
         <div className="flex-1 text-sm">
-          <span className="font-medium">imc chưa sẵn sàng trả lời bằng LLM.</span>{" "}
+          <span className="font-medium">Upstream LLM is not fully configured.</span>{" "}
           <span className="text-muted-foreground">
-            Thiếu cấu hình: <code className="font-mono text-xs">{missing}</code>. Search vẫn
-            chạy (raw hits), nhưng các lệnh cần LLM sẽ lỗi.
+            Missing: <code className="font-mono text-xs">{missing}</code>. Search returns
+            raw hits, but LLM reranking and automated reflection will be disabled.
           </span>
         </div>
         <Link
           href="/settings"
           className="shrink-0 rounded-md border border-amber-500/60 px-3 py-1 text-sm font-medium hover:bg-amber-500/20"
         >
-          Cấu hình
+          Configure
         </Link>
         <button
           type="button"

@@ -231,6 +231,11 @@ pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
     // A proxy that is already serving is the proxy. Starting a second one
     // on the same port would fail to bind and — worse — overwrite the
     // state file that says where the running one is.
+    //
+    // "Serving" means the process is alive, not that the port answers: a
+    // socket in TIME_WAIT answers a connect after the process that owned it
+    // is gone, and treating that as "a proxy is running" stops the real one
+    // from ever being started.
     if let Some(status) = proxy_status(cfg) {
         if status.get("running").and_then(|v| v.as_bool()).unwrap_or(false) {
             let port_now = status
@@ -238,7 +243,12 @@ pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
                 .and_then(|s| s.get("port"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(port as u64) as u16;
-            if port_now == port {
+            let pid = status
+                .get("state")
+                .and_then(|s| s.get("pid"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            if port_now == port && pid > 0 && process_alive(pid as u32) {
                 return Ok(status.get("state").cloned().unwrap_or(json!({})));
             }
         }
@@ -316,6 +326,11 @@ pub fn clear_proxy_state(cfg: &Config) {
     }
 }
 
+/// True when a process with this pid exists.
+fn process_alive(pid: u32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists()
+}
+
 /// True when the running proxy was started from an older build.
 fn daemon_is_stale(cfg: &Config, exe: &std::path::Path) -> bool {
     let Some(status) = proxy_status(cfg) else {
@@ -373,11 +388,6 @@ pub fn proxy_status(cfg: &Config) -> Option<Value> {
     let state: Value = serde_json::from_str(&raw).ok()?;
     let port = state.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
     Some(json!({ "running": port_open(port), "state": state }))
-}
-
-/// True when something is already listening on the port.
-pub fn port_in_use(port: u16) -> bool {
-    port_open(port)
 }
 
 fn port_open(port: u16) -> bool {
