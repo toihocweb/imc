@@ -482,7 +482,7 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
   };
 
   return (
-    <div className="space-y-6 w-full animate-in fade-in duration-300">
+    <div className="w-full space-y-6 animate-in fade-in duration-200">
       {/* Top Header */}
       <div className="border-b border-border/80 pb-4">
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
@@ -1293,9 +1293,26 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
   );
 }
 
+function StudioFallback() {
+  return (
+    <div className="w-full space-y-6 animate-in fade-in duration-200">
+      <div className="border-b border-border/80 pb-4">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          Code Intelligence Studio
+        </h1>
+        <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+          Unified workspace for retrieval, call-tree tracing, context compression, and durable memory.
+        </p>
+      </div>
+      <div className="h-11 w-full rounded-xl bg-muted/60 border border-border animate-pulse" />
+      <div className="h-44 w-full rounded-xl bg-card border border-border/80 animate-pulse" />
+    </div>
+  );
+}
+
 export default function WorkbenchPage({ defaultTab }: { defaultTab?: WorkbenchTab }) {
   return (
-    <Suspense fallback={<div className="text-xs text-muted-foreground">Loading studio...</div>}>
+    <Suspense fallback={<StudioFallback />}>
       <Workbench initialTab={defaultTab} />
     </Suspense>
   );

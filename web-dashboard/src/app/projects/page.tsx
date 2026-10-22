@@ -31,7 +31,7 @@ export default function ProjectsPage() {
   });
 
   return (
-    <div className="space-y-6 w-full animate-in fade-in duration-300">
+    <div className="w-full space-y-6 animate-in fade-in duration-200">
       {/* Header */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>

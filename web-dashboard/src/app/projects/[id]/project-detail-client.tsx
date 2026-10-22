@@ -152,7 +152,7 @@ export default function ProjectDetail({ id }: { id: string }) {
 
   const c = project.counts;
   return (
-    <div className="space-y-6 w-full animate-in fade-in duration-300">
+    <div className="w-full space-y-6 animate-in fade-in duration-200">
       <div className="flex items-start justify-between">
         <div>
           <Link href="/projects" className="text-sm text-primary hover:underline">← Projects</Link>

@@ -65,7 +65,7 @@ export default function Home() {
   };
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-300">
+    <div className="w-full space-y-6 animate-in fade-in duration-200">
       {/* Hero Section with Quick Search */}
       <div className="relative overflow-hidden rounded-2xl border border-border/80 bg-gradient-to-b from-card to-card/60 p-6 sm:p-8 lg:p-10 shadow-xs">
         <div className="absolute top-0 right-0 -mt-10 -mr-10 h-72 w-72 rounded-full bg-primary/10 blur-3xl pointer-events-none" />

@@ -80,6 +80,8 @@
   }
   html {
     -webkit-text-size-adjust: 100%;
+    scrollbar-gutter: stable;
+    overflow-y: scroll;
   }
   body {
     background-color: var(--background);

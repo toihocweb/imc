@@ -123,7 +123,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="space-y-6 w-full animate-in fade-in duration-300">
+    <div className="w-full space-y-6 animate-in fade-in duration-200">
       <div>
         <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Configuration & Settings</h1>
         <p className="text-xs sm:text-sm text-muted-foreground mt-1">
