@@ -744,6 +744,66 @@ async fn memory_stats(Query(q): Query<HashMap<String, String>>) -> Response {
 }
 
 // ---------------------------------------------------------------------------
+// GET|POST|DELETE /api/model-map
+// ---------------------------------------------------------------------------
+async fn model_map_get() -> Response {
+    use imc_proxy_types::config_store as cs;
+    let cfg = cs::read_config_from_disk();
+    let mappings = cfg.model_mappings.unwrap_or_default();
+    Json(json!({
+        "path": cs::config_file_path().display().to_string(),
+        "mappings": mappings,
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct ModelMapSetPayload {
+    from: String,
+    to: String,
+}
+
+async fn model_map_post(Json(payload): Json<ModelMapSetPayload>) -> Response {
+    use imc_proxy_types::config_store as cs;
+    let from = payload.from.trim();
+    let to = payload.to.trim();
+    if from.is_empty() || to.is_empty() {
+        return bad_request("from and to are required");
+    }
+    let mut cfg = cs::read_config_from_disk();
+    let mut mappings = cfg.model_mappings.unwrap_or_default();
+    mappings.insert(from.to_string(), to.to_string());
+    cfg.model_mappings = Some(mappings);
+    if let Err(e) = cs::write_config_to_disk(&cfg) {
+        return error(format!("failed to write config: {e}"));
+    }
+    cs::invalidate_config_cache();
+    model_map_get().await
+}
+
+#[derive(serde::Deserialize)]
+struct ModelMapRmPayload {
+    from: String,
+}
+
+async fn model_map_delete(Json(payload): Json<ModelMapRmPayload>) -> Response {
+    use imc_proxy_types::config_store as cs;
+    let from = payload.from.trim();
+    if from.is_empty() {
+        return bad_request("from is required");
+    }
+    let mut cfg = cs::read_config_from_disk();
+    let mut mappings = cfg.model_mappings.unwrap_or_default();
+    mappings.remove(from);
+    cfg.model_mappings = Some(mappings);
+    if let Err(e) = cs::write_config_to_disk(&cfg) {
+        return error(format!("failed to write config: {e}"));
+    }
+    cs::invalidate_config_cache();
+    model_map_get().await
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 pub fn router() -> Router {
@@ -757,6 +817,7 @@ pub fn router() -> Router {
         .route("/api/config", get(config_get).post(config_set))
         .route("/api/config/test", get(config_test))
         .route("/api/models", get(models))
+        .route("/api/model-map", get(model_map_get).post(model_map_post).delete(model_map_delete))
         .route("/api/compression/stats", get(compression_stats))
         .route("/api/compression", get(compression_list))
         .route("/api/compress", post(compress))

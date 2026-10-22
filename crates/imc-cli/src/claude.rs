@@ -366,21 +366,26 @@ fn daemon_is_stale(cfg: &Config, exe: &std::path::Path) -> bool {
 
 pub fn stop_proxy(cfg: &Config) -> Result<Option<u16>> {
     let p = state_path(cfg);
-    let Ok(raw) = std::fs::read_to_string(&p) else {
-        return Ok(None);
-    };
-    let state: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
-    let pid = state.get("pid").and_then(|v| v.as_i64());
-    let port = state.get("port").and_then(|v| v.as_u64()).map(|v| v as u16);
-    if let Some(pid) = pid {
-        let _ = std::process::Command::new("kill")
-            .arg(pid.to_string())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+    let mut stopped_port = None;
+    if let Ok(raw) = std::fs::read_to_string(&p) {
+        let state: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
+        let pid = state.get("pid").and_then(|v| v.as_i64());
+        let port = state.get("port").and_then(|v| v.as_u64()).map(|v| v as u16);
+        if let Some(pid) = pid {
+            let _ = std::process::Command::new("kill")
+                .arg(pid.to_string())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        stopped_port = port;
+        let _ = std::fs::remove_file(&p);
     }
-    std::fs::remove_file(&p).ok();
-    Ok(port)
+    let target_port = stopped_port.unwrap_or(12345);
+    if crate::web::kill_listener_on_port(target_port) {
+        stopped_port = Some(target_port);
+    }
+    Ok(stopped_port)
 }
 
 pub fn proxy_status(cfg: &Config) -> Option<Value> {

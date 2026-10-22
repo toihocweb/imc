@@ -175,7 +175,7 @@ pub fn stop_dashboard() -> bool {
     terminated
 }
 
-fn kill_listener_on_port(port: u16) -> bool {
+pub(crate) fn kill_listener_on_port(port: u16) -> bool {
     let mut killed = false;
     if let Ok(out) = Command::new("ss")
         .args(["-tulpnH", &format!("sport = :{port}")])
@@ -234,15 +234,23 @@ fn start(port: u16) -> Result<String> {
         }
     }
 
-    // 2. detached `next start`, straight from the app's own bin.
+    // 2. Start the proxy in the background. The proxy serves the embedded web dashboard
+    //    on port 4789 and 12345 with zero external dependencies (no Node.js required).
+    let cfg = imc_core::config::Config::default();
+    if let Ok(v) = crate::claude::start_proxy(&cfg, 12345) {
+        if wait_up(port, Duration::from_secs(5)) {
+            let pid = v.get("pid").and_then(|p| p.as_i64()).unwrap_or(0);
+            return Ok(format!("embedded dashboard via proxy (pid {pid})"));
+        }
+    }
+
+    // 3. Fallback: detached `next start` if a web-dashboard source checkout exists.
     let dir = candidate_dirs()
         .into_iter()
         .next()
         .ok_or_else(|| {
             anyhow!(
-                "dashboard directory not found — run `imc install` from a checkout to copy it to \
-~/.local/share/imc, or clone the repo and run `npm ci && npm run build` in web-dashboard/ \
-(or point {DIR_ENV} at an existing app)"
+                "dashboard service could not be started — run `imc` to start the background proxy and dashboard"
             )
         })?;
     let next_bin = dir.join("node_modules/next/dist/bin/next");
@@ -503,7 +511,7 @@ pub fn run(port: u16, no_open: bool, url: Option<String>) -> Result<()> {
             }
         }
     }
-    let started = if is_up(port) {
+    let started = if is_up(port) || wait_up(port, Duration::from_millis(1500)) {
         None
     } else {
         print!("dashboard not running on port {port} — starting… ");

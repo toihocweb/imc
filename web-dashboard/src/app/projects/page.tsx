@@ -138,7 +138,7 @@ export default function ProjectsPage() {
                     Call Tree
                   </button>
                   <Link
-                    href={`/projects/${p.id}`}
+                    href={`/projects/detail?id=${p.id}`}
                     className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                     title="View Project Chunks & Details"
                   >
@@ -196,7 +196,7 @@ export default function ProjectsPage() {
                       <TableCell className="text-right font-mono">{p.db_size_mb.toFixed(1)} MB</TableCell>
                       <TableCell className="text-center">
                         <Link
-                          href={`/projects/${p.id}`}
+                          href={`/projects/detail?id=${p.id}`}
                           className="text-xs text-primary font-medium hover:underline"
                         >
                           Details &rarr;

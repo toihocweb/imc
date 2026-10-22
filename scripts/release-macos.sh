@@ -66,6 +66,9 @@ fi
 OUT="dist"
 mkdir -p "$OUT"
 
+echo "==> building web dashboard static export"
+(cd web-dashboard && npm run build)
+
 for TARGET in aarch64-apple-darwin x86_64-apple-darwin; do
   ARCH="${TARGET%%-*}"
   echo "==> building ${TARGET}"

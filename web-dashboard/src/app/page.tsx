@@ -359,7 +359,7 @@ export default function Home() {
                       Call Tree
                     </button>
                     <Link
-                      href={`/projects/${p.id}`}
+                      href={`/projects/detail?id=${p.id}`}
                       className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                       title="Project Details"
                     >

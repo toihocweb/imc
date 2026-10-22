@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod messages;
 pub mod models;
 pub mod system;
+pub mod web;
 
 // ---------------------------------------------------------------------------
 // Shared response helpers
@@ -183,6 +184,7 @@ pub fn app(db_path: PathBuf) -> Router {
         .merge(messages::router())
         .merge(chat::router())
         .merge(crate::compression::router::router(db_path.clone()))
+        .fallback(web::static_handler)
         .layer(
             tower_http::trace::TraceLayer::new_for_http().make_span_with(
                 tower_http::trace::DefaultMakeSpan::new().include_headers(false),
@@ -193,6 +195,7 @@ pub fn app(db_path: PathBuf) -> Router {
                 .allow_methods([
                     axum::http::Method::GET,
                     axum::http::Method::POST,
+                    axum::http::Method::DELETE,
                     axum::http::Method::OPTIONS,
                 ])
                 .max_age(Duration::from_secs(600)),
@@ -230,6 +233,21 @@ pub fn serve(port: u16) -> Result<()> {
             // cannot be resolved afterwards.
             let ccr_db = crate::compression::context::ccr_db_path();
             let app = app(ccr_db);
+
+            // Also serve on web dashboard default port (4789) if available and distinct
+            let web_port: u16 = 4789;
+            if port != web_port {
+                if let Ok(web_listener) = tokio::net::TcpListener::bind(format!("127.0.0.1:{web_port}")).await {
+                    let web_app = app.clone();
+                    log.info(&format!("Starting up embedded web dashboard on 127.0.0.1:{web_port}..."));
+                    tokio::spawn(async move {
+                        let _ = axum::serve(web_listener, web_app)
+                            .with_graceful_shutdown(shutdown_signal())
+                            .await;
+                    });
+                }
+            }
+
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;
