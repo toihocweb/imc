@@ -18,8 +18,6 @@ import {
   ChevronDown,
   Menu,
   X,
-  Check,
-  Copy,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useProject } from "@/components/project-context";
@@ -47,19 +45,12 @@ export function SiteNav() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [copiedCli, setCopiedCli] = useState(false);
   const { projects, selectedPath, setSelectedPath } = useProject();
 
   useEffect(() => {
     setMobileOpen(false);
     setMoreOpen(false);
   }, [pathname]);
-
-  const copyCliCommand = () => {
-    navigator.clipboard.writeText("imc claude");
-    setCopiedCli(true);
-    setTimeout(() => setCopiedCli(false), 2000);
-  };
 
   const isMoreActive = MORE_ITEMS.some((item) => isActive(pathname, item.href));
 
@@ -182,27 +173,6 @@ export function SiteNav() {
 
         {/* Right utilities */}
         <div className="flex items-center gap-2">
-          {/* Quick copy command for agent */}
-          <button
-            type="button"
-            onClick={copyCliCommand}
-            title="Copy terminal command: imc claude"
-            className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-border/80 bg-card/60 px-2.5 py-1 text-[11px] font-mono text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
-          >
-            {copiedCli ? (
-              <>
-                <Check className="h-3 w-3 text-emerald-500" />
-                <span className="text-emerald-500">Copied!</span>
-              </>
-            ) : (
-              <>
-                <Terminal className="h-3 w-3 text-primary" />
-                <span>imc claude</span>
-                <Copy className="h-2.5 w-2.5 opacity-60 ml-0.5" />
-              </>
-            )}
-          </button>
-
           <ThemeToggle />
 
           {/* Mobile hamburger */}
