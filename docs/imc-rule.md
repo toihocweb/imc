@@ -33,11 +33,13 @@ index, and a durable memory store. Prefer `imc` over blind Read/Grep.
 hybrid retrieval plus call-graph neighborhood plus project memories, budgeted into tokens.
 Use this instead of stacking manual search, read, and context calls.
 - `--budget 12000` — token budget for the whole bundle (default 6000).
+- `--rerank` — use LLM to score and rerank candidate chunks before packing.
 - `--no-memories` — leave memories out if only code is needed.
 - `--json` — machine-readable bundle.
 
 **`imc search "<query>"`** — hybrid retrieval (BM25 + vector) over codebase chunks.
 - `--raw` — **Recommended for agents**: returns raw ranked chunks directly without LLM summarization. Read the top 5, never stop at hit 1.
+- `--rerank` — use LLM to score and rerank candidate chunks, outputting ranked code directly.
 - `--concise` — one line per hit (~8x fewer tokens) to survey matches quickly.
 - `-l 20` — how many chunks to retrieve (10 by default).
 - `--offset N` — page through a long result set.

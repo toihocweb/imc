@@ -109,7 +109,10 @@ enum Command {
         /// Use --no-on-miss to disable.
         #[arg(long = "no-on-miss")]
         no_on_miss: bool,
-        },
+        /// Rerank candidate chunks using the configured LLM.
+        #[arg(long)]
+        rerank: bool,
+    },
     /// Show definitions/callees/callers for a symbol.
     /// Compress text using the proxy compression engine (BM25/graph/CCR).
     #[command(name = "compress")]
@@ -148,6 +151,9 @@ enum Command {
         /// Target project by registered id or name.
         #[arg(long, short = 'p')]
         project: Option<String>,
+        /// Rerank candidate chunks using the configured LLM.
+        #[arg(long)]
+        rerank: bool,
     },
     /// Print the original behind a compression handle.
     #[command(name = "retrieve")]
@@ -939,6 +945,7 @@ fn main() -> Result<()> {
             raw,
             project,
             no_on_miss,
+            rerank,
         } => {
             let root = root_with_project_ref(&cfg, &root, project.as_deref())?;
             let db = cfg.project_db(&root);
@@ -961,18 +968,31 @@ fn main() -> Result<()> {
             )
             .clamp(1, 20) as usize;
             let want = effective.clamp(1, 50);
-            // One extra hit tells us whether there is more, so the output can
-            // steer the caller instead of silently slicing the result set.
+            let fetch_limit = if *rerank { (want * 2).clamp(10, 30) } else { want + offset + 1 };
             let opts = imc_search::SearchOptions {
-                limit: want + offset + 1,
+                limit: fetch_limit,
                 vector: !*no_vector,
             };
             let mut hits = imc_search::search(&store, embedder.as_deref(), &search_query, &opts)?;
+
+            if *rerank && !hits.is_empty() {
+                match imc_cli::agentic::rerank(&cfg, &search_query, &hits)? {
+                    imc_cli::agentic::RerankOutcome::Reranked(reranked) => {
+                        if !reranked.is_empty() {
+                            hits = reranked;
+                        }
+                    }
+                    imc_cli::agentic::RerankOutcome::Unavailable(why) => {
+                        eprintln!("[imc search] LLM reranking unavailable ({why}); showing raw hits");
+                    }
+                }
+            }
+
             let has_more = hits.len() > want + offset;
             hits.truncate(want + offset);
             let skipped = (*offset).min(hits.len());
             hits.drain(0..skipped);
-            if cli.json || *raw {
+            if *rerank || cli.json || *raw {
                 if cli.json {
                     println!("{}", serde_json::to_string_pretty(&hits)?);
                 } else if *concise {
@@ -1085,6 +1105,7 @@ fn main() -> Result<()> {
             no_memories,
             graph_facts,
             project,
+            rerank,
         } => {
             let root = root_with_project_ref(&cfg, &root, project.as_deref())?;
             let db = cfg.project_db(&root);
@@ -1103,6 +1124,7 @@ fn main() -> Result<()> {
                 vector: !*no_vector,
                 memories: !*no_memories,
                 graph_facts: *graph_facts,
+                rerank: *rerank,
             };
             let pack = imc_cli::pack::build(
                 &store,

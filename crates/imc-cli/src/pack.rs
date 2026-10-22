@@ -112,6 +112,8 @@ pub struct PackOptions {
     pub memories: bool,
     /// Graph facts per symbol (0 disables graph expansion).
     pub graph_facts: usize,
+    /// Use LLM to rerank candidate chunks before packing into budget.
+    pub rerank: bool,
 }
 
 impl Default for PackOptions {
@@ -122,6 +124,7 @@ impl Default for PackOptions {
             vector: true,
             memories: true,
             graph_facts: 4,
+            rerank: false,
         }
     }
 }
@@ -166,15 +169,27 @@ pub fn build(
     }
 
     // --- retrieval --------------------------------------------------------
-    let hits: Vec<SearchHit> = imc_search::search(
+    let candidate_limit = if opts.rerank { opts.candidates * 2 } else { opts.candidates };
+    let mut hits: Vec<SearchHit> = imc_search::search(
         store,
         embedder,
         query,
         &imc_search::SearchOptions {
-            limit: opts.candidates,
+            limit: candidate_limit,
             vector: opts.vector,
         },
     )?;
+
+    if opts.rerank && !hits.is_empty() {
+        let cfg = imc_core::config::Config::default();
+        if let Ok(crate::agentic::RerankOutcome::Reranked(reranked)) =
+            crate::agentic::rerank(&cfg, query, &hits)
+        {
+            if !reranked.is_empty() {
+                hits = reranked;
+            }
+        }
+    }
 
     let graph_budget = (opts.budget as f64 * GRAPH_SHARE) as usize;
     let mut used = memory_tokens;
