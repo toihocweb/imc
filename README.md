@@ -14,9 +14,8 @@ it?"*.
 One Rust binary. No Python runtime. No vector database. One SQLite file per project.
 
 ```bash
-imc search "authentication flow"      # answer with path:line citations
-imc trace AuthController --callers    # blast radius before you rename
-imc pack "how does login work"        # one token-budgeted context bundle
+cd your-project
+imc claude          # 1 command: indexes repo, starts proxy, wires rules & launches Claude
 ```
 
 ---
@@ -39,7 +38,6 @@ imc pack "how does login work"        # one token-budgeted context bundle
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toihocweb/imc/master/install.sh | bash
-imc .
 ```
 
 From source:
@@ -62,18 +60,26 @@ compiled from source). The prebuilt installer needs neither.
 
 ## Quick start
 
+In any project repository, run:
+
 ```bash
-imc config setup       # configure your LLM/embedding endpoint (interactive)
-imc .                  # index current repo (incremental; --force rebuilds)
-imc                    # start background services (proxy on 12345 + dashboard on 4789)
-imc web                # open the web dashboard in your browser
+imc claude
 ```
+
+That's it. A single command handles everything:
+1. **Indexes the codebase** incrementally with Tree-sitter (AST symbols, call-graph edges, and search chunks).
+2. **Starts background services**: reverse proxy on `http://127.0.0.1:12345` (CCR context compression) and embedded web dashboard on `http://localhost:4789`.
+3. **Wires Claude Code**: configures `.claude/settings.local.json` to proxy traffic and writes `.claude/rules/imc-rule.md`.
+4. **Hands terminal to Claude Code**: passes through all arguments seamlessly (e.g. `imc claude --dangerously-skip-permissions`).
+
+### Direct CLI queries (optional)
 
 Query your codebase directly from the CLI:
 ```bash
-imc search "how are sessions invalidated"
-imc trace SessionStore.rotate --callers
-imc pack "why is login slow" --budget 6000
+imc search "how are sessions invalidated"   # search with citations
+imc trace SessionStore.rotate --callers     # blast radius before you rename
+imc pack "why is login slow" --budget 6000  # packed context bundle
+imc web                                     # open embedded web dashboard
 ```
 
 ---
@@ -295,6 +301,7 @@ list lives.
 
 | Command | What it does |
 |---|---|
+| `imc claude` | **One-shot**: auto-indexes repo, starts proxy & dashboard, wires rules, and launches Claude Code. |
 | `imc [path]` / `imc .` | Index incrementally; `--force` rebuilds. |
 | `imc search "<query>"` | Hybrid retrieval (BM25 + vector + graph) with citations. `--raw` for chunks only. |
 | `imc trace <symbol>` | Call hierarchy: callees or blast radius (`--callers`), for symbols and HTTP routes. |
