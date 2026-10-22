@@ -12,3 +12,7 @@ CLAUDE.md
 *.log
 scripts/repo_guard.local.*
 usage.json
+node_modules/
+.next/
+dist/
+.DS_Store
