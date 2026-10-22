@@ -6,9 +6,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/toihocweb/imc/master/install.sh | bash
 #
 # What it does:
-#   1. Detects OS + arch (linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64)
-#   2. Downloads the latest GitHub Release binary (or builds from source as fallback)
-#   3. Installs to ~/.local/bin (or /usr/local/bin when writable)
+#   1. Detects OS + arch (linux-x86_64, linux-aarch64, darwin-x86_64, darwin-aarch64)
+#   2. Downloads pre-built binary from GitHub Releases
+#   3. Installs to ~/.local/bin (or $IMC_INSTALL_DIR)
 #   4. Creates ~/.imc_config.yaml if missing
 #
 set -euo pipefail
@@ -41,25 +41,38 @@ detect_platform() {
     PLATFORM="${os}-${arch}"
 }
 
-# Try to resolve the latest release asset URL from the GitHub API.
+# Resolve release asset download URL directly from GitHub Releases.
+# Supports setting IMC_VERSION (e.g. v0.2.1) or defaults to latest release.
 resolve_release_url() {
-    local tag url
-    tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-        | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)" || true
+    local version="${IMC_VERSION:-latest}"
+    local url
 
-    if [[ -z "${tag:-}" ]]; then
-        warn "no GitHub Release found; will build from source instead"
-        return 1
+    if [[ "$version" == "latest" ]]; then
+        url="https://github.com/${REPO}/releases/latest/download/${BIN_NAME}-${PLATFORM}"
+    else
+        url="https://github.com/${REPO}/releases/download/${version}/${BIN_NAME}-${PLATFORM}"
     fi
 
-    # Asset name convention: imc-<platform> (e.g. imc-linux-x86_64)
-    url="https://github.com/${REPO}/releases/download/${tag}/${BIN_NAME}-${PLATFORM}"
+    # Check direct download URL (does not consume GitHub API rate limits)
     if curl -fsSL --head "$url" >/dev/null 2>&1; then
         echo "$url"
         return 0
     fi
 
-    warn "release asset ${BIN_NAME}-${PLATFORM} not found for tag ${tag}"
+    # Fallback: try GitHub API if latest redirection failed
+    local tag
+    tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)" || true
+
+    if [[ -n "${tag:-}" ]]; then
+        url="https://github.com/${REPO}/releases/download/${tag}/${BIN_NAME}-${PLATFORM}"
+        if curl -fsSL --head "$url" >/dev/null 2>&1; then
+            echo "$url"
+            return 0
+        fi
+    fi
+
+    warn "pre-built binary '${BIN_NAME}-${PLATFORM}' not found on GitHub Releases"
     return 1
 }
 
@@ -180,14 +193,18 @@ main() {
     info "platform: $PLATFORM"
 
     if ! install_from_release; then
-        build_from_source
+        if [[ "${IMC_BUILD_FROM_SOURCE:-0}" == "1" ]]; then
+            info "falling back to building from source..."
+            build_from_source
+        else
+            error "Failed to install pre-built release binary for $PLATFORM from GitHub Releases ($REPO). If you wish to compile from source instead, set IMC_BUILD_FROM_SOURCE=1"
+        fi
     fi
 
     ensure_config
     check_path
 
-    info "done. Try: $BIN_NAME --help   (or: $BIN_NAME index .   to index this folder)"
-    info "the web dashboard needs the repo: cd <repo>/web-dashboard && npm ci && npm run build"
+    info "done. Try: $BIN_NAME --help"
 }
 
 main "$@"
