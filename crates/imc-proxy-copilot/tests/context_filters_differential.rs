@@ -10,7 +10,7 @@
 
 use imc_proxy_copilot::context_filters::{
     cap_inline, clean_line, execute_transforms_pipeline, filter_tool_result_content,
-    is_code_or_structured_content,
+    is_code_or_structured_content, is_markdown_content, is_markdown_read,
     is_separator_line, keep_markdown_sections, keep_matching_lines, match_tool_result_rule,
     normalize_log_line, remove_markdown_section, remove_matching_lines, squish_multi_space,
     truncate_lines_content,
@@ -308,4 +308,62 @@ fn repeated_success_lines_collapse_like_python() {
         input.len(),
         out.len()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Markdown read detection and filter bypass
+// ---------------------------------------------------------------------------
+
+#[test]
+fn markdown_read_detection() {
+    assert!(is_markdown_read("cat README.md", "Bash"));
+    assert!(is_markdown_read("cat docs/architecture.markdown", "Bash"));
+    assert!(is_markdown_read("head -n 50 docs/guide.md", "Bash"));
+    assert!(is_markdown_read("bat ./SKILL.md", "Bash"));
+    assert!(is_markdown_read("README.md", "view_file"));
+    assert!(is_markdown_read("/path/to/doc.md", "Read"));
+    assert!(is_markdown_read("docs/spec.mdx", "view"));
+
+    assert!(!is_markdown_read("cargo test", "Bash"));
+    assert!(!is_markdown_read("git status", "Bash"));
+    assert!(!is_markdown_read("cat main.rs", "Bash"));
+}
+
+#[test]
+fn markdown_content_detection() {
+    let md = "# Title\n\nIntro text.\n\n## Section\n- Item 1\n- Item 2\n";
+    assert!(is_markdown_content(md));
+
+    let frontmatter = "---\nname: my-skill\ndescription: test\n---\n# Docs\n";
+    assert!(is_markdown_content(frontmatter));
+
+    let log = "2026-10-22 10:00:00 INFO Starting server\n2026-10-22 10:00:01 INFO Listening\n";
+    assert!(!is_markdown_content(log));
+}
+
+#[test]
+fn markdown_file_reads_are_never_filtered() {
+    // A long markdown content (> 1500 chars) that contains markdown dividers like --- or ===,
+    // repetitive text, etc., which standard log filters would strip or fold.
+    let repeat_line = "This is a detailed explanation line in documentation.\n";
+    let mut large_md = String::from("# Comprehensive Documentation Guide\n\n");
+    large_md.push_str("---\n\n## Architecture Overview\n\n");
+    for _ in 0..50 {
+        large_md.push_str(repeat_line);
+    }
+    large_md.push_str("\n---\n\n## Conclusion\nEnd of document.\n");
+
+    assert!(large_md.len() > 1500);
+
+    // Reading via cat README.md must return verbatim without stripping --- or collapsing lines
+    let filtered_cat = filter_tool_result_content(&large_md, "cat README.md", "Bash");
+    assert_eq!(filtered_cat, large_md);
+
+    // Reading via view_file must return verbatim
+    let filtered_view = filter_tool_result_content(&large_md, "README.md", "view_file");
+    assert_eq!(filtered_view, large_md);
+
+    // Even with empty command/tool, markdown content recognition prevents log filtering
+    let filtered_content = filter_tool_result_content(&large_md, "", "");
+    assert_eq!(filtered_content, large_md);
 }

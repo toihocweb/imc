@@ -20,7 +20,7 @@
 //! * Python's `re.sub` replacement syntax is `\1`/`\g<1>`; the `regex` crate
 //!   uses `$1`, so literal `$` in a replacement is escaped before substitution.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -37,6 +37,175 @@ use crate::non_stream_translation::{
     assistant_content_block_view, tool_result_content_block_view, user_content_block_view,
     ContentBlock,
 };
+
+// ---------------------------------------------------------------------------
+// Markdown and file inspection helpers
+// ---------------------------------------------------------------------------
+
+/// Returns true if a string ends with a markdown extension (ignoring quotes and casing).
+pub fn is_markdown_extension(path_or_token: &str) -> bool {
+    let p = path_or_token.trim().trim_matches(|c| c == '\'' || c == '"' || c == '`');
+    let p = if let Some((base, _)) = p.split_once('#') {
+        base
+    } else {
+        p
+    };
+    let p = if let Some((base, suffix)) = p.rsplit_once(':') {
+        if suffix.chars().all(|c| c.is_ascii_digit()) {
+            base
+        } else {
+            p
+        }
+    } else {
+        p
+    };
+    let lower = p.to_lowercase();
+    lower.ends_with(".md")
+        || lower.ends_with(".markdown")
+        || lower.ends_with(".mdx")
+        || lower.ends_with(".mdown")
+        || lower.ends_with(".mkdn")
+}
+
+/// Returns true if the command or tool is reading a markdown file.
+pub fn is_markdown_read(command: &str, tool_name: &str) -> bool {
+    let tool_lower = tool_name.trim().to_lowercase();
+    let is_read_tool = matches!(
+        tool_lower.as_str(),
+        "read_file"
+            | "readfile"
+            | "view_file"
+            | "viewfile"
+            | "read"
+            | "view"
+            | "cat"
+            | "open_file"
+            | "openfile"
+            | "read_url_content"
+    );
+
+    // If the path/command itself directly ends in a markdown extension
+    if is_markdown_extension(command) {
+        return true;
+    }
+
+    // Inspect command line for file reading verbs or commands targeting a .md file
+    let cmd_lower = command.trim().to_lowercase();
+    for part in cmd_lower.split([';', '&', '|']) {
+        let p = part.trim();
+        if p.is_empty() {
+            continue;
+        }
+        let tokens: Vec<&str> = p.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        let read_verbs = [
+            "cat", "head", "tail", "bat", "batcat", "less", "more", "sed", "awk",
+            "view", "read", "glow",
+        ];
+        let has_read_verb = read_verbs.contains(&tokens[0])
+            || tokens[0].ends_with("/cat")
+            || tokens[0].ends_with("/head")
+            || tokens[0].ends_with("/tail")
+            || tokens[0].ends_with("/bat")
+            || tokens[0].ends_with("/view")
+            || tokens[0].ends_with("/read");
+
+        let has_md_arg = tokens.iter().any(|t| is_markdown_extension(t));
+        if has_md_arg && (has_read_verb || is_read_tool || tool_name.is_empty()) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Heuristic check whether text content is a markdown document.
+pub fn is_markdown_content(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // YAML frontmatter check: starts with --- and contains closing ---
+    if (trimmed.starts_with("---\n") || trimmed.starts_with("---\r\n"))
+        && (trimmed[4..].contains("\n---\n") || trimmed[4..].contains("\r\n---\r\n"))
+    {
+        return true;
+    }
+
+    let mut heading_count = 0;
+    let mut list_count = 0;
+    let mut code_fence_count = 0;
+    let mut md_link_count = 0;
+    let mut table_count = 0;
+
+    let sample_lines: Vec<&str> = trimmed.lines().take(60).collect();
+    for line in &sample_lines {
+        let l = line.trim();
+        if l.starts_with("# ")
+            || l.starts_with("## ")
+            || l.starts_with("### ")
+            || l.starts_with("#### ")
+            || l.starts_with("##### ")
+            || l.starts_with("###### ")
+        {
+            heading_count += 1;
+        } else if l.starts_with("- ") || l.starts_with("* ") {
+            list_count += 1;
+        } else if l.starts_with("```") {
+            code_fence_count += 1;
+        } else if l.starts_with('|') && l.ends_with('|') && l.contains("---") {
+            table_count += 1;
+        }
+        if l.contains("](") && l.contains('[') && l.contains(')') {
+            md_link_count += 1;
+        }
+    }
+
+    // Markdown documents have headings plus other structural markers
+    if heading_count >= 2 {
+        return true;
+    }
+    if heading_count >= 1
+        && (trimmed.starts_with("# ")
+            || trimmed.starts_with("## ")
+            || list_count >= 1
+            || code_fence_count >= 1
+            || md_link_count >= 1
+            || table_count >= 1)
+    {
+        return true;
+    }
+    if code_fence_count >= 2 || table_count >= 1 {
+        return true;
+    }
+
+    false
+}
+
+/// Extract command, query, or file path from a tool use input map.
+pub fn extract_command_or_path(input: &BTreeMap<String, Value>) -> String {
+    for key in [
+        "command",
+        "CommandLine",
+        "cmd",
+        "query",
+        "path",
+        "file_path",
+        "filePath",
+        "TargetFile",
+        "AbsolutePath",
+        "file",
+        "filename",
+    ] {
+        if let Some(Value::String(s)) = input.get(key) {
+            return s.clone();
+        }
+    }
+    String::new()
+}
 
 // ---------------------------------------------------------------------------
 // Configuration paths
@@ -226,23 +395,10 @@ pub fn tool_use_index(payload: &AnthropicMessagesPayload) -> HashMap<String, (St
         match msg {
             AnthropicInputMessage::User(m) => {
                 for block in &blocks_of_user(&m.content) {
-                    if let ContentBlock::ToolUse { id, input, .. } = block {
+                    if let ContentBlock::ToolUse { id, name, input } = block {
                         if !id.is_empty() {
-                            let command = input
-                                .get("command")
-                                .or_else(|| input.get("cmd"))
-                                .or_else(|| input.get("query"))
-                                .and_then(|v| match v {
-                                    Value::String(s) => Some(s.clone()),
-                                    _ => None,
-                                })
-                                .unwrap_or_default();
-                            let name = input
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
-                            tool_uses.insert(id.clone(), (name, command));
+                            let command = extract_command_or_path(input);
+                            tool_uses.insert(id.clone(), (name.clone(), command));
                         }
                     }
                 }
@@ -251,15 +407,7 @@ pub fn tool_use_index(payload: &AnthropicMessagesPayload) -> HashMap<String, (St
                 for block in &blocks_of_assistant(&m.content) {
                     if let ContentBlock::ToolUse { id, name, input } = block {
                         if !id.is_empty() {
-                            let command = input
-                                .get("command")
-                                .or_else(|| input.get("cmd"))
-                                .or_else(|| input.get("query"))
-                                .and_then(|v| match v {
-                                    Value::String(s) => Some(s.clone()),
-                                    _ => None,
-                                })
-                                .unwrap_or_default();
+                            let command = extract_command_or_path(input);
                             tool_uses.insert(id.clone(), (name.clone(), command));
                         }
                     }
@@ -305,7 +453,10 @@ pub fn collect_observations(payload: &AnthropicMessagesPayload) -> Vec<FilterObs
                     .collect::<Vec<_>>()
                     .join("\n"),
             };
-            if text.trim().is_empty() {
+            if text.trim().is_empty()
+                || is_markdown_read(&command, &tool)
+                || is_markdown_content(&text)
+            {
                 continue;
             }
             let matched = rules
@@ -719,6 +870,11 @@ pub fn clean_line(line: &str) -> String {
 pub fn is_code_or_structured_content(text: &str) -> bool {
     if text.is_empty() {
         return false;
+    }
+
+    // Markdown documents should NEVER be filtered, truncated, or stripped of headings/dividers.
+    if is_markdown_content(text) {
+        return true;
     }
 
     // Explicit IMC output markers.
@@ -1404,6 +1560,11 @@ pub fn filter_tool_result_content(text: &str, command: &str, tool_name: &str) ->
         return text.to_string();
     }
 
+    // Markdown file reads are NEVER filtered or truncated!
+    if is_markdown_read(command, tool_name) {
+        return text.to_string();
+    }
+
     // Check custom user-defined command rules first.
     let rules = load_tool_result_filters_config();
     let matched_rules: Vec<&Value> = rules
@@ -1597,55 +1758,8 @@ pub fn process_context_filters(payload: &mut AnthropicMessagesPayload) -> bool {
 
     let chars_before = payload_text_chars(payload);
 
-    // Index tool_use calls across all messages to map
-    // tool_use_id -> (command, tool_name).
-    let mut tool_uses: HashMap<String, (String, String)> = HashMap::new();
-    for msg in &payload.messages {
-        match msg {
-            AnthropicInputMessage::User(m) => {
-                for block in &blocks_of_user(&m.content) {
-                    if let ContentBlock::ToolUse { id, input, .. } = block {
-                        if !id.is_empty() {
-                            let command = input
-                                .get("command")
-                                .or_else(|| input.get("cmd"))
-                                .or_else(|| input.get("query"))
-                                .and_then(|v| match v {
-                                    Value::String(s) => Some(s.clone()),
-                                    _ => None,
-                                })
-                                .unwrap_or_default();
-                            let name = input
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
-                            tool_uses.insert(id.clone(), (name, command));
-                        }
-                    }
-                }
-            }
-            AnthropicInputMessage::Assistant(m) => {
-                for block in &blocks_of_assistant(&m.content) {
-                    if let ContentBlock::ToolUse { id, name, input } = block {
-                        if !id.is_empty() {
-                            let command = input
-                                .get("command")
-                                .or_else(|| input.get("cmd"))
-                                .or_else(|| input.get("query"))
-                                .and_then(|v| match v {
-                                    Value::String(s) => Some(s.clone()),
-                                    _ => None,
-                                })
-                                .unwrap_or_default();
-                            tool_uses.insert(id.clone(), (name.clone(), command));
-                        }
-                    }
-                }
-            }
-            AnthropicInputMessage::System(_) => {}
-        }
-    }
+    // Index tool_use calls across all messages to map tool_use_id -> (tool_name, command).
+    let tool_uses = tool_use_index(payload);
 
     // Process tool_result blocks in messages.
     let mut modified = false;

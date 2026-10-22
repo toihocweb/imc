@@ -76,6 +76,12 @@ fn extract_command_or_query(input: &BTreeMap<String, Value>) -> Option<String> {
         "query",
         "pattern",
         "path",
+        "file_path",
+        "filePath",
+        "TargetFile",
+        "AbsolutePath",
+        "file",
+        "filename",
         "search_term",
         "term",
         "prompt",
@@ -232,6 +238,11 @@ pub fn is_bypass_command(cmd: &str) -> bool {
             if p.starts_with("which ") || p.starts_with("whereis ") || p.starts_with("type ") {
                 return true;
             }
+
+            // Markdown file reads (e.g. cat README.md, head docs/guide.md)
+            if imc_proxy_copilot::context_filters::is_markdown_read(p, "") {
+                return true;
+            }
         }
     }
     false
@@ -344,7 +355,14 @@ pub fn should_bypass_compression(
             return true;
         }
 
-        // 2. Shell / command execution tool: inspect command line
+        // 2. Reading a markdown file (.md, .markdown, .mdx, etc.) — do not compress
+        if let Some(cmd) = cmd_opt {
+            if imc_proxy_copilot::context_filters::is_markdown_read(cmd, &name_lower) {
+                return true;
+            }
+        }
+
+        // 3. Shell / command execution tool: inspect command line
         if is_exec_tool_name(&name_lower) {
             if let Some(cmd) = cmd_opt {
                 if is_bypass_command(cmd) {
@@ -354,7 +372,11 @@ pub fn should_bypass_compression(
         }
     }
 
-    // 3. Fallback content heuristic: check if output content itself is search results or status
+    // 4. Fallback content heuristic: markdown content, search results, or status
+    if imc_proxy_copilot::context_filters::is_markdown_content(text) {
+        return true;
+    }
+
     is_search_or_discovery_content(text)
 }
 
@@ -781,5 +803,36 @@ mod tests {
         let report = compress_tool_results(&mut msgs, &db);
 
         assert_eq!(report.compressed, 1, "cargo build log must still be compressed");
+    }
+
+    #[test]
+    fn markdown_file_reads_bypass_compression() {
+        let db = tmp_db("md-bypass");
+        let md_content = "# Guide\n\nIntro.\n\n## Section\n- Item\n".repeat(100);
+        assert!(md_content.len() > MIN_TOKENS * 4);
+
+        // 1. Tool use with command = "cat README.md"
+        let mut input1 = BTreeMap::new();
+        input1.insert("command".to_string(), Value::String("cat README.md".to_string()));
+        let asst1 = assistant_with_tool_use("toolu_cat_md", "bash", input1);
+        let mut tr1 = tool_result(StringOrBlocks::Text(md_content.clone()));
+        tr1.tool_use_id = "toolu_cat_md".to_string();
+        let user1 = user_with_tool_result(tr1);
+
+        let mut msgs = vec![asst1, user1];
+        let report = compress_tool_results(&mut msgs, &db);
+        assert_eq!(report.compressed, 0, "reading README.md via cat must bypass compression");
+
+        // 2. Tool use with view_file path = "docs/SKILL.md"
+        let mut input2 = BTreeMap::new();
+        input2.insert("path".to_string(), Value::String("docs/SKILL.md".to_string()));
+        let asst2 = assistant_with_tool_use("toolu_view_md", "view_file", input2);
+        let mut tr2 = tool_result(StringOrBlocks::Text(md_content.clone()));
+        tr2.tool_use_id = "toolu_view_md".to_string();
+        let user2 = user_with_tool_result(tr2);
+
+        let mut msgs2 = vec![asst2, user2];
+        let report2 = compress_tool_results(&mut msgs2, &db);
+        assert_eq!(report2.compressed, 0, "view_file on SKILL.md must bypass compression");
     }
 }
