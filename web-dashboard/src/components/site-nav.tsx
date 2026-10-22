@@ -77,7 +77,7 @@ export function SiteNav() {
             </div>
             <div className="flex flex-col">
               <div className="flex items-center gap-1.5 leading-none">
-                <span className="font-bold text-sm tracking-tight text-foreground">Dashboard</span>
+                <span className="font-bold text-sm tracking-tight text-foreground">IMC</span>
                 <span className="rounded bg-primary/15 px-1 py-0.2 text-[10px] font-semibold text-primary">
                   v0.2
                 </span>
