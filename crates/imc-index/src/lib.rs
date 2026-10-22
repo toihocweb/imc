@@ -225,6 +225,10 @@ pub fn run_with_progress(
     }
 
     store.set_meta(CHUNK_SIGNATURE_KEY, &chunk_signature)?;
+    if let Some((commit, branch)) = git_head_state(root) {
+        let _ = store.set_meta("git_commit", &commit);
+        let _ = store.set_meta("git_branch", &branch);
+    }
 
     progress(Progress {
         phase: Phase::Finalize,
@@ -320,4 +324,98 @@ pub fn window_chunks(
         i += step;
     }
     out
+}
+
+/// Query the current git commit hash and branch name if `root` is inside a git repository.
+pub fn git_head_state(root: &Path) -> Option<(String, String)> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD", "--abbrev-ref", "HEAD"])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines();
+    let commit = lines.next()?.trim().to_string();
+    let branch = lines.next()?.trim().to_string();
+    if commit.is_empty() {
+        return None;
+    }
+    Some((commit, branch))
+}
+
+/// Check if the stored index's git state differs from the current git repository state.
+pub fn is_git_stale(store: &store::Store, root: &Path) -> bool {
+    if let Some((curr_commit, curr_branch)) = git_head_state(root) {
+        let stored_commit = store.get_meta("git_commit").ok().flatten().unwrap_or_default();
+        let stored_branch = store.get_meta("git_branch").ok().flatten().unwrap_or_default();
+        if stored_commit.is_empty() {
+            let _ = store.set_meta("git_commit", &curr_commit);
+            let _ = store.set_meta("git_branch", &curr_branch);
+            return false;
+        }
+        if stored_commit != curr_commit || stored_branch != curr_branch {
+            return true;
+        }
+    }
+    false
+}
+
+/// If the repository's git branch or commit has changed since the last indexing run,
+/// incrementally updates the index to match the current git state.
+pub fn ensure_fresh_index(cfg: &Config, root: &Path) -> Result<Option<IndexStats>> {
+    let db = cfg.project_db(root);
+    if !db.exists() {
+        return Ok(None);
+    }
+    let store = store::open(&db)?;
+    if is_git_stale(&store, root) {
+        drop(store);
+        eprintln!("[imc] Git branch or commit changed — updating index incrementally…");
+        let stats = run(cfg, root, &[], false)?;
+        eprintln!(
+            "[imc] Index updated: +{} ~{} -{} files in {}ms",
+            stats.new_files, stats.modified_files, stats.deleted_files, stats.elapsed_ms
+        );
+        let meta = imc_core::config::ProjectMeta {
+            id: imc_core::hash::md5_hex(root.to_string_lossy().as_bytes())[..16].to_string(),
+            name: root
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "root".into()),
+            path: root.to_string_lossy().to_string(),
+            indexed_at: Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            ),
+            file_count: Some(stats.total_files as u64),
+        };
+        let _ = imc_core::config::upsert_project(cfg, meta);
+        return Ok(Some(stats));
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_head_state_detects_git_repository() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+        if let Some((commit, branch)) = git_head_state(repo_root) {
+            assert!(!commit.is_empty());
+            assert!(!branch.is_empty());
+        }
+    }
+
+    #[test]
+    fn non_git_directory_returns_none() {
+        let temp = std::env::temp_dir().join("definitely_not_a_git_repo_99999");
+        assert_eq!(git_head_state(&temp), None);
+    }
 }

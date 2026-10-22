@@ -248,6 +248,26 @@ pub fn serve(port: u16) -> Result<()> {
                 }
             }
 
+            // Background task: auto-updates index when git branch or commit changes (checks every 3s)
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                    let cfg = imc_core::config::Config::default();
+                    let registry = imc_core::config::load_registry(&cfg);
+                    for p in registry {
+                        let path = std::path::PathBuf::from(&p.path);
+                        if path.exists() {
+                            let cfg_clone = cfg.clone();
+                            let path_clone = path.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                let _ = imc_index::ensure_fresh_index(&cfg_clone, &path_clone);
+                            })
+                            .await;
+                        }
+                    }
+                }
+            });
+
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;

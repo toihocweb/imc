@@ -95,6 +95,7 @@ fn do_search(root: Option<&str>, query: &str, limit: usize, no_vector: bool) -> 
     }
     let cfg = config();
     let root = project_root(&cfg, root);
+    let _ = imc_index::ensure_fresh_index(&cfg, &root);
     let db = cfg.project_db(&root);
     if !db.exists() {
         return error(format!(
@@ -161,6 +162,7 @@ async fn trace(Json(body): Json<Value>) -> Response {
     }
     let cfg = config();
     let root = project_root(&cfg, body.get("root").and_then(Value::as_str));
+    let _ = imc_index::ensure_fresh_index(&cfg, &root);
     let db = cfg.project_db(&root);
     let indexed = db.exists();
     let store = match imc_core::store::open(&db) {
