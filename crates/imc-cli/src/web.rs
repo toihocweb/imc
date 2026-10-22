@@ -162,7 +162,32 @@ pub fn stop_dashboard() -> bool {
         }
         std::fs::remove_file(state_path()).ok();
     }
+    // As a fail-safe, kill any orphan dashboard process listening on the default port.
+    if kill_listener_on_port(DEFAULT_PORT) {
+        terminated = true;
+    }
     terminated
+}
+
+fn kill_listener_on_port(port: u16) -> bool {
+    let mut killed = false;
+    if let Ok(out) = Command::new("ss")
+        .args(["-tulpnH", &format!("sport = :{port}")])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for part in text.split("pid=") {
+            if let Some(num_str) = part.split(|c: char| !c.is_ascii_digit()).next() {
+                if let Ok(pid) = num_str.parse::<i64>() {
+                    if pid > 0 {
+                        let _ = Command::new("kill").arg(pid.to_string()).status();
+                        killed = true;
+                    }
+                }
+            }
+        }
+    }
+    killed
 }
 
 /// Stop the dashboard that `imc` started earlier.
