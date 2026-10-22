@@ -42,9 +42,11 @@ pub async fn static_handler(uri: Uri) -> Response {
         return serve_file(&dir_index, file.data);
     }
 
-    // 4. Fallback to index.html for client-side routing
-    if let Some(file) = WebAssets::get("index.html") {
-        return serve_file("index.html", file.data);
+    // 4. Return 404 with 404.html if available
+    if let Some(file) = WebAssets::get("404.html").or_else(|| WebAssets::get("_not-found.html")) {
+        let mut resp = serve_file("404.html", file.data);
+        *resp.status_mut() = StatusCode::NOT_FOUND;
+        return resp;
     }
 
     (StatusCode::NOT_FOUND, "Web dashboard asset not found").into_response()
