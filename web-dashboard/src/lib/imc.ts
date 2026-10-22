@@ -87,6 +87,8 @@ export interface CcrStats {
 export interface CcrEntry {
   id: string;
   kind: string;
+  original?: string;
+  compressed?: string;
   orig_tokens: number;
   comp_tokens: number;
   created_at: number;
@@ -203,12 +205,25 @@ export async function memoryAdd(
   return result.stored ? `stored memory #${result.id}` : "not stored";
 }
 
+export async function memoryDelete(
+  id: number,
+  root?: string
+): Promise<{ ok: boolean; deleted: boolean; id: number }> {
+  const q = new URLSearchParams({ id: String(id) });
+  if (root) q.set("root", root);
+  return proxy<{ ok: boolean; deleted: boolean; id: number }>(`/api/memory?${q.toString()}`, {
+    method: "DELETE",
+  });
+}
+
 export async function ccrStats(root?: string): Promise<CcrStats> {
   return proxy<CcrStats>("/api/compression/stats");
 }
 
-export async function ccrList(root?: string, limit: number = 20): Promise<CcrEntry[]> {
-  return proxy<CcrEntry[]>(`/api/compression?limit=${limit}`);
+export async function ccrList(root?: string, limit: number = 20, id?: string): Promise<CcrEntry[] | CcrEntry> {
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (id) q.set("id", id);
+  return proxy<CcrEntry[] | CcrEntry>(`/api/compression?${q.toString()}`);
 }
 
 export async function compressText(text: string, root?: string): Promise<string> {

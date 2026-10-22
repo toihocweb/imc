@@ -11,3 +11,4 @@ CLAUDE.md
 /captures/
 *.log
 scripts/repo_guard.local.*
+usage.json

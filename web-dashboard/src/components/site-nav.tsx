@@ -36,10 +36,9 @@ export function SiteNav() {
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/60">
       <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-2 px-3 sm:px-6">
-        <Link href="/" className="flex shrink-0 items-center gap-2 font-semibold">
+        <Link href="/" className="flex shrink-0 items-center gap-2 font-bold tracking-tight">
           <Boxes className="h-5 w-5 text-primary" />
-          <span className="text-sm text-muted-foreground">imc</span>
-          <span className="hidden xs:inline sm:inline">Dashboard</span>
+          <span className="text-base text-foreground sm:text-lg">IMC</span>
         </Link>
 
         {/* desktop nav */}

@@ -499,38 +499,23 @@ pub fn ensure_project_indexed(cfg: &Config, root: &Path) -> Result<imc_index::In
 /// and then hands the terminal over to Claude Code.
 pub fn run_claude_bin(cfg: &Config, root: &Path, args: &[String]) -> Result<()> {
     // 1. Ensure the project is indexed so code intelligence is ready.
-    if let Ok(stats) = ensure_project_indexed(cfg, root) {
-        let changed = stats.new_files + stats.modified_files + stats.deleted_files;
-        if changed > 0 {
-            println!(
-                "indexed {} files ({} symbols, {} chunks)",
-                changed, stats.symbols, stats.chunks
-            );
-        }
-    }
+    let _ = ensure_project_indexed(cfg, root);
 
     // 2. Ensure the proxy is running so Claude Code talks to our compression
     // proxy instead of hitting the upstream LLM directly.
     if !proxy_is_running(cfg) {
         let port = 12345u16;
-        let state = start_proxy(cfg, port)
+        let _ = start_proxy(cfg, port)
             .with_context(|| format!("start imc proxy on port {port}"))?;
-        println!(
-            "proxy auto-started: pid={} http://127.0.0.1:{}",
-            state["pid"], state["port"]
-        );
-    } else {
-        println!("proxy already running on http://127.0.0.1:12345");
     }
 
     // The settings and the rule file are what make Claude Code use imc. A
     // project that was never wired would run Claude Code against the
     // upstream and know nothing about the index, so they are written here
     // too — wiring is cheap, and a stale rule is worse than a fresh one.
-    let settings = write_claude_settings(root, 12345)?;
-    let rule = write_imc_rule(root)?;
-    remove_legacy_claude_md_block(root)?;
-    println!("wired {} and {}", settings.display(), rule.display());
+    let _ = write_claude_settings(root, 12345)?;
+    let _ = write_imc_rule(root)?;
+    let _ = remove_legacy_claude_md_block(root)?;
 
     let exe = which_claude_bin()?;
     let exe_disp = exe.display().to_string();

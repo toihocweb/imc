@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Trash2 } from "lucide-react";
 
 interface Project {
   id: string;
@@ -41,6 +42,7 @@ export default function MemoryPage() {
   const [memType, setMemType] = useState("work_fact");
   const [scene, setScene] = useState("");
   const [loading, setLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -92,6 +94,28 @@ export default function MemoryPage() {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    if (!root) return;
+    if (!window.confirm(`Delete memory #${id}?`)) return;
+    setDeletingId(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/memory?id=${id}&root=${encodeURIComponent(root)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (data.ok || data.deleted) {
+        setMemories((prev) => prev.filter((m) => m.id !== id));
+      } else {
+        setError(data.error || `Failed to delete memory #${id}`);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -154,19 +178,32 @@ export default function MemoryPage() {
           ) : (
             <div className="space-y-3">
               {memories.map((m) => (
-                <div key={m.id} className="border-b pb-3 last:border-0">
-                  <div className="flex gap-2 items-center flex-wrap">
-                    <Badge variant="secondary">{m.mem_type}</Badge>
-                    <Badge variant="outline" className="text-[10px]">{m.category}</Badge>
-                    {m.scene && <Badge variant="outline" className="text-[10px]">scene: {m.scene}</Badge>}
-                    <span className="text-xs text-muted-foreground">
-                      #{m.id} · source={m.source} · used {m.use_count}× · imp {m.importance}
-                    </span>
+                <div key={m.id} className="group flex items-start justify-between gap-3 border-b pb-3 last:border-0">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex gap-2 items-center flex-wrap">
+                      <Badge variant="secondary">{m.mem_type}</Badge>
+                      <Badge variant="outline" className="text-[10px]">{m.category}</Badge>
+                      {m.scene && <Badge variant="outline" className="text-[10px]">scene: {m.scene}</Badge>}
+                      <span className="text-xs text-muted-foreground">
+                        #{m.id} · source={m.source} · used {m.use_count}× · imp {m.importance}
+                      </span>
+                    </div>
+                    <div className="text-sm mt-1 break-words">{m.content}</div>
+                    {m.paths.length > 0 && (
+                      <div className="text-xs font-mono text-muted-foreground mt-1">{m.paths.join(", ")}</div>
+                    )}
                   </div>
-                  <div className="text-sm mt-1">{m.content}</div>
-                  {m.paths.length > 0 && (
-                    <div className="text-xs font-mono text-muted-foreground mt-1">{m.paths.join(", ")}</div>
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 shrink-0"
+                    title={`Delete memory #${m.id}`}
+                    aria-label={`Delete memory #${m.id}`}
+                    disabled={deletingId === m.id}
+                    onClick={() => handleDelete(m.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
               ))}
             </div>

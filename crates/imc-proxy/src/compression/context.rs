@@ -17,13 +17,15 @@
 //! Error results are never compressed: an exception message is the answer, not
 //! context noise.
 
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use imc_core::settings;
 use imc_proxy_types::types::anthropic::{
-    AnthropicInputMessage, AnthropicToolResultContentBlock, AnthropicUserContentBlock,
-    StringOrBlocks,
+    AnthropicAssistantContentBlock, AnthropicInputMessage, AnthropicToolResultContentBlock,
+    AnthropicUserContentBlock, StringOrBlocks,
 };
+use serde_json::Value;
 
 use crate::compression::{ccr_store::CcrStore, compress, kind_slug};
 
@@ -65,6 +67,297 @@ pub fn ccr_db_path() -> PathBuf {
         .join("proxy_ccr.db")
 }
 
+/// Extract command, query, or path from a tool use input map.
+fn extract_command_or_query(input: &BTreeMap<String, Value>) -> Option<String> {
+    for key in [
+        "command",
+        "CommandLine",
+        "cmd",
+        "query",
+        "pattern",
+        "path",
+        "search_term",
+        "term",
+        "prompt",
+    ] {
+        if let Some(Value::String(s)) = input.get(key) {
+            return Some(s.clone());
+        }
+    }
+    None
+}
+
+/// Returns true if tool name belongs to search, navigation, or retrieval.
+pub fn is_bypass_tool_name(name: &str) -> bool {
+    let exact_matches = [
+        "grep",
+        "ripgrep",
+        "rg",
+        "ag",
+        "ack",
+        "glob",
+        "globtool",
+        "find",
+        "file_search",
+        "search_files",
+        "ls",
+        "list_dir",
+        "dir",
+        "tree",
+        "locate",
+        "list_directory",
+        "search",
+        "code_search",
+        "search_code",
+        "workspace_search",
+        "imc_search",
+        "trace",
+        "imc_trace",
+        "memory",
+        "memory_search",
+        "imc_memory",
+        "web_search",
+        "search_web",
+        "brave_search",
+        "google_search",
+        "git_status",
+    ];
+
+    if exact_matches.contains(&name) {
+        return true;
+    }
+
+    // Namespaced / MCP tool names like "mcp__imc__search", "mcp__search_files"
+    let parts: Vec<&str> = name
+        .split(['_', '-', ':', '.'])
+        .filter(|s| !s.is_empty())
+        .collect();
+    for part in parts {
+        if matches!(
+            part,
+            "search" | "grep" | "ripgrep" | "rg" | "glob" | "find" | "trace" | "memory" | "ls"
+        ) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Returns true if tool is a generic shell / command execution tool.
+fn is_exec_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        "bash"
+            | "sh"
+            | "zsh"
+            | "exec"
+            | "run_command"
+            | "terminal"
+            | "command"
+            | "execute_command"
+            | "cli"
+    )
+}
+
+/// Returns true if command being run performs search, discovery, or status inspection.
+pub fn is_bypass_command(cmd: &str) -> bool {
+    let lower = cmd.trim().to_lowercase();
+    for line in lower.lines() {
+        let l = line.trim();
+        for part in l.split([';', '&', '|']) {
+            let p = part.trim();
+            if p.is_empty() {
+                continue;
+            }
+
+            // imc CLI inspection subcommands
+            if p.starts_with("imc search")
+                || p.starts_with("imc trace")
+                || p.starts_with("imc memory")
+                || p.starts_with("imc memory-search")
+                || p.starts_with("imc context")
+                || p.starts_with("imc ask")
+                || p.contains("/imc search")
+                || p.contains("/imc trace")
+                || p.contains("/imc memory")
+            {
+                return true;
+            }
+
+            // grep / ripgrep
+            if p.starts_with("grep ")
+                || p.starts_with("rg ")
+                || p.starts_with("ripgrep ")
+                || p.starts_with("ag ")
+                || p.starts_with("ack ")
+                || p.contains("/grep ")
+                || p.contains("/rg ")
+            {
+                return true;
+            }
+
+            // find / fd / glob
+            if p.starts_with("find ")
+                || p.starts_with("fd ")
+                || p.starts_with("locate ")
+                || p.contains("/find ")
+                || p.contains("/fd ")
+            {
+                return true;
+            }
+
+            // ls / tree
+            if p.starts_with("ls ")
+                || p == "ls"
+                || p.starts_with("tree ")
+                || p == "tree"
+            {
+                return true;
+            }
+
+            // git status / branch / tags / remotes
+            if p.starts_with("git status")
+                || p.starts_with("git branch")
+                || p.starts_with("git tag")
+                || p.starts_with("git remote")
+                || p.starts_with("git show-ref")
+                || p.starts_with("git log -n 1")
+                || p.starts_with("git log --oneline -n")
+            {
+                return true;
+            }
+
+            // which / where
+            if p.starts_with("which ") || p.starts_with("whereis ") || p.starts_with("type ") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Fallback content heuristic to detect search results, grep hits, and directory listings.
+pub fn is_search_or_discovery_content(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let lines: Vec<&str> = trimmed
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    if lines.is_empty() {
+        return false;
+    }
+
+    // Git status markers
+    if lines.iter().any(|l| {
+        l.starts_with("On branch ")
+            || l.starts_with("Changes to be committed:")
+            || l.starts_with("Untracked files:")
+            || l.starts_with("Changes not staged for commit:")
+            || l.starts_with("nothing to commit")
+    }) {
+        return true;
+    }
+
+    // IMC search indicators
+    if lines.iter().any(|l| {
+        l.contains("more matches exist — narrow the query")
+            || l.starts_with("No results found.")
+            || l.starts_with("no matches for ")
+    }) {
+        return true;
+    }
+
+    // Numbered search hits: "1. [chunk] ... (score 0.xxxx)" or "1. [struct] ..."
+    let numbered_hits = lines
+        .iter()
+        .filter(|l| {
+            let is_numbered = l
+                .split_once('.')
+                .map(|(num, rest)| {
+                    num.chars().all(|c| c.is_ascii_digit())
+                        && !num.is_empty()
+                        && rest.starts_with(" [")
+                })
+                .unwrap_or(false);
+            let has_score = l.contains("(score ") || l.contains("[score ");
+            is_numbered || has_score
+        })
+        .count();
+
+    if numbered_hits >= 2 || (lines.len() <= 5 && numbered_hits >= 1) {
+        return true;
+    }
+
+    // Grep / rg lines: "path/to/file:123:content"
+    let grep_lines = lines
+        .iter()
+        .filter(|l| {
+            if let Some((path, rest)) = l.split_once(':') {
+                if !path.is_empty() && !path.contains(' ') {
+                    if let Some((num_str, _)) = rest.split_once(':') {
+                        return num_str.chars().all(|c| c.is_ascii_digit()) && !num_str.is_empty();
+                    }
+                }
+            }
+            false
+        })
+        .count();
+
+    if grep_lines >= 3 && grep_lines * 2 >= lines.len() {
+        return true;
+    }
+
+    // Directory listing format: "-rw-r--r--" or "drwxr-xr-x"
+    let ls_lines = lines
+        .iter()
+        .filter(|l| {
+            (l.starts_with('-') || l.starts_with('d') || l.starts_with('l'))
+                && l.len() >= 10
+                && l[1..10].chars().all(|c| matches!(c, 'r' | 'w' | 'x' | '-'))
+        })
+        .count();
+
+    if ls_lines >= 3 && ls_lines * 2 >= lines.len() {
+        return true;
+    }
+
+    false
+}
+
+/// Decide if this tool result should be bypassed from compression.
+pub fn should_bypass_compression(
+    tool_meta: Option<&(String, Option<String>)>,
+    text: &str,
+) -> bool {
+    if let Some((name, cmd_opt)) = tool_meta {
+        let name_lower = name.trim().to_lowercase();
+
+        // 1. Tool name indicates search, discovery, navigation, or retrieval
+        if is_bypass_tool_name(&name_lower) {
+            return true;
+        }
+
+        // 2. Shell / command execution tool: inspect command line
+        if is_exec_tool_name(&name_lower) {
+            if let Some(cmd) = cmd_opt {
+                if is_bypass_command(cmd) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // 3. Fallback content heuristic: check if output content itself is search results or status
+    is_search_or_discovery_content(text)
+}
+
 /// Walk every tool result in the conversation and compress the big ones.
 pub fn compress_tool_results(
     messages: &mut [AnthropicInputMessage],
@@ -77,13 +370,14 @@ pub fn compress_tool_results(
         return report;
     };
 
-    // Identify tool_use_ids corresponding to retrieve operations so their output is kept intact.
+    // Identify tool_use_ids corresponding to retrieve operations and index tool uses
     let mut retrieve_tool_ids = std::collections::HashSet::new();
+    let mut tool_uses: HashMap<String, (String, Option<String>)> = HashMap::new();
     for msg in messages.iter() {
         if let AnthropicInputMessage::Assistant(assistant) = msg {
             if let StringOrBlocks::Blocks(blocks) = &assistant.content {
                 for b in blocks {
-                    if let imc_proxy_types::types::anthropic::AnthropicAssistantContentBlock::ToolUse(tu) = b {
+                    if let AnthropicAssistantContentBlock::ToolUse(tu) = b {
                         if tu.name.contains("retrieve") {
                             retrieve_tool_ids.insert(tu.id.clone());
                         } else if let Some(cmd) = tu.input.get("command").and_then(|v| v.as_str()) {
@@ -91,6 +385,11 @@ pub fn compress_tool_results(
                                 retrieve_tool_ids.insert(tu.id.clone());
                             }
                         }
+                        let cmd_or_query = extract_command_or_query(&tu.input);
+                        tool_uses.insert(
+                            tu.id.clone(),
+                            (tu.name.clone(), cmd_or_query),
+                        );
                     }
                 }
             }
@@ -116,14 +415,20 @@ pub fn compress_tool_results(
             if retrieve_tool_ids.contains(&result.tool_use_id) {
                 continue;
             }
+
+            let tool_meta = tool_uses.get(&result.tool_use_id);
             match &mut result.content {
                 StringOrBlocks::Text(text) => {
-                    maybe_shrink(text, &mut store, &mut report);
+                    if !should_bypass_compression(tool_meta, text) {
+                        maybe_shrink(text, &mut store, &mut report);
+                    }
                 }
                 StringOrBlocks::Blocks(inner) => {
                     for b in inner.iter_mut() {
                         if let AnthropicToolResultContentBlock::Text(t) = b {
-                            maybe_shrink(&mut t.text, &mut store, &mut report);
+                            if !should_bypass_compression(tool_meta, &t.text) {
+                                maybe_shrink(&mut t.text, &mut store, &mut report);
+                            }
                         }
                     }
                 }
@@ -313,5 +618,168 @@ mod tests {
         };
         assert_eq!(r.saved_tokens(), 750);
         let _ = json!({"saved": r.saved_tokens()});
+    }
+
+    fn assistant_with_tool_use(
+        id: &str,
+        name: &str,
+        input: BTreeMap<String, Value>,
+    ) -> AnthropicInputMessage {
+        AnthropicInputMessage::Assistant(imc_proxy_types::types::anthropic::AnthropicAssistantMessage {
+            role: "assistant".to_string(),
+            content: StringOrBlocks::Blocks(vec![AnthropicAssistantContentBlock::ToolUse(
+                imc_proxy_types::types::anthropic::AnthropicToolUseBlock {
+                    r#type: "tool_use".to_string(),
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    input,
+                    cache_control: None,
+                },
+            )]),
+        })
+    }
+
+    #[test]
+    fn search_tool_result_is_never_compressed() {
+        let db = tmp_db("search-tool");
+        let search_hits = (1..=20)
+            .map(|i| {
+                format!(
+                    "{}. [chunk] crates/imc-cli/src/main.rs:{}-{} my_symbol (score 0.8877) fn main() {{}}\n",
+                    i,
+                    i * 10,
+                    i * 10 + 20
+                )
+            })
+            .collect::<String>()
+            .repeat(5); // Make it large (> MIN_TOKENS * 4)
+
+        let asst = assistant_with_tool_use("toolu_search", "imc_search", BTreeMap::new());
+        let mut tr = tool_result(StringOrBlocks::Text(search_hits.clone()));
+        tr.tool_use_id = "toolu_search".to_string();
+        let user = user_with_tool_result(tr);
+
+        let mut msgs = vec![asst, user];
+        let report = compress_tool_results(&mut msgs, &db);
+
+        assert_eq!(report.compressed, 0, "search results must be bypassed");
+        assert_eq!(report.considered, 0, "bypassed tool results should not even be considered");
+    }
+
+    #[test]
+    fn bash_imc_search_is_bypassed() {
+        let db = tmp_db("bash-search");
+        let search_hits = (1..=20)
+            .map(|i| {
+                format!(
+                    "{}. [chunk] crates/imc-cli/src/main.rs:{}-{} my_symbol (score 0.8877) fn main() {{}}\n",
+                    i,
+                    i * 10,
+                    i * 10 + 20
+                )
+            })
+            .collect::<String>()
+            .repeat(5);
+
+        let mut input = BTreeMap::new();
+        input.insert("command".to_string(), Value::String("imc search auth".to_string()));
+        let asst = assistant_with_tool_use("toolu_bash", "bash", input);
+        let mut tr = tool_result(StringOrBlocks::Text(search_hits.clone()));
+        tr.tool_use_id = "toolu_bash".to_string();
+        let user = user_with_tool_result(tr);
+
+        let mut msgs = vec![asst, user];
+        let report = compress_tool_results(&mut msgs, &db);
+
+        assert_eq!(report.compressed, 0, "bash running imc search must be bypassed");
+    }
+
+    #[test]
+    fn bash_grep_is_bypassed() {
+        let db = tmp_db("bash-grep");
+        let grep_output = (1..=50)
+            .map(|i| format!("crates/imc-proxy/src/main.rs:{}:    let val = {};\n", i, i))
+            .collect::<String>()
+            .repeat(10);
+
+        let mut input = BTreeMap::new();
+        input.insert("command".to_string(), Value::String("grep -rn 'val' crates/".to_string()));
+        let asst = assistant_with_tool_use("toolu_grep", "Bash", input);
+        let mut tr = tool_result(StringOrBlocks::Text(grep_output));
+        tr.tool_use_id = "toolu_grep".to_string();
+        let user = user_with_tool_result(tr);
+
+        let mut msgs = vec![asst, user];
+        let report = compress_tool_results(&mut msgs, &db);
+
+        assert_eq!(report.compressed, 0, "grep command must be bypassed");
+    }
+
+    #[test]
+    fn bash_git_status_is_bypassed() {
+        let db = tmp_db("bash-git-status");
+        let status_output = format!(
+            "On branch master\nYour branch is up to date with 'origin/master'.\n\n\
+             Changes not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n\
+             {}\n\nno changes added to commit (use \"git add\" to track)\n",
+            (1..=100)
+                .map(|i| format!("        modified:   file_{}.rs\n", i))
+                .collect::<String>()
+        );
+
+        let mut input = BTreeMap::new();
+        input.insert("command".to_string(), Value::String("git status".to_string()));
+        let asst = assistant_with_tool_use("toolu_status", "bash", input);
+        let mut tr = tool_result(StringOrBlocks::Text(status_output));
+        tr.tool_use_id = "toolu_status".to_string();
+        let user = user_with_tool_result(tr);
+
+        let mut msgs = vec![asst, user];
+        let report = compress_tool_results(&mut msgs, &db);
+
+        assert_eq!(report.compressed, 0, "git status must be bypassed");
+    }
+
+    #[test]
+    fn content_heuristic_detects_search_hits_without_tool_use() {
+        let db = tmp_db("heuristic-search");
+        let search_hits = (1..=20)
+            .map(|i| {
+                format!(
+                    "{}. [chunk] crates/imc-cli/src/main.rs:{}-{} my_symbol (score 0.8877) fn main() {{}}\n",
+                    i,
+                    i * 10,
+                    i * 10 + 20
+                )
+            })
+            .collect::<String>()
+            .repeat(5);
+
+        // Tool result has unknown tool_use_id (no preceding tool use block)
+        let tr = tool_result(StringOrBlocks::Text(search_hits));
+        let user = user_with_tool_result(tr);
+
+        let mut msgs = vec![user];
+        let report = compress_tool_results(&mut msgs, &db);
+
+        assert_eq!(report.compressed, 0, "fallback heuristic must protect search hits");
+    }
+
+    #[test]
+    fn build_logs_under_bash_are_still_compressed() {
+        let db = tmp_db("bash-build");
+        let build_log = "2026-10-19 10:00:00 INFO step complete\n".repeat(300);
+
+        let mut input = BTreeMap::new();
+        input.insert("command".to_string(), Value::String("cargo build".to_string()));
+        let asst = assistant_with_tool_use("toolu_build", "bash", input);
+        let mut tr = tool_result(StringOrBlocks::Text(build_log));
+        tr.tool_use_id = "toolu_build".to_string();
+        let user = user_with_tool_result(tr);
+
+        let mut msgs = vec![asst, user];
+        let report = compress_tool_results(&mut msgs, &db);
+
+        assert_eq!(report.compressed, 1, "cargo build log must still be compressed");
     }
 }

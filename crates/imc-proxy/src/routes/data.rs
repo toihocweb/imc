@@ -294,6 +294,48 @@ async fn memory_add(Json(body): Json<Value>) -> Response {
 }
 
 // ---------------------------------------------------------------------------
+// DELETE /api/memory  +  POST /api/memory/delete
+// ---------------------------------------------------------------------------
+fn do_memory_delete(root_str: Option<&str>, id_opt: Option<i64>) -> Response {
+    let id = match id_opt {
+        Some(i) => i,
+        None => return bad_request("id required as integer"),
+    };
+    let cfg = config();
+    let root = project_root(&cfg, root_str);
+    let db = cfg.project_db(&root);
+    if !db.exists() {
+        return bad_request(format!("project database {} does not exist", db.display()));
+    }
+    let store = match imc_core::store::open(&db) {
+        Ok(s) => s,
+        Err(e) => return error(format!("{e:#}")),
+    };
+    match imc_memory::delete(&store, id) {
+        Ok(true) => Json(json!({ "ok": true, "deleted": true, "id": id })).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "deleted": false, "error": format!("memory #{id} not found") })),
+        )
+            .into_response(),
+        Err(e) => error(format!("{e:#}")),
+    }
+}
+
+async fn memory_delete(Query(q): Query<HashMap<String, String>>) -> Response {
+    let id = q.get("id").and_then(|v| v.parse::<i64>().ok());
+    do_memory_delete(q.get("root").map(String::as_str), id)
+}
+
+async fn memory_delete_post(Json(body): Json<Value>) -> Response {
+    let id = body
+        .get("id")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
+    let root = body.get("root").and_then(Value::as_str);
+    do_memory_delete(root, id)
+}
+
+// ---------------------------------------------------------------------------
 // GET|POST /api/config
 // ---------------------------------------------------------------------------
 fn config_status() -> Value {
@@ -485,7 +527,35 @@ async fn compression_list(Query(q): Query<HashMap<String, String>>) -> Response 
         Ok(s) => s,
         Err(e) => return error(format!("{e:#}")),
     };
-    let limit = as_usize(q.get("limit"), 20);
+    if let Some(id) = q.get("id").filter(|s| !s.is_empty()) {
+        let entry: Option<Value> = store
+            .conn
+            .query_row(
+                "SELECT id, kind, original, compressed, orig_tokens, comp_tokens, created_at FROM ccr_originals WHERE id = ?1",
+                rusqlite::params![id],
+                |r| {
+                    Ok(json!({
+                        "id": r.get::<_, String>(0)?,
+                        "kind": r.get::<_, String>(1)?,
+                        "original": r.get::<_, String>(2)?,
+                        "compressed": r.get::<_, String>(3)?,
+                        "orig_tokens": r.get::<_, i64>(4)?,
+                        "comp_tokens": r.get::<_, i64>(5)?,
+                        "created_at": r.get::<_, i64>(6)?,
+                    }))
+                },
+            )
+            .ok();
+        return match entry {
+            Some(v) => Json(v).into_response(),
+            None => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("record {id} not found") })),
+            )
+                .into_response(),
+        };
+    }
+    let limit = as_usize(q.get("limit"), 50);
     let entries = match store.list(None, limit) {
         Ok(e) => e,
         Err(e) => return error(format!("{e:#}")),
@@ -496,6 +566,8 @@ async fn compression_list(Query(q): Query<HashMap<String, String>>) -> Response 
             json!({
                 "id": e.id,
                 "kind": e.kind,
+                "original": e.original,
+                "compressed": e.compressed,
                 "orig_tokens": e.orig_tokens,
                 "comp_tokens": e.comp_tokens,
                 "created_at": e.created_at,
@@ -679,7 +751,8 @@ pub fn router() -> Router {
         .route("/api/projects", get(projects))
         .route("/api/search", get(search_get).post(search_post))
         .route("/api/trace", post(trace))
-        .route("/api/memory", get(memory_list).post(memory_add))
+        .route("/api/memory", get(memory_list).post(memory_add).delete(memory_delete))
+        .route("/api/memory/delete", post(memory_delete_post))
         .route("/api/memory/stats", get(memory_stats))
         .route("/api/config", get(config_get).post(config_set))
         .route("/api/config/test", get(config_test))
@@ -779,6 +852,22 @@ mod tests {
                     .uri("/api/search")
                     .header("content-type", "application/json")
                     .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn memory_delete_without_id_is_bad_request() {
+        let app = router();
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/api/memory")
+                    .body(axum::body::Body::empty())
                     .unwrap(),
             )
             .await

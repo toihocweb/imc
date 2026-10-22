@@ -375,12 +375,14 @@ mod tests {
             version: "0.2.0".to_string(),
             assets: vec!["imc-linux-x86_64".to_string()],
         };
-        // On a platform the release does not carry, the asset is missing.
         let want = format!("imc-{}", platform().unwrap_or("unknown"));
         if want != "imc-linux-x86_64" {
             assert!(!rel.has_asset_for_this_platform());
+            assert_eq!(rel.asset_for_this_platform(), None);
+        } else {
+            assert!(rel.has_asset_for_this_platform());
+            assert_eq!(rel.asset_for_this_platform().as_deref(), Some("imc-linux-x86_64"));
         }
-        assert_eq!(rel.asset_for_this_platform().as_deref(), Some("imc-linux-x86_64"));
     }
 
     #[test]

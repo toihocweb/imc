@@ -5,9 +5,15 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::compression::context::is_search_or_discovery_content;
+
 pub fn compress(content: &str) -> String {
     let trimmed = content.trim();
     if trimmed.is_empty() {
+        return content.to_string();
+    }
+    // Search hits, grep lines, or directory listings must never drop items
+    if is_search_or_discovery_content(trimmed) {
         return content.to_string();
     }
     let sentences: Vec<String> = split_sentences(trimmed);
@@ -229,5 +235,15 @@ mod tests {
         let out = compress(&listing);
         assert!(out.contains("entry_0"), "{out}");
         assert!(out.contains("entry_99"), "{out}");
+    }
+
+    #[test]
+    fn search_hits_are_not_compressed() {
+        let input = "1. [chunk] src/auth.rs:10-30 auth_handler (score 0.91) fn login() {}\n\
+                     2. [chunk] src/user.rs:20-40 get_user (score 0.88) fn user() {}\n\
+                     3. [chunk] src/db.rs:5-25 query_db (score 0.72) fn db() {}\n\
+                     4. [chunk] src/session.rs:1-15 session (score 0.65) fn sess() {}";
+        let out = compress(input);
+        assert_eq!(out, input);
     }
 }
