@@ -63,24 +63,18 @@ compiled from source). The prebuilt installer needs neither.
 ## Quick start
 
 ```bash
-imc config setup       # point it at a model endpoint — optional, raw hits work without it
-imc .                  # index the current project (incremental; --force rebuilds)
+imc config setup       # configure your LLM/embedding endpoint (interactive)
+imc .                  # index current repo (incremental; --force rebuilds)
+imc                    # start background services (proxy on 12345 + dashboard on 4789)
+imc web                # open the web dashboard in your browser
+```
+
+Query your codebase directly from the CLI:
+```bash
 imc search "how are sessions invalidated"
 imc trace SessionStore.rotate --callers
+imc pack "why is login slow" --budget 6000
 ```
-
-For Claude Code, one command wires everything — index, `.claude/settings.local.json`, the
-agent rule file, and the proxy:
-
-```bash
-imc claude          # wires the project, starts the proxy, opens Claude Code
-imc setup           # the same, without opening Claude Code (a server, a CI step)
-```
-
-`imc claude` is a passthrough: every flag and every subcommand belongs to Claude Code.
-`imc claude --dangerously-skip-permissions` is `claude --dangerously-skip-permissions`,
-and `imc claude mcp` is `claude mcp` — nothing is intercepted, so the two sets of
-subcommands can never collide.
 
 ---
 
@@ -129,9 +123,9 @@ imc memory-search "changelog"
 An empty `memory-search` result means *no matching memory*, not *this project has no
 memories*.
 
-### MCP server
+### MCP server & agent integrations
 
-Expose imc to any MCP client (Claude Code, Cursor, Cline, …) as tools with schemas — no shell
+Expose imc to any MCP client (Claude Code, Cursor, Cline, Windsurf, …) as tools with schemas — no shell
 quoting, no guessing flags.
 
 ```bash
@@ -139,36 +133,36 @@ imc mcp install     # writes .mcp.json for this project
 imc mcp             # serve over stdio
 ```
 
-With the proxy running the same server answers at `POST http://127.0.0.1:12345/mcp`
+With the proxy running, the same server answers at `POST http://127.0.0.1:12345/mcp`
 (streamable HTTP). Tools: `search`, `ask`, `trace`, `read`, `context`, `memory_search`,
 `pack`, plus resources `imc://project/{id}` and `imc://file/{path}`. Every call is pinned to
 the project's root, so a tool call can never answer for a different repository.
 
-### One command to start everything
-
+For Claude Code, you can also launch directly:
 ```bash
-imc            # starts the proxy (12345) and the dashboard (4789)
-imc claude     # wire + proxy, then hands the terminal to `claude` (args pass through)
-imc setup      # wire + proxy, without opening `claude`
-imc proxy serve --port 12345   # the proxy alone, in the foreground
+imc claude          # wires project settings, starts proxy, and hands terminal to claude
 ```
 
-`imc .` still indexes the current directory; `imc index <path>` indexes something else.
+### Service management
+
+```bash
+imc            # starts background proxy (port 12345) and dashboard (port 4789)
+imc stop       # stops running background services cleanly
+imc doctor     # check health, config, proxy status, and project indexes
+```
+
+`imc .` indexes the current directory; `imc <path>` indexes another path.
 Indexing progress goes to stderr, so a long run is not a black box.
 
 ### Web dashboard
 
-A shadcn/ui dashboard over the same index: projects, search, trace, memory, the
-compression store, prompt captures, model mappings and the endpoint configuration.
-The data is served by the proxy on port 12345 — the dashboard asks it over HTTP
-instead of starting a process per click.
+A shadcn/ui dashboard over the same index: projects, search with code viewer, call graph trace,
+memory, compression store, prompt captures, model mappings, and configuration.
+The data is served by the proxy on port 12345.
 
 ```bash
-imc web     # opens http://localhost:4789, starting it if needed (--url for a remote host)
+imc web     # opens http://localhost:4789 in browser
 ```
-
-On a fresh clone the app has neither `node_modules` nor a build, so `imc web` installs and
-builds it once (Node.js 18+). Light and dark themes, responsive down to phone width.
 
 ### LLM proxy and compression
 
@@ -301,18 +295,22 @@ list lives.
 
 | Command | What it does |
 |---|---|
-| `imc [path]` / `imc index [path]` | Index incrementally; `--force` rebuilds. `imc .` is the shortcut. |
-| `imc search "<query>"` | Hybrid retrieval, then an LLM answer with `path:line` citations. |
-| `imc trace <target>` | Call tree or blast radius (`--callers`), for symbols and `GET /api/…` routes. |
-| `imc trace <symbol>` | The call tree from a symbol, rooted at its definition (kind, qualified name, line range). `--callers` for the blast radius, `--both` for both. |
-| `imc read <file>` | Token-optimised reader; `--symbols` for the outline, `--method` for one function. |
-| `imc context <target>` | Everything around a file: outline, dependencies, endpoints, tests. |
-| `imc pack "<query>"` | Retrieval + graph + memories in one bundle under a token budget. |
-| `imc memory-…` / `imc learn <file>` | Project memory: add, search, list, delete, prune; extract from a transcript. |
-| `imc compress` / `retrieve <id>` / `ccr …` | Compress text, expand a handle, inspect the store. |
-| `imc claude …` / `imc setup` / `imc proxy …` | Claude Code integration (a passthrough to `claude`); the LLM proxy on its own. |
-| `imc mcp [install]` / `imc web` / `imc list` | MCP server, dashboard, registered projects. |
-| `imc config …` / `imc doctor` / `imc update` / `imc install` | Configuration and model mappings, diagnostics, self-update, PATH install. |
+| `imc [path]` / `imc .` | Index incrementally; `--force` rebuilds. |
+| `imc search "<query>"` | Hybrid retrieval (BM25 + vector + graph) with citations. `--raw` for chunks only. |
+| `imc trace <symbol>` | Call hierarchy: callees or blast radius (`--callers`), for symbols and HTTP routes. |
+| `imc read <file>` | Token-optimised reader; `--symbols` for outline, `--method` for one function. |
+| `imc context <target>` | Resolved context for a file: outline, dependencies, endpoints, tests. |
+| `imc pack "<query>"` | Retrieval + graph + memories packed within a token budget (`--budget`). |
+| `imc memory-…` | Durable project memory: `memory-add`, `memory-search`, `memory-list`, `memory-delete`. |
+| `imc learn <file>` | Extract conventions and lessons from transcripts or text notes. |
+| `imc compress` / `retrieve <id>` | Compress text using CCR store; retrieve exact original bytes by handle. |
+| `imc mcp [install]` | MCP server over stdio; `install` writes project `.mcp.json`. |
+| `imc` / `imc stop` | Start or stop background services (proxy on port 12345 and dashboard on port 4789). |
+| `imc web` | Open web dashboard in browser. |
+| `imc list` | List registered/indexed projects. |
+| `imc config …` | Interactive config (`config setup`), list masked keys, or test endpoint. |
+| `imc doctor` | Health check for environment, config, proxy, and project indexes. |
+| `imc update` | Check for updates and download newest release binary (`--check` / `--force`). |
 
 Global flags: `-C/--root <dir>` (project root) and `--json` (machine-readable output
 everywhere). `search`, `trace` and `context` also take `-p/--project <id-or-name>`.
