@@ -632,7 +632,6 @@ fn run_trace_arm(
     json: bool,
 ) -> Result<()> {
     let root = root_with_project_ref(cfg, base_root, args.project.as_deref())?;
-    let _ = imc_index::ensure_fresh_index(cfg, &root);
     let db = cfg.project_db(&root);
     let indexed = db.exists();
     let mut store = if indexed { store::open(&db)? } else { store::open(&cfg.data_dir.join("empty.db"))? };
@@ -952,7 +951,6 @@ fn main() -> Result<()> {
             rerank,
         } => {
             let root = root_with_project_ref(&cfg, &root, project.as_deref())?;
-            let _ = imc_index::ensure_fresh_index(&cfg, &root);
             let db = cfg.project_db(&root);
             if !db.exists() {
                 bail!("project {} is not indexed. Run `imc index {}` first", root.display(), root.display());
@@ -1113,7 +1111,6 @@ fn main() -> Result<()> {
             rerank,
         } => {
             let root = root_with_project_ref(&cfg, &root, project.as_deref())?;
-            let _ = imc_index::ensure_fresh_index(&cfg, &root);
             let db = cfg.project_db(&root);
             if !db.exists() {
                 bail!(

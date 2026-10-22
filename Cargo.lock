@@ -1200,7 +1200,6 @@ dependencies = [
  "imc-cli-extra",
  "imc-core",
  "imc-embed",
- "imc-index",
  "imc-mcp",
  "imc-memory",
  "imc-proxy-copilot",
