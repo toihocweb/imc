@@ -282,8 +282,17 @@ pub fn maybe_notify() {
 
 /// Download the latest release and replace the running binary.
 pub fn install(timeout: Duration) -> Result<(String, PathBuf)> {
+    install_inner(timeout, false)
+}
+
+/// Download the latest release and replace the running binary, optionally bypassing the version check.
+pub fn install_with_force(timeout: Duration, force: bool) -> Result<(String, PathBuf)> {
+    install_inner(timeout, force)
+}
+
+fn install_inner(timeout: Duration, force: bool) -> Result<(String, PathBuf)> {
     let latest = fetch_latest(timeout)?;
-    if !is_newer(&latest, current_version()) {
+    if !force && !is_newer(&latest, current_version()) {
         bail!("already on the latest version (v{})", current_version());
     }
     let release = fetch_release(timeout)?;

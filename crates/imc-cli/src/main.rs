@@ -350,6 +350,9 @@ enum Command {
         /// Only check for a new release; do not install it.
         #[arg(long)]
         check: bool,
+        /// Re-install the latest release even if already on the same version.
+        #[arg(long, short = 'f')]
+        force: bool,
     },
     /// Capture the full prompt the proxy receives (see what the model really sees).
     #[command(name = "capture")]
@@ -2027,7 +2030,7 @@ saved to {}", st::path().display());
                 println!("{line}");
             }
         }
-        Command::Update { check } => {
+        Command::Update { check, force } => {
             use imc_cli::update;
             let timeout = std::time::Duration::from_secs(if *check { 5 } else { 60 });
             match update::refresh(timeout) {
@@ -2076,8 +2079,8 @@ saved to {}", st::path().display());
                         } else {
                             println!("imc v{} is up to date", update::current_version());
                         }
-                    } else if newer {
-                        match update::install(timeout) {
+                    } else if newer || *force {
+                        match update::install_with_force(timeout, *force) {
                             Ok((tag, path)) => println!(
                                 "updated v{} → v{} ({})",
                                 update::current_version(),

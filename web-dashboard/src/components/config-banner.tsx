@@ -44,7 +44,7 @@ export function ConfigBanner() {
 
   return (
     <div className="border-b border-amber-500/40 bg-amber-500/10">
-      <div className="mx-auto flex max-w-[1400px] items-start gap-3 px-3 py-2.5 sm:px-6 lg:px-8">
+      <div className="mx-auto flex max-w-[1500px] items-start gap-3 px-4 py-2.5 sm:px-6 lg:px-8">
         <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
         <div className="flex-1 text-sm">
           <span className="font-medium">Upstream LLM is not fully configured.</span>{" "}

@@ -1016,7 +1016,7 @@ dependencies = [
 
 [[package]]
 name = "imc-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "imc-cli-extra"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "imc-core",
  "imc-support",
@@ -1054,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "imc-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1069,7 +1069,7 @@ dependencies = [
 
 [[package]]
 name = "imc-embed"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "imc-core",
@@ -1081,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "imc-find"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "imc-core",
@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "imc-index"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "imc-core",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "imc-mcp"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -1117,7 +1117,7 @@ dependencies = [
 
 [[package]]
 name = "imc-memory"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "imc-core",
@@ -1130,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "imc-parser"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "imc-core",
@@ -1145,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "imc-proxy"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "imc-proxy-copilot"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "imc-proxy-types"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1204,7 +1204,7 @@ dependencies = [
 
 [[package]]
 name = "imc-search"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "imc-core",
@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "imc-support"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "imc-core",
@@ -1230,7 +1230,7 @@ dependencies = [
 
 [[package]]
 name = "imc-trace"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "imc-core",

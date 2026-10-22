@@ -172,7 +172,7 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { projects, selectedPath, setSelectedPath } = useProject();
+  const { projects, selectedPath } = useProject();
 
   // Tab State
   const tabParam = searchParams.get("tab") as WorkbenchTab | null;
@@ -482,36 +482,15 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
   };
 
   return (
-    <div className="space-y-6 max-w-6xl mx-auto">
-      {/* Top Header & Project Selector */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-border/80 pb-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-            Code Intelligence Studio
-          </h1>
-          <p className="text-xs sm:text-sm text-muted-foreground">
-            Unified workspace for retrieval, call-tree tracing, context compression, and durable memory.
-          </p>
-        </div>
-
-        {/* Global Project Switcher */}
-        {projects.length > 0 && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground whitespace-nowrap">Active Project:</span>
-            <select
-              aria-label="Active Project"
-              value={selectedPath}
-              onChange={(e) => setSelectedPath(e.target.value)}
-              className="h-9 max-w-[280px] truncate rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground cursor-pointer focus:ring-1 focus:ring-primary shadow-2xs"
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.path}>
-                  {p.name} ({formatNumber(p.counts.files)} files)
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+    <div className="space-y-6 w-full animate-in fade-in duration-300">
+      {/* Top Header */}
+      <div className="border-b border-border/80 pb-4">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          Code Intelligence Studio
+        </h1>
+        <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+          Unified workspace for retrieval, call-tree tracing, context compression, and durable memory.
+        </p>
       </div>
 
       {/* Primary Unified Tabs */}

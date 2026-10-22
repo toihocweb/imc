@@ -193,6 +193,22 @@ fn kill_listener_on_port(port: u16) -> bool {
             }
         }
     }
+    if !killed {
+        if let Ok(out) = Command::new("lsof")
+            .args(["-ti", &format!("tcp:{port}"), "-sTCP:LISTEN"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if let Ok(pid) = line.trim().parse::<i64>() {
+                    if pid > 0 {
+                        let _ = Command::new("kill").arg(pid.to_string()).status();
+                        killed = true;
+                    }
+                }
+            }
+        }
+    }
     if killed {
         let start = std::time::Instant::now();
         while is_up(port) && start.elapsed() < Duration::from_millis(1500) {
@@ -253,30 +269,29 @@ fn start(port: u16) -> Result<String> {
     let node = which("node").ok_or_else(|| anyhow!("`node` not found on PATH"))?;
     let log = std::env::temp_dir().join("imc-web.log");
     let pid_file = std::env::temp_dir().join(format!("imc-web-{port}.pid"));
-    // `exec` replaces the shell, so the pid file holds the node process.
-    let cmd = format!(
-        "nohup sh -c 'echo $$ > {}; exec {} {} start -p {} -H 0.0.0.0 >> {} 2>&1' &",
-        shell_quote(&pid_file.to_string_lossy()),
-        shell_quote(&node.to_string_lossy()),
-        shell_quote(&next_bin.to_string_lossy()),
-        port,
-        shell_quote(&log.to_string_lossy()),
-    );
-    let _ = Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)?;
+    let err_file = log_file.try_clone()?;
+    let child = Command::new(&node)
+        .arg(&next_bin)
+        .args(["start", "-p", &port.to_string(), "-H", "0.0.0.0"])
         .current_dir(&dir)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(err_file))
+        .spawn()?;
+    let spawned_pid = child.id() as i64;
+    let _ = std::fs::write(&pid_file, spawned_pid.to_string());
 
     if wait_up(port, Duration::from_secs(30)) {
         // Remember what is running, so a later `imc web` can tell whether it
         // is still the current build.
         let pid = std::fs::read_to_string(&pid_file)
             .ok()
-            .and_then(|s| s.trim().parse::<i64>().ok());
+            .and_then(|s| s.trim().parse::<i64>().ok())
+            .or(Some(spawned_pid));
         let mut state = serde_json::json!({
             "pid": pid,
             "port": port,
@@ -431,7 +446,8 @@ fn which(bin: &str) -> Option<PathBuf> {
     None
 }
 
-fn shell_quote(s: &str) -> String {
+#[allow(dead_code)]
+pub(crate) fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 

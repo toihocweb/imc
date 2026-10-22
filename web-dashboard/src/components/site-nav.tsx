@@ -65,7 +65,7 @@ export function SiteNav() {
 
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-border/80 bg-background/85 backdrop-blur-md">
-      <div className="mx-auto flex h-14 max-w-[1500px] items-center justify-between gap-3 px-3 sm:px-6">
+      <div className="mx-auto flex h-14 max-w-[1500px] items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
         {/* Brand & Active Project Selector */}
         <div className="flex items-center gap-3">
           <Link

@@ -97,7 +97,7 @@ export default function CapturesPage() {
     sec ? new Date(sec * 1000).toLocaleString("en-US", { hour12: false }) : "—";
 
   return (
-    <div className="space-y-6 max-w-6xl mx-auto">
+    <div className="space-y-6 w-full animate-in fade-in duration-300">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight sm:text-3xl flex items-center gap-2">

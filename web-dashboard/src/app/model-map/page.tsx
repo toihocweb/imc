@@ -86,7 +86,7 @@ export default function ModelMapPage() {
   const rows = Object.entries(state?.mappings || {}).sort(([a], [b]) => a.localeCompare(b));
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full animate-in fade-in duration-300">
       <div>
         <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Model mapping</h1>
         <p className="mt-1 text-sm text-muted-foreground">

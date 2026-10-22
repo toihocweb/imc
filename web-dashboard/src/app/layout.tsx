@@ -32,7 +32,7 @@ export default function RootLayout({
           <ProjectProvider>
             <SiteNav />
             <ConfigBanner />
-            <main className="mx-auto w-full max-w-[1500px] px-3 pb-16 pt-[4.25rem] sm:px-6 lg:px-8">
+            <main className="mx-auto w-full max-w-[1500px] px-4 pb-16 pt-[4.25rem] sm:px-6 lg:px-8">
               {children}
             </main>
             <Toaster />
