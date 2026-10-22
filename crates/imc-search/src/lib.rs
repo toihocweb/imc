@@ -447,16 +447,7 @@ pub fn search(
     if let Some(embedder) = embedder.filter(|_| opts.vector) {
         // Same token filter as the lexical leg, else the hashing embedder
         // spends its whole budget on "how"/"to"/"the".
-        let mut vq = query.to_string();
-        {
-            let toks: Vec<String> = tokenize(query)
-                .into_iter()
-                .filter(|t| !STOPWORDS.contains(&t.as_str()))
-                .collect();
-            if !toks.is_empty() {
-                vq = toks.join(" ");
-            }
-        }
+        let vq = imc_embed::vector_query(query);
         if let Ok(qv) = embedder.embed(&[vq]) {
             if let Some(v) = qv.into_iter().next() {
                 let vs = if lexical_support {

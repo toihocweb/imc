@@ -145,11 +145,65 @@ pub fn build(
 ) -> Result<Pack> {
     let mut memory_tokens = 0usize;
 
-    // --- memories ---------------------------------------------------------
+    // Pre-warm query vector cache so that both memory recall and code search
+    // share the single embedded vector, saving a network round-trip.
+    if opts.vector {
+        if let Some(e) = embedder {
+            let vq = imc_embed::vector_query(query);
+            let _ = e.embed(&[vq]);
+        }
+    }
+
+    // --- parallel memories & retrieval ------------------------------------
+    let candidate_limit = if opts.rerank { opts.candidates * 2 } else { opts.candidates };
+
+    let (mem_res, search_res) = if opts.memories {
+        if let Ok(st) = store.reopen() {
+            std::thread::scope(|s| {
+                let mem_handle = s.spawn(move || {
+                    imc_memory::recall(&st, embedder, query, &[], None, None, 5)
+                });
+                let search_hits = imc_search::search(
+                    store,
+                    embedder,
+                    query,
+                    &imc_search::SearchOptions {
+                        limit: candidate_limit,
+                        vector: opts.vector,
+                    },
+                );
+                (mem_handle.join().unwrap(), search_hits)
+            })
+        } else {
+            let mem = imc_memory::recall(store, embedder, query, &[], None, None, 5);
+            let search_hits = imc_search::search(
+                store,
+                embedder,
+                query,
+                &imc_search::SearchOptions {
+                    limit: candidate_limit,
+                    vector: opts.vector,
+                },
+            );
+            (mem, search_hits)
+        }
+    } else {
+        let search_hits = imc_search::search(
+            store,
+            embedder,
+            query,
+            &imc_search::SearchOptions {
+                limit: candidate_limit,
+                vector: opts.vector,
+            },
+        );
+        (Ok(Vec::new()), search_hits)
+    };
+
     let mut memories: Vec<PackMemory> = Vec::new();
     if opts.memories {
         let mem_budget = (opts.budget as f64 * MEMORY_SHARE) as usize;
-        if let Ok(hits) = imc_memory::recall(store, embedder, query, &[], None, None, 5) {
+        if let Ok(hits) = mem_res {
             let mut spent = 0usize;
             for h in hits {
                 let tokens = imc_proxy::compression::estimate_tokens(&h.memory.content);
@@ -168,17 +222,7 @@ pub fn build(
         }
     }
 
-    // --- retrieval --------------------------------------------------------
-    let candidate_limit = if opts.rerank { opts.candidates * 2 } else { opts.candidates };
-    let mut hits: Vec<SearchHit> = imc_search::search(
-        store,
-        embedder,
-        query,
-        &imc_search::SearchOptions {
-            limit: candidate_limit,
-            vector: opts.vector,
-        },
-    )?;
+    let mut hits: Vec<SearchHit> = search_res?;
 
     if opts.rerank && !hits.is_empty() {
         let cfg = imc_core::config::Config::default();

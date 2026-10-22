@@ -3,11 +3,35 @@
 //! deterministic local hashing embedder so indexing still works offline
 //! (keyword-quality retrieval instead of semantic).
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use anyhow::{anyhow, Result};
 use rayon::prelude::*;
 use serde::Deserialize;
 
 use imc_core::config::EmbedConfig;
+
+pub const STOPWORDS: &[&str] = &[
+    "a", "an", "the", "in", "on", "at", "to", "for", "of", "with", "by", "from",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do",
+    "does", "did", "how", "what", "where", "when", "why", "which", "who", "whom",
+    "this", "that", "these", "those", "it", "its", "can", "could", "should", "would",
+];
+
+/// Normalize a search query for vector embedding: splits into tokens, drops
+/// common grammatical stopwords, and joins with space.
+pub fn vector_query(query: &str) -> String {
+    let toks: Vec<String> = tokenize(query)
+        .into_iter()
+        .filter(|t| !STOPWORDS.contains(&t.as_str()))
+        .collect();
+    if !toks.is_empty() {
+        toks.join(" ")
+    } else {
+        query.to_string()
+    }
+}
 
 pub trait Embedder: Send + Sync {
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
@@ -126,11 +150,15 @@ struct EmbeddingItem {
 
 pub struct RemoteEmbedder {
     cfg: EmbedConfig,
+    cache: Mutex<HashMap<String, Vec<f32>>>,
 }
 
 impl RemoteEmbedder {
     pub fn new(cfg: EmbedConfig) -> Self {
-        Self { cfg }
+        Self {
+            cfg,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -409,6 +437,32 @@ impl Embedder for RemoteEmbedder {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
+
+        let clean: Vec<String> = texts.iter().map(|t| sanitize(t)).collect();
+
+        // Query Vector Cache: check in-memory cache first to avoid redundant network calls
+        let mut results: Vec<Option<Vec<f32>>> = vec![None; clean.len()];
+        let mut missing_indices: Vec<usize> = Vec::new();
+        let mut missing_texts: Vec<String> = Vec::new();
+
+        if let Ok(guard) = self.cache.lock() {
+            for (i, t) in clean.iter().enumerate() {
+                if let Some(vec) = guard.get(t) {
+                    results[i] = Some(vec.clone());
+                } else {
+                    missing_indices.push(i);
+                    missing_texts.push(t.clone());
+                }
+            }
+        } else {
+            missing_indices = (0..clean.len()).collect();
+            missing_texts = clean.clone();
+        }
+
+        if missing_texts.is_empty() {
+            return Ok(results.into_iter().map(|v| v.unwrap_or_default()).collect());
+        }
+
         let key = self
             .cfg
             .api_key
@@ -417,29 +471,39 @@ impl Embedder for RemoteEmbedder {
         let url = format!("{}/embeddings", self.cfg.base_url.trim_end_matches('/'));
         let agent = agent();
 
-        let clean: Vec<String> = texts.iter().map(|t| sanitize(t)).collect();
-
         // Batches run concurrently on their own pool: the work is waiting on
         // the network, so the limit is how many requests the endpoint
         // tolerates, not how many cores the machine has.
-        let batches: Vec<&[String]> = clean.chunks(batch_size()).collect();
+        let batches: Vec<&[String]> = missing_texts.chunks(batch_size()).collect();
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(concurrency().min(batches.len().max(1)))
             .build()
             .map_err(|e| anyhow!("cannot build the embedding pool: {e}"))?;
         let limiter = RateLimiter::new(concurrency());
-        let results: Vec<Result<Vec<Vec<f32>>>> = pool.install(|| {
+        let fetched_batches: Vec<Result<Vec<Vec<f32>>>> = pool.install(|| {
             batches
                 .par_iter()
                 .map(|b| embed_with_retry(&agent, &url, key, &self.cfg.model, b, &limiter))
                 .collect()
         });
 
-        let mut out = Vec::with_capacity(clean.len());
-        for r in results {
-            out.extend(r?);
+        let mut fetched = Vec::with_capacity(missing_texts.len());
+        for r in fetched_batches {
+            fetched.extend(r?);
         }
-        Ok(out)
+
+        // Populate cache with newly fetched vectors
+        if let Ok(mut guard) = self.cache.lock() {
+            if guard.len() > 1024 {
+                guard.clear();
+            }
+            for (idx, vec) in missing_indices.iter().zip(fetched.into_iter()) {
+                guard.insert(clean[*idx].clone(), vec.clone());
+                results[*idx] = Some(vec);
+            }
+        }
+
+        Ok(results.into_iter().map(|v| v.unwrap_or_default()).collect())
     }
 
     fn name(&self) -> String {

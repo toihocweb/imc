@@ -760,7 +760,10 @@ pub fn retrieve(
 
     // Cosine leg, when an embedder is configured.
     let query_vec = embedder
-        .and_then(|e| e.embed(&[query.to_string()]).ok())
+        .and_then(|e| {
+            let vq = imc_embed::vector_query(query);
+            e.embed(&[vq]).ok()
+        })
         .and_then(|v| v.into_iter().next());
     let mut vectors: HashMap<i64, Vec<f32>> = HashMap::new();
     if let Some(qv) = &query_vec {

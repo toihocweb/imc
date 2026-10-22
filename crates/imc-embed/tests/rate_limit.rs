@@ -72,3 +72,26 @@ fn a_rate_limit_is_waited_out_and_the_vectors_still_come_back() {
     );
     assert!(seen.load(Ordering::SeqCst) >= 3, "the request was retried");
 }
+
+#[test]
+fn query_vector_cache_hits_without_network_request() {
+    let (base, seen) = stub_server(0);
+    let embedder = RemoteEmbedder::new(imc_core::config::EmbedConfig {
+        base_url: base,
+        api_key: Some("test-key".to_string()),
+        model: "stub".to_string(),
+        fallback_dim: 8,
+    });
+    let query = vec!["how does authentication work".to_string()];
+
+    // First call: hits the network
+    let v1 = embedder.embed(&query).expect("first embed");
+    let network_calls_after_first = seen.load(Ordering::SeqCst);
+    assert_eq!(network_calls_after_first, 1);
+
+    // Second call with same text: served completely from cache without network call
+    let v2 = embedder.embed(&query).expect("second embed (cached)");
+    let network_calls_after_second = seen.load(Ordering::SeqCst);
+    assert_eq!(network_calls_after_second, 1, "cache must not make second network call");
+    assert_eq!(v1, v2);
+}

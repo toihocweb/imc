@@ -1,12 +1,13 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection};
 
 use crate::types::{Chunk, Edge, EdgeKind, Symbol, SymbolKind};
 
 pub struct Store {
     pub conn: Connection,
+    pub path: Option<PathBuf>,
 }
 
 pub fn open(db_path: &Path) -> Result<Store> {
@@ -65,10 +66,20 @@ pub fn open(db_path: &Path) -> Result<Store> {
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
         "#,
     )?;
-    Ok(Store { conn })
+    Ok(Store {
+        conn,
+        path: Some(db_path.to_path_buf()),
+    })
 }
 
 impl Store {
+    /// Open a new connection to the same SQLite database for concurrent reads.
+    pub fn reopen(&self) -> Result<Store> {
+        match &self.path {
+            Some(p) => crate::store::open(p),
+            None => bail!("cannot reopen a store without a file path"),
+        }
+    }
     pub fn file_hash(&self, rel: &str) -> Option<String> {
         self.conn
             .query_row("SELECT hash FROM files WHERE path = ?1", params![rel], |r| {
