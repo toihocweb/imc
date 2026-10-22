@@ -24,7 +24,7 @@ export function proxyConfigPath(): string {
     join(repoRoot, "hy-pro", "config.json"),
     join(repoRoot, "config.json"),
   ]) {
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(/*turbopackIgnore: true*/ candidate)) return candidate;
   }
 
   const home = process.env.COPILOT_API_HOME;

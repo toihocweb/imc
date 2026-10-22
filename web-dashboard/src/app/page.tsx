@@ -1,21 +1,34 @@
 "use client";
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import {
+  Search,
+  Network,
+  Cpu,
+  Brain,
+  FolderGit2,
+  FileCode,
+  Code2,
+  GitFork,
+  Layers,
+  ArrowRight,
+  Terminal,
+  Activity,
+  CheckCircle2,
+  AlertTriangle,
+  ExternalLink,
+  Sparkles,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-
-interface Project {
-  id: string;
-  name: string;
-  path: string;
-  counts: { files: number; symbols: number; edges: number; chunks: number; embeddings: number };
-  db_size_mb: number;
-}
+import { useProject } from "@/components/project-context";
 
 export default function Home() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  const { projects, loading, selectedPath, setSelectedPath } = useProject();
+  const [searchQuery, setSearchQuery] = useState("");
   const [cfg, setCfg] = useState<{
     base_url: string;
     model: string;
@@ -25,14 +38,6 @@ export default function Home() {
   } | null>(null);
 
   useEffect(() => {
-    fetch("/api/projects")
-      .then((r) => r.json())
-      .then((d) => {
-        if (Array.isArray(d)) setProjects(d);
-        else setError(d.error || "Unexpected response");
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
     fetch("/api/config")
       .then((r) => r.json())
       .then((d) => {
@@ -52,125 +57,320 @@ export default function Home() {
     { files: 0, symbols: 0, edges: 0, chunks: 0, size: 0 }
   );
 
+  const handleHeroSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    router.push(`/search?q=${encodeURIComponent(searchQuery.trim())}`);
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">imc Dashboard</h1>
-          <p className="text-muted-foreground">
-            Code intelligence for coding agents: AST index + lexical/vector retrieval + call graph
+    <div className="space-y-8 animate-in fade-in duration-300">
+      {/* Hero Section with Quick Search */}
+      <div className="relative overflow-hidden rounded-2xl border border-border/80 bg-gradient-to-b from-card to-card/60 p-6 sm:p-8 lg:p-10 shadow-xs">
+        <div className="absolute top-0 right-0 -mt-10 -mr-10 h-72 w-72 rounded-full bg-primary/10 blur-3xl pointer-events-none" />
+        <div className="relative z-10 max-w-3xl space-y-4">
+          <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>Code Intelligence for AI Coding Agents</span>
+          </div>
+
+          <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl lg:text-5xl text-foreground">
+            Explore, trace, and compress your codebase.
+          </h1>
+
+          <p className="text-sm sm:text-base text-muted-foreground leading-relaxed max-w-2xl">
+            Tree-sitter AST index, lexical BM25 + vector hybrid retrieval, call-graph blast radius analysis, and proxy context optimization — all in one local SQLite database.
           </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Link href="/search" className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-            Search
-          </Link>
-          <Link href="/compression" className="inline-flex items-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-secondary">
-            Compression
-          </Link>
+
+          {/* Integrated Search Input */}
+          <form onSubmit={handleHeroSearch} className="pt-2">
+            <div className="relative flex max-w-2xl items-center">
+              <Search className="absolute left-3.5 h-4 w-4 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="Search repository (e.g. authentication flow, parse token, session store)..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="h-12 w-full rounded-xl border border-border/90 bg-background/80 pl-10 pr-28 text-sm text-foreground shadow-inner transition-all hover:border-primary/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 backdrop-blur-xs"
+              />
+              <button
+                type="submit"
+                className="absolute right-1.5 h-9 rounded-lg bg-primary px-4 text-xs font-medium text-primary-foreground shadow-xs hover:bg-primary/90 transition-colors cursor-pointer"
+              >
+                Search
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 pt-2.5 text-xs text-muted-foreground">
+              <span>Quick suggestions:</span>
+              {["auth token", "database migration", "route handler", "error retry"].map((sample) => (
+                <button
+                  key={sample}
+                  type="button"
+                  onClick={() => router.push(`/search?q=${encodeURIComponent(sample)}`)}
+                  className="rounded-md border border-border/60 bg-muted/50 px-2 py-0.5 hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
+                >
+                  {sample}
+                </button>
+              ))}
+            </div>
+          </form>
         </div>
       </div>
 
-      {error && (
-        <Card>
-          <CardContent className="pt-6 text-destructive">{error}</CardContent>
-        </Card>
-      )}
-
-      {loading ? (
-        <p className="text-muted-foreground">Loading projects...</p>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-5">
-            {[
-              ["Projects", projects.length],
-              ["Files", totals.files],
-              ["Symbols", totals.symbols],
-              ["Edges", totals.edges],
-              ["Chunks", totals.chunks],
-            ].map(([label, val]) => (
-              <Card key={String(label)}>
-                <CardContent className="pt-6">
-                  <div className="text-xs text-muted-foreground">{label}</div>
-                  <div className="font-mono text-xl font-bold sm:text-2xl">{Number(val).toLocaleString()}</div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          {cfg && (
-            <Card className={cfg.complete ? "" : "border-amber-500/60"}>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center justify-between">
-                  <span>LLM setup</span>
-                  {cfg.complete ? (
-                    <Badge variant="secondary">ready</Badge>
-                  ) : (
-                    <Badge variant="destructive">missing {cfg.missing.join(", ")}</Badge>
-                  )}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-                <span className="text-muted-foreground">
-                  model <span className="font-mono">{cfg.model || "—"}</span>
-                </span>
-                <span className="text-muted-foreground truncate max-w-[280px]">
-                  url <span className="font-mono">{cfg.base_url || "—"}</span>
-                </span>
-                <span className="text-muted-foreground">
-                  key <span className="font-mono">{cfg.api_key_set ? "set" : "—"}</span>
-                </span>
-                <Link
-                  href="/settings"
-                  className="ml-auto text-sm text-primary hover:underline"
-                >
-                  {cfg.complete ? "Change settings" : "Configure now"}
-                </Link>
+      {/* KPI Metrics Grid */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-5">
+        {[
+          { label: "Indexed Projects", val: projects.length, icon: FolderGit2, sub: "Local repos" },
+          { label: "Total Files", val: totals.files, icon: FileCode, sub: "Source files" },
+          { label: "AST Symbols", val: totals.symbols, icon: Code2, sub: "Functions & types" },
+          { label: "Call Graph Edges", val: totals.edges, icon: GitFork, sub: "Caller/callee links" },
+          { label: "Search Chunks", val: totals.chunks, icon: Layers, sub: `${totals.size.toFixed(1)} MB index` },
+        ].map((item) => {
+          const Icon = item.icon;
+          return (
+            <Card key={item.label} className="glow-card border-border/80">
+              <CardContent className="p-4 sm:p-5 flex flex-col justify-between h-full">
+                <div className="flex items-center justify-between text-muted-foreground">
+                  <span className="text-xs font-medium">{item.label}</span>
+                  <div className="p-1.5 rounded-md bg-muted/60">
+                    <Icon className="h-4 w-4" />
+                  </div>
+                </div>
+                <div className="pt-2">
+                  <div className="font-mono text-2xl font-bold tracking-tight text-foreground">
+                    {loading ? "..." : item.val.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">{item.sub}</div>
+                </div>
               </CardContent>
             </Card>
-          )}
+          );
+        })}
+      </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 sm:gap-6">
-            {projects.map((p) => (
-              <Card key={p.id}>
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center justify-between">
-                    <span>{p.name}</span>
-                    <Badge variant="secondary">{p.db_size_mb.toFixed(2)} MB</Badge>
-                  </CardTitle>
-                  <div className="text-xs font-mono text-muted-foreground truncate">{p.path}</div>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Files</span>
-                      <span className="font-mono">{p.counts.files}</span>
+      {/* Live System Engine & Quick Actions */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {/* Engine Status */}
+        <Card className="border-border/80 lg:col-span-1 flex flex-col justify-between">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-semibold flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <Activity className="h-4 w-4 text-primary" />
+                Runtime Engine Status
+              </span>
+              <span className="flex items-center gap-1.5 text-xs text-emerald-500 font-medium">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                Active
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3.5 text-xs text-muted-foreground">
+            <div className="flex items-center justify-between border-b border-border/50 pb-2">
+              <span>Reverse Proxy</span>
+              <span className="font-mono text-foreground font-medium">http://127.0.0.1:12345</span>
+            </div>
+            <div className="flex items-center justify-between border-b border-border/50 pb-2">
+              <span>LLM Endpoint</span>
+              <span className="font-mono text-foreground font-medium truncate max-w-[160px]">
+                {cfg?.model || "default"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between border-b border-border/50 pb-2">
+              <span>API Key Status</span>
+              {cfg?.api_key_set ? (
+                <span className="flex items-center gap-1 text-emerald-500 font-medium">
+                  <CheckCircle2 className="h-3 w-3" /> Configured
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-amber-500 font-medium">
+                  <AlertTriangle className="h-3 w-3" /> Optional (raw mode)
+                </span>
+              )}
+            </div>
+            <div className="pt-1">
+              <Link
+                href="/settings"
+                className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-border bg-muted/40 py-1.5 text-xs font-medium text-foreground hover:bg-accent transition-colors"
+              >
+                Configure Settings & Models <ArrowRight className="h-3 w-3 ml-1" />
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Feature Navigation Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:col-span-2">
+          {[
+            {
+              title: "Code Retrieval",
+              desc: "Hybrid BM25 + Vector search with symbol rank boosting and AST evidence.",
+              href: "/search",
+              icon: Search,
+              action: "Open Search",
+            },
+            {
+              title: "Call Graph & Blast Radius",
+              desc: "Trace callees (what it calls) or callers (what breaks when you edit).",
+              href: "/trace",
+              icon: Network,
+              action: "Explore Call Tree",
+            },
+            {
+              title: "Context Compression",
+              desc: "CCR store and live text/log/diff compressor saving up to 80% context tokens.",
+              href: "/compression",
+              icon: Cpu,
+              action: "View Compression",
+            },
+            {
+              title: "Durable Project Memory",
+              desc: "Auto-learned lessons, mistakes, and architectural decisions kept in SQLite.",
+              href: "/memory",
+              icon: Brain,
+              action: "Inspect Memories",
+            },
+          ].map((feature) => {
+            const Icon = feature.icon;
+            return (
+              <Link
+                key={feature.title}
+                href={feature.href}
+                className="glow-card group flex flex-col justify-between rounded-xl border border-border/80 bg-card p-4 transition-all hover:bg-card/80"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold text-sm text-foreground group-hover:text-primary transition-colors flex items-center gap-2">
+                      <Icon className="h-4 w-4 text-primary" />
+                      {feature.title}
+                    </span>
+                    <ArrowRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-1 group-hover:text-primary" />
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-normal">{feature.desc}</p>
+                </div>
+                <div className="pt-3 text-[11px] font-medium text-primary">
+                  {feature.action} &rarr;
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Indexed Repositories */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold tracking-tight text-foreground">Indexed Projects</h2>
+            <p className="text-xs text-muted-foreground">
+              Repositories indexed on this machine with symbols, edges, and chunks.
+            </p>
+          </div>
+          <Link
+            href="/projects"
+            className="text-xs text-primary hover:underline font-medium flex items-center gap-1"
+          >
+            View all projects <ArrowRight className="h-3 w-3" />
+          </Link>
+        </div>
+
+        {loading ? (
+          <div className="flex h-32 items-center justify-center rounded-xl border border-border/60 bg-card">
+            <span className="text-xs text-muted-foreground">Loading repositories...</span>
+          </div>
+        ) : projects.length === 0 ? (
+          <Card className="border-dashed p-8 text-center">
+            <FolderGit2 className="mx-auto h-8 w-8 text-muted-foreground/60 mb-2" />
+            <h3 className="font-semibold text-sm text-foreground">No projects indexed yet</h3>
+            <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
+              Run <code className="bg-muted px-1.5 py-0.5 rounded font-mono">imc .</code> in your terminal to index the current repository.
+            </p>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {projects.map((p) => {
+              const isSelected = selectedPath === p.path;
+              return (
+                <div
+                  key={p.id}
+                  className={`glow-card flex flex-col justify-between rounded-xl border bg-card p-5 transition-all ${
+                    isSelected ? "border-primary/60 shadow-sm" : "border-border/80"
+                  }`}
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="truncate">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm text-foreground truncate">{p.name}</span>
+                          {isSelected && (
+                            <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                              Selected
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] font-mono text-muted-foreground truncate mt-0.5" title={p.path}>
+                          {p.path}
+                        </p>
+                      </div>
+                      <Badge variant="secondary" className="font-mono text-[11px] shrink-0">
+                        {p.db_size_mb.toFixed(1)} MB
+                      </Badge>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Symbols</span>
-                      <span className="font-mono">{p.counts.symbols}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Edges</span>
-                      <span className="font-mono">{p.counts.edges}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Chunks</span>
-                      <span className="font-mono">{p.counts.chunks}</span>
+
+                    <div className="grid grid-cols-4 gap-1 rounded-lg bg-muted/30 p-2 text-center text-xs">
+                      <div>
+                        <div className="font-mono font-semibold text-foreground">{p.counts.files}</div>
+                        <div className="text-[10px] text-muted-foreground">Files</div>
+                      </div>
+                      <div>
+                        <div className="font-mono font-semibold text-foreground">{p.counts.symbols}</div>
+                        <div className="text-[10px] text-muted-foreground">Symbols</div>
+                      </div>
+                      <div>
+                        <div className="font-mono font-semibold text-foreground">{p.counts.edges}</div>
+                        <div className="text-[10px] text-muted-foreground">Edges</div>
+                      </div>
+                      <div>
+                        <div className="font-mono font-semibold text-foreground">{p.counts.chunks}</div>
+                        <div className="text-[10px] text-muted-foreground">Chunks</div>
+                      </div>
                     </div>
                   </div>
-                  <Link
-                    href={`/projects/${p.id}`}
-                    className="mt-2 block text-center px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 text-sm"
-                  >
-                    Open Project
-                  </Link>
-                </CardContent>
-              </Card>
-            ))}
+
+                  <div className="mt-4 flex items-center gap-2 pt-2 border-t border-border/50">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPath(p.path);
+                        router.push("/search");
+                      }}
+                      className="flex-1 rounded-md bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 transition-colors text-center cursor-pointer"
+                    >
+                      Search
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPath(p.path);
+                        router.push("/trace");
+                      }}
+                      className="flex-1 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent transition-colors text-center cursor-pointer"
+                    >
+                      Call Tree
+                    </button>
+                    <Link
+                      href={`/projects/${p.id}`}
+                      className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                      title="Project Details"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </Link>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        </>
-      )}
+        )}
+      </div>
     </div>
   );
 }
