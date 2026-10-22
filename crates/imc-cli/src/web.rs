@@ -129,6 +129,12 @@ fn running_dashboard_is_stale(dir: &Path) -> bool {
 /// Stop any running web dashboard. Returns true if a running dashboard was terminated.
 pub fn stop_dashboard() -> bool {
     let mut terminated = false;
+    // If running as a systemd service, stop the unit so it doesn't auto-restart.
+    if systemctl(&["is-active", "--quiet", UNIT]) {
+        if systemctl(&["stop", UNIT]) {
+            terminated = true;
+        }
+    }
     // The pid file of a previous run belongs to the process being replaced.
     if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
         for entry in entries.flatten() {
@@ -185,6 +191,12 @@ fn kill_listener_on_port(port: u16) -> bool {
                     }
                 }
             }
+        }
+    }
+    if killed {
+        let start = std::time::Instant::now();
+        while is_up(port) && start.elapsed() < Duration::from_millis(1500) {
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
     killed
