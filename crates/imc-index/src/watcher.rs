@@ -126,6 +126,95 @@ pub fn ensure_fresh_index(cfg: &Config, root: &Path) -> Result<Option<IndexStats
     Ok(None)
 }
 
+/// Check and incrementally update project index when working tree files (uncommitted edits) change.
+pub fn ensure_fresh_working_tree(cfg: &Config, root: &Path) -> Result<Option<IndexStats>> {
+    let db = cfg.project_db(root);
+    if !db.exists() {
+        return Ok(None);
+    }
+    let stats = run(cfg, root, &[], false)?;
+    if stats.new_files > 0 || stats.modified_files > 0 || stats.deleted_files > 0 {
+        eprintln!(
+            "[imc] Working tree updated: +{} ~{} -{} files in {}ms",
+            stats.new_files, stats.modified_files, stats.deleted_files, stats.elapsed_ms
+        );
+        let now_sec = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let meta = ProjectMeta {
+            id: md5_hex(root.to_string_lossy().as_bytes())[..16].to_string(),
+            name: root
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "root".into()),
+            path: root.to_string_lossy().to_string(),
+            indexed_at: Some(now_sec),
+            file_count: Some(stats.total_files as u64),
+        };
+        let _ = upsert_project(cfg, meta);
+        return Ok(Some(stats));
+    }
+    Ok(None)
+}
+
+pub fn is_source_or_resource_file(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    if is_ignored_path(&s) {
+        return false;
+    }
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_lowercase();
+        imc_core::ingest::CODE_EXTS.contains(&ext_lower.as_str())
+            || imc_core::ingest::INDEXABLE_RESOURCE_EXTS.contains(&ext_lower.as_str())
+    } else {
+        false
+    }
+}
+
+pub fn is_ignored_path(s: &str) -> bool {
+    s.contains("/.git/")
+        || s.contains("/node_modules/")
+        || s.contains("/target/")
+        || s.contains("/dist/")
+        || s.contains("/build/")
+        || s.contains("/.next/")
+        || s.contains("/__pycache__/")
+        || s.contains("/.venv/")
+        || s.contains("/venv/")
+        || s.contains("/cypress/fixtures/")
+        || s.contains("/playwright-report/")
+        || s.contains("/test-results/")
+}
+
+pub fn is_ignored_dir_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    matches!(
+        lower.as_str(),
+        ".git"
+            | ".hg"
+            | ".svn"
+            | "node_modules"
+            | "__pycache__"
+            | ".venv"
+            | "venv"
+            | "target"
+            | "dist"
+            | "build"
+            | ".mypy_cache"
+            | ".pytest_cache"
+            | ".ruff_cache"
+            | ".tox"
+            | ".next"
+            | "coverage"
+            | ".idea"
+            | ".vscode"
+            | "cypress"
+            | "playwright-report"
+            | "test-results"
+    )
+}
+
 /// Handle to a running background git watcher thread.
 pub struct GitWatcherHandle {
     stop: Arc<AtomicBool>,
@@ -187,9 +276,8 @@ pub fn spawn_git_watcher(cfg: Config) -> Result<GitWatcherHandle> {
                 let _ = watcher.watch(parent, RecursiveMode::NonRecursive);
             }
 
-            // Track currently watched git directories and map them to project paths:
-            // git_dir -> project_root
-            let mut watched_projects: HashMap<PathBuf, PathBuf> = HashMap::new();
+            // Track currently watched directories -> project_root
+            let mut watched_dirs: HashMap<PathBuf, PathBuf> = HashMap::new();
 
             fn sync_watches(
                 cfg: &Config,
@@ -203,19 +291,41 @@ pub fn spawn_git_watcher(cfg: Config) -> Result<GitWatcherHandle> {
                     .filter(|p| p.exists())
                     .collect();
 
-                // Unwatch projects that were removed
-                watched.retain(|git_dir, proj_root| {
+                // Unwatch directories of removed projects
+                watched.retain(|dir, proj_root| {
                     if !current_roots.contains(proj_root) || !proj_root.exists() {
-                        let _ = watcher.unwatch(git_dir);
-                        let _ = watcher.unwatch(&git_dir.join("refs"));
+                        let _ = watcher.unwatch(dir);
                         false
                     } else {
                         true
                     }
                 });
 
-                // Add watches for new projects
+                // Add watches for projects
                 for root in current_roots {
+                    // 1. Watch root non-recursively (main.rs, Cargo.toml, etc.)
+                    if !watched.contains_key(&root) {
+                        if watcher.watch(&root, RecursiveMode::NonRecursive).is_ok() {
+                            watched.insert(root.clone(), root.clone());
+                        }
+                    }
+
+                    // 2. Watch non-ignored subdirectories recursively (src, crates, cmd, etc.)
+                    if let Ok(entries) = std::fs::read_dir(&root) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.is_dir() {
+                                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                                if !is_ignored_dir_name(&name) && !watched.contains_key(&path) {
+                                    if watcher.watch(&path, RecursiveMode::Recursive).is_ok() {
+                                        watched.insert(path, root.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. Watch .git directories
                     if let Some(git_dir) = resolve_git_dir(&root) {
                         if !watched.contains_key(&git_dir) {
                             if watcher.watch(&git_dir, RecursiveMode::NonRecursive).is_ok() {
@@ -223,14 +333,14 @@ pub fn spawn_git_watcher(cfg: Config) -> Result<GitWatcherHandle> {
                                 if refs_dir.is_dir() {
                                     let _ = watcher.watch(&refs_dir, RecursiveMode::Recursive);
                                 }
-                                watched.insert(git_dir, root);
+                                watched.insert(git_dir, root.clone());
                             }
                         }
                     }
                 }
             }
 
-            sync_watches(&cfg, &mut watcher, &mut watched_projects);
+            sync_watches(&cfg, &mut watcher, &mut watched_dirs);
 
             while !stop_clone.load(Ordering::SeqCst) {
                 // Blocks in the OS kernel until an inotify/fsevent arrives
@@ -243,7 +353,7 @@ pub fn spawn_git_watcher(cfg: Config) -> Result<GitWatcherHandle> {
                     break;
                 }
 
-                // Debounce: git commands write multiple ref files over 500ms
+                // Debounce: coalesce rapid editor saves and git ref writes over 500ms
                 let debounce = Duration::from_millis(500);
                 let start = Instant::now();
                 let mut touched = vec![first_path];
@@ -261,13 +371,39 @@ pub fn spawn_git_watcher(cfg: Config) -> Result<GitWatcherHandle> {
                 // Check if registry changed (new project added)
                 let reg_changed = touched.iter().any(|p| p.ends_with("projects.json"));
                 if reg_changed {
-                    sync_watches(&cfg, &mut watcher, &mut watched_projects);
+                    sync_watches(&cfg, &mut watcher, &mut watched_dirs);
                 }
 
-                // Check all watched projects for git branch/commit change
-                for (_git_dir, root) in &watched_projects {
+                // Classify touched paths: git state changes vs uncommitted working tree changes
+                let mut git_check_roots: HashSet<PathBuf> = HashSet::new();
+                let mut tree_check_roots: HashSet<PathBuf> = HashSet::new();
+
+                for p in &touched {
+                    let p_str = p.to_string_lossy();
+                    if p_str.contains("/.git/") || p_str.ends_with("/.git") {
+                        for (watched_dir, root) in &watched_dirs {
+                            if p.starts_with(watched_dir) || p.starts_with(root) {
+                                git_check_roots.insert(root.clone());
+                            }
+                        }
+                    } else if is_source_or_resource_file(p) || (p.is_dir() && !is_ignored_path(&p_str)) {
+                        for (watched_dir, root) in &watched_dirs {
+                            if p.starts_with(watched_dir) || p.starts_with(root) {
+                                tree_check_roots.insert(root.clone());
+                            }
+                        }
+                    }
+                }
+
+                for root in git_check_roots {
                     if root.exists() {
-                        let _ = ensure_fresh_index(&cfg, root);
+                        let _ = ensure_fresh_index(&cfg, &root);
+                    }
+                }
+
+                for root in tree_check_roots {
+                    if root.exists() {
+                        let _ = ensure_fresh_working_tree(&cfg, &root);
                     }
                 }
             }
@@ -350,6 +486,55 @@ mod tests {
         let db = cfg.project_db(&repo);
         let store = imc_core::store::open(&db).unwrap();
         assert_eq!(store.count_symbols(), 2);
+
+        watcher.stop();
+        let _ = std::fs::remove_dir_all(&td);
+    }
+
+    #[test]
+    fn watcher_auto_reindexes_uncommitted_file_edit() {
+        let td = std::env::temp_dir().join(format!("test_watcher_uncommitted_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&td);
+        let repo = td.join("repo");
+        let src = repo.join("src");
+        let data = td.join("data");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+
+        let _ = std::process::Command::new("git").args(["init"]).current_dir(&repo).output().unwrap();
+        let _ = std::process::Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        let _ = std::process::Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+
+        std::fs::write(src.join("auth.py"), "def login():\n    return True\n").unwrap();
+        let _ = std::process::Command::new("git").args(["add", "src/auth.py"]).current_dir(&repo).output().unwrap();
+        let _ = std::process::Command::new("git").args(["commit", "-m", "init"]).current_dir(&repo).output().unwrap();
+
+        let mut cfg = Config::default();
+        cfg.data_dir = data;
+
+        let stats = run(&cfg, &repo, &[], false).unwrap();
+        assert_eq!(stats.symbols, 1);
+
+        let meta = ProjectMeta {
+            id: md5_hex(repo.to_string_lossy().as_bytes())[..16].to_string(),
+            name: "repo".to_string(),
+            path: repo.to_string_lossy().to_string(),
+            indexed_at: Some(1),
+            file_count: Some(1),
+        };
+        upsert_project(&cfg, meta).unwrap();
+
+        let mut watcher = spawn_git_watcher(cfg.clone()).unwrap();
+
+        // Directly edit the file without git commit or git add (dirty working tree!)
+        std::fs::write(src.join("auth.py"), "def login():\n    return True\ndef logout():\n    return False\n").unwrap();
+
+        // Wait for debounce (500ms) + incremental indexing
+        std::thread::sleep(Duration::from_millis(1500));
+
+        let db = cfg.project_db(&repo);
+        let store = imc_core::store::open(&db).unwrap();
+        assert_eq!(store.count_symbols(), 2, "uncommitted file edit must be auto-indexed in SQLite");
 
         watcher.stop();
         let _ = std::fs::remove_dir_all(&td);

@@ -39,12 +39,12 @@ const EXCLUDED_FILENAMES: &[&str] = &[
     "shrinkwrap.yaml",
 ];
 
-const INDEXABLE_RESOURCE_EXTS: &[&str] = &[
+pub const INDEXABLE_RESOURCE_EXTS: &[&str] = &[
     "properties", "json", "yaml", "yml", "toml", "ini", "md", "txt", "sql", "graphql", "gql",
     "proto", "cfg", "conf",
 ];
 
-const CODE_EXTS: &[&str] = &[
+pub const CODE_EXTS: &[&str] = &[
     "py", "js", "jsx", "ts", "tsx", "mjs", "cjs", "go", "java", "kt", "kts", "c", "h", "cc",
     "cpp", "hpp", "rs", "rb", "cs", "swift", "php", "scala", "sh", "bash", "zsh", "lua", "vue",
     "svelte", "html", "css", "scss",
