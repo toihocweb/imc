@@ -237,24 +237,6 @@ enum Command {
     /// Delete a memory by id.
     #[command(name = "memory-delete")]
     MemoryDelete { id: i64 },
-    /// Learn from a transcript file, or from a lesson written as text.
-    ///
-    /// A file is mined with the rule-based extractor. Text is a lesson: the
-    /// model decides what in it is worth keeping, and `--store` keeps it
-    /// whole instead.
-    Learn {
-        /// The transcript or markdown file to learn from.
-        file: Option<PathBuf>,
-        /// A lesson as text, instead of a file.
-        #[arg(long, conflicts_with = "file")]
-        text: Option<String>,
-        /// Store the text as it is, without asking the model.
-        #[arg(long)]
-        store: bool,
-        /// The scene the memory belongs to.
-        #[arg(long, default_value = "")]
-        scene: String,
-    },
     /// Open Claude Code on this machine, with the index wired in.
     ///
     /// `imc claude` starts the proxy, writes the settings and the rule
@@ -463,15 +445,6 @@ enum CcrAction {
         #[arg(long, default_value_t = 30)]
         days: i64,
     },
-    /// Analyze CCR stats and suggest compression threshold adjustments.
-    Tune {
-        /// Automatically write the recommended min_savings to config.
-        #[arg(long)]
-        apply: bool,
-        /// Run in background, re-tuning every 30 minutes (daemon).
-        #[arg(long)]
-        auto: bool,
-    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -559,49 +532,6 @@ inside a project; pass -C <path> to choose another",
         }
     }
     Ok(cwd)
-}
-
-/// Auto-tune CCR min_savings once: recompute from current store and write to config
-/// only if the recommended value differs from the current one.
-fn auto_tune_once(root: &std::path::Path) -> Result<()> {
-    let db = root.join("index.db");
-    let store = imc_proxy::compression::ccr_store::CcrStore::open(&db)?;
-    let entries = store.list(None, 10_000)?;
-    if entries.is_empty() {
-        return Ok(());
-    }
-    let total_orig: i64 = entries.iter().map(|e| e.orig_tokens).sum();
-    let total_comp: i64 = entries.iter().map(|e| e.comp_tokens).sum();
-    let overall_ratio = if total_orig > 0 {
-        total_comp as f64 / total_orig as f64
-    } else {
-        1.0
-    };
-    let recommended = if overall_ratio > 0.80 {
-        overall_ratio.min(0.90)
-    } else if overall_ratio < 0.30 {
-        (overall_ratio * 0.7).max(0.10)
-    } else {
-        0.20
-    };
-    let current = imc_core::settings::load()
-        .compression
-        .as_ref()
-        .and_then(|c| c.min_savings)
-        .unwrap_or(0.20);
-    if (recommended - current).abs() > 0.01 {
-        let mut s = imc_core::settings::load();
-        imc_core::settings::set(
-            &mut s,
-            "compression.min_savings",
-            &recommended.to_string(),
-        )?;
-        imc_core::settings::save(&s)?;
-        println!(
-            "[ccr auto-tune] min_savings {current:.3} -> {recommended:.3} (ratio {overall_ratio:.3})"
-        );
-    }
-    Ok(())
 }
 
 /// Python's `positive_int`: argparse rejects `--limit 0` / `--depth 0` with
@@ -1295,103 +1225,6 @@ fn main() -> Result<()> {
                         - days * 86_400;
                     let n = store.prune_before(cutoff)?;
                     println!("pruned {n} record(s) older than {days} day(s)");
-                }
-                CcrAction::Tune { apply, auto } => {
-                    let entries = store.list(None, 10_000)?;
-                    let total_orig: i64 = entries.iter().map(|e| e.orig_tokens).sum();
-                    let total_comp: i64 = entries.iter().map(|e| e.comp_tokens).sum();
-                    let total_saved = total_orig - total_comp;
-                    let overall_ratio = if total_orig > 0 {
-                        total_comp as f64 / total_orig as f64
-                    } else {
-                        1.0
-                    };
-
-                    // Group by kind
-                    use std::collections::HashMap;
-                    let mut by_kind: HashMap<String, (i64, i64)> = HashMap::new();
-                    for e in &entries {
-                        let entry = by_kind.entry(e.kind.clone()).or_insert((0, 0));
-                        entry.0 += e.orig_tokens;
-                        entry.1 += e.comp_tokens;
-                    }
-
-                    println!("=== CCR tune ===");
-                    println!(
-                        "overall: {} -> {} tokens (saved {}, ratio {:.3})",
-                        total_orig, total_comp, total_saved, overall_ratio
-                    );
-                    println!();
-                    println!("per-kind:");
-                    let mut kinds: Vec<_> = by_kind.into_iter().collect();
-                    kinds.sort_by(|a, b| {
-                        let ratio_a = if a.1 .0 > 0 { a.1 .1 as f64 / a.1 .0 as f64 } else { 1.0 };
-                        let ratio_b = if b.1 .0 > 0 { b.1 .1 as f64 / b.1 .0 as f64 } else { 1.0 };
-                        ratio_a.partial_cmp(&ratio_b).unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                    for (kind, (orig, comp)) in &kinds {
-                        let saved = orig - comp;
-                        let ratio = if *orig > 0 { *comp as f64 / *orig as f64 } else { 1.0 };
-                        let suggestion = if ratio > 0.80 {
-                            format!(
-                                "  → raise min_savings from 0.20 to {:.2} (kind barely compresses)",
-                                ratio.min(0.90)
-                            )
-                        } else if ratio < 0.30 {
-                            format!(
-                                "  → lower min_savings from 0.20 to {:.2} (kind compresses well)",
-                                (ratio * 0.7).max(0.10)
-                            )
-                        } else {
-                            "  → keep current threshold".to_string()
-                        };
-                        println!(
-                            "  {}: {} -> {} tokens (saved {}, ratio {:.3}){}",
-                            kind, orig, comp, saved, ratio, suggestion
-                        );
-                    }
-
-                    if *apply {
-                        let recommended = if overall_ratio > 0.80 {
-                            overall_ratio.min(0.90)
-                        } else if overall_ratio < 0.30 {
-                            (overall_ratio * 0.7).max(0.10)
-                        } else {
-                            0.20
-                        };
-                        let mut s = imc_core::settings::load();
-                        imc_core::settings::set(
-                            &mut s,
-                            "compression.min_savings",
-                            &recommended.to_string(),
-                        )?;
-                        imc_core::settings::save(&s)?;
-                        println!();
-                        println!(
-                            "applied compression.min_savings = {:.3} to {}",
-                            recommended,
-                            imc_core::settings::path().display()
-                        );
-                        println!(
-                            "restart the proxy (`imc proxy stop && imc proxy serve`) to take effect."
-                        );
-                        if *auto {
-                            println!("CCR auto-tune running in background (every 30 min).");
-                            let root2 = root.to_path_buf();
-                            std::thread::spawn(move || loop {
-                                std::thread::sleep(std::time::Duration::from_secs(30 * 60));
-                                match auto_tune_once(&root2) {
-                                    Ok(()) => {}
-                                    Err(e) => eprintln!("ccr auto-tune: {e}"),
-                                }
-                            });
-                        }
-                    } else {
-                        println!();
-                        println!(
-                            "run `imc ccr tune --apply` to write the recommended min_savings to config."
-                        );
-                    }
                 }
             }
         }
@@ -2219,66 +2052,6 @@ saved to {}", st::path().display());
         }
         Command::Web { port, no_open, url } => {
             imc_cli::web::run(*port, *no_open, url.clone())?;
-        }
-        Command::Learn {
-            file,
-            text: lesson,
-            store: as_is,
-            scene,
-        } => {
-            let db = cfg.project_db(&root);
-            let store = store::open(&db)?;
-            // A lesson written as text: the model decides what in it is
-            // worth keeping.
-            if let Some(lesson) = lesson {
-                if *as_is {
-                    match imc_memory::extract::store_lesson(&store, lesson, scene)? {
-                        Some(id) => println!("stored memory #{id}"),
-                        None => println!("nothing to store"),
-                    }
-                } else {
-                    let query = "User feedback or mistake lesson learned from this working session to record for future context:";
-                    let stored = imc_memory::extract::learn_from_exchange(
-                        &cfg, &store, query, lesson, "learn",
-                    )?;
-                    println!("stored {stored} memory(ies)");
-                }
-                return Ok(());
-            }
-            let Some(file) = file else {
-                bail!("give a transcript file, or --text \"<lesson>\"");
-            };
-            let embedder = imc_embed::build(&cfg.embedding);
-            let text = std::fs::read_to_string(file)?;
-            let active = vec![file.to_string_lossy().to_string()];
-            let candidates = imc_memory::extract_candidates(&text, &active);
-            let mut stored = 0;
-            let summary: Vec<serde_json::Value> = candidates
-                .iter()
-                .filter_map(|c| {
-                    let id = imc_memory::add(
-                        &store,
-                        &c.content,
-                        &c.category,
-                        &c.paths,
-                        &c.tags,
-                        0.6,
-                        &c.source,
-                    )
-                    .ok()
-                    .flatten();
-                    if let Some(id) = id {
-                        let _ = imc_memory::embed_and_store(&store, embedder.as_deref(), id, &c.content);
-                        stored += 1;
-                    }
-                    Some(serde_json::json!({"id": id, "category": c.category, "content": c.content}))
-                })
-                .collect();
-            if cli.json {
-                println!("{}", serde_json::json!({"candidates": candidates.len(), "stored": stored, "items": summary}));
-            } else {
-                println!("extracted {} candidates, stored {stored}", candidates.len());
-            }
         }
     }
 

@@ -308,8 +308,9 @@ list lives.
 | `imc read <file>` | Token-optimised reader; `--symbols` for outline, `--method` for one function. |
 | `imc context <target>` | Resolved context for a file: outline, dependencies, endpoints, tests. |
 | `imc pack "<query>"` | Retrieval + graph + memories packed within a token budget (`--budget`). |
+| `imc map` / `repomap` | Generate architectural repository skeleton within token budget (`--tokens`). |
+| `imc watch` | Event-driven watcher for git branch/commit and dirty working tree changes. |
 | `imc memory-…` | Durable project memory: `memory-add`, `memory-search`, `memory-list`, `memory-delete`. |
-| `imc learn <file>` | Extract conventions and lessons from transcripts or text notes. |
 | `imc compress` / `retrieve <id>` | Compress text using CCR store; retrieve exact original bytes by handle. |
 | `imc mcp [install]` | MCP server over stdio; `install` writes project `.mcp.json`. |
 | `imc` / `imc stop` | Start or stop background services (proxy on port 12345 and dashboard on port 4789). |

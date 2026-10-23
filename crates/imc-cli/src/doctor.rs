@@ -54,13 +54,13 @@ without it imc guesses a default model that most endpoints do not serve"
     }
 
     // 4. Embedding model configured
-    if !cfg.embedding.model.is_empty() {
+    if !cfg.embedding.model.is_empty()
+        && cfg.embedding.model != "none"
+        && cfg.embedding.model != "disabled"
+    {
         ok.push(format!("embedding.model: {}", cfg.embedding.model));
     } else {
-        issues.push(
-            "embedding.model not set — run `imc config set embedding.model text-embedding-3-small`"
-                .to_string(),
-        );
+        ok.push("embedding.model: none (offline AST + BM25 + Call Graph mode)".to_string());
     }
 
     // 5. Proxy running
