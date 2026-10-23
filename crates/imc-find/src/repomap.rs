@@ -36,9 +36,12 @@ pub struct RepoMapReport {
 }
 
 /// Identifies trivial CRUD verbs, boilerplate accessors, and utility names
-/// that inflate graph metrics and clutter architectural summaries.
+/// that inflate graph metrics and clutter architectural summaries across languages.
 fn is_trivial_boilerplate(name: &str) -> bool {
     let lower = name.to_lowercase();
+    if lower.starts_with("__") && lower.ends_with("__") {
+        return true;
+    }
     matches!(
         lower.as_str(),
         "get"
@@ -73,6 +76,7 @@ fn is_trivial_boilerplate(name: &str) -> bool {
             | "hashcode"
             | "hash"
             | "tostring"
+            | "string"
             | "clone"
             | "default"
             | "drop"
@@ -86,32 +90,57 @@ fn is_trivial_boilerplate(name: &str) -> bool {
         || lower.starts_with("is_")
 }
 
-/// Is this an architectural symbol type (Class, Interface, Struct, Trait, Enum)?
-fn is_primary_abstraction(kind: SymbolKind) -> bool {
-    matches!(
-        kind,
+/// Is this a primary architectural symbol?
+/// Handles both OOP types (Class, Interface, Struct, Trait) and top-level functions in procedural/functional languages (Go, Python, C).
+fn is_primary_abstraction(kind: SymbolKind, has_parent: bool) -> bool {
+    match kind {
         SymbolKind::Class
-            | SymbolKind::Interface
-            | SymbolKind::Struct
-            | SymbolKind::Trait
-            | SymbolKind::Enum
-            | SymbolKind::Component
-            | SymbolKind::Type
-    )
+        | SymbolKind::Interface
+        | SymbolKind::Struct
+        | SymbolKind::Trait
+        | SymbolKind::Enum
+        | SymbolKind::Component
+        | SymbolKind::Type => true,
+        // Top-level functions in Go, Python, Rust, C without enclosing class/struct
+        SymbolKind::Function if !has_parent => true,
+        _ => false,
+    }
 }
 
-/// Extract module prefix or top-level directory for a file path.
+/// Extract module prefix or package group tailored across tech stacks (Java, Go, Python, Rust, Monorepos).
 fn extract_module_group(path: &str) -> String {
     let parts: Vec<&str> = path.split('/').collect();
     if parts.len() <= 1 {
         return "root".to_string();
     }
-    // Handle monorepos / workspaces like `crates/imc-core` or `dhp-integration/src`
-    if (parts[0] == "crates" || parts[0] == "packages" || parts[0] == "modules") && parts.len() > 2 {
-        format!("{}/{}", parts[0], parts[1])
-    } else {
-        parts[0].to_string()
+    // Monorepo workspaces: crates/*, packages/*, apps/*, services/*, modules/*, libs/*
+    if matches!(parts[0], "crates" | "packages" | "apps" | "services" | "modules" | "libs") && parts.len() > 2 {
+        return format!("{}/{}", parts[0], parts[1]);
     }
+    // Go conventions: cmd/*, internal/*, pkg/*
+    if matches!(parts[0], "cmd" | "internal" | "pkg") && parts.len() > 2 {
+        return format!("{}/{}", parts[0], parts[1]);
+    }
+    // Multi-module maven / gradle: <module>/src/main/java/...
+    if let Some(idx) = path.find("/src/main/java/") {
+        let prefix = &path[..idx];
+        return prefix.to_string();
+    }
+    // Single-module standard Java: src/main/java/com/company/domain/...
+    if path.starts_with("src/main/java/") {
+        let after = &path["src/main/java/".len()..];
+        let subparts: Vec<&str> = after.split('/').collect();
+        if subparts.len() >= 3 {
+            return format!("{}.{}.{}", subparts[0], subparts[1], subparts[2]);
+        } else if !subparts.is_empty() {
+            return subparts[0].to_string();
+        }
+    }
+    // Python / general src layout: src/<package>
+    if parts[0] == "src" && parts.len() > 2 {
+        return format!("src/{}", parts[1]);
+    }
+    parts[0].to_string()
 }
 
 /// Generate a high-signal architectural repository map within a token budget.
@@ -147,7 +176,7 @@ pub fn generate_repo_map(store: &Store, max_tokens: usize) -> Result<RepoMapRepo
         let mut has_primary = false;
 
         for d in &defs {
-            if is_primary_abstraction(d.kind) {
+            if is_primary_abstraction(d.kind, d.parent.is_some()) {
                 score += 5.0;
                 has_primary = true;
             } else if !is_trivial_boilerplate(&d.name) {
@@ -207,10 +236,13 @@ pub fn generate_repo_map(store: &Store, max_tokens: usize) -> Result<RepoMapRepo
             let mut sym_entries: Vec<RepoMapSymbolEntry> = Vec::new();
 
             // Extract primary abstractions first, then at most 2 key domain methods
-            let primaries: Vec<&Symbol> = defs.iter().filter(|s| is_primary_abstraction(s.kind)).collect();
+            let primaries: Vec<&Symbol> = defs
+                .iter()
+                .filter(|s| is_primary_abstraction(s.kind, s.parent.is_some()))
+                .collect();
             let secondary_methods: Vec<&Symbol> = defs
                 .iter()
-                .filter(|s| !is_primary_abstraction(s.kind) && !is_trivial_boilerplate(&s.name))
+                .filter(|s| !is_primary_abstraction(s.kind, s.parent.is_some()) && !is_trivial_boilerplate(&s.name))
                 .take(2)
                 .collect();
 
