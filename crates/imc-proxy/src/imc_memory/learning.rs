@@ -156,16 +156,22 @@ pub fn has_success(text: &str) -> bool {
         "completed",
         "passed",
         "all tests passed",
-        "ok",
     ];
     PATTERNS.iter().any(|p| lower.contains(p))
 }
 
 /// Whether this exchange holds something worth remembering.
 ///
-/// Cheap on purpose: substring checks, no allocation, no I/O. The expensive
-/// question is asked only after this says yes.
+/// Filters out trivial conversational chatter while allowing substantive technical
+/// directives, environment outcomes, and failures to be evaluated by the background model.
 pub fn is_worth_learning(query: &str, answer: &str, tool_output: &str) -> bool {
+    if imc_memory::extract::is_trivial_chatter(query)
+        && !imc_memory::extract::has_failure(answer)
+        && !imc_memory::extract::has_failure(tool_output)
+    {
+        return false;
+    }
+
     imc_memory::extract::is_correction(query)
         || imc_memory::extract::has_failure(answer)
         || imc_memory::extract::has_failure(query)

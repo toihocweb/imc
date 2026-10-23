@@ -256,52 +256,73 @@ pub fn learn_from_exchange(
 // something worth learning. Both gates are the Python's patterns, ported.
 // ---------------------------------------------------------------------------
 
-/// A correction or an explicit rule from the user.
+/// Returns true if text is trivial conversational chatter with no technical substance
+/// (e.g. "hi", "ok", "thanks", "cảm ơn", "continue", "yes", "no").
+pub fn is_trivial_chatter(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    if t.is_empty() || t.len() < 3 {
+        return true;
+    }
+    const CHATTER: &[&str] = &[
+        "hi", "hello", "hey", "ok", "okay", "k", "thanks", "thank you", "thx",
+        "yes", "no", "y", "n", "bye", "good", "great", "nice", "done", "continue",
+        "next", "cảm ơn", "cam on", "tiếp tục", "tiep tuc", "được", "duoc", "rồi",
+        "roi", "ừ", "uh", "um", "alo", "chào", "chao", "ok bạn", "ok bro",
+    ];
+    CHATTER.contains(&t.as_str())
+}
+
+/// Detects whether text conveys a behavioral instruction, preference, constraint,
+/// or technical direction rather than routine conversation.
 pub fn is_correction(text: &str) -> bool {
     let t = text.to_lowercase();
-    const PATTERNS: &[&str] = &[
-        "that's wrong",
-        "that is wrong",
-        "this is wrong",
-        "you're wrong",
-        "you are wrong",
-        "that's incorrect",
-        "do not use",
-        "don't use",
-        "do not run",
-        "don't run",
-        "do not repeat",
-        "instead use",
-        "use this instead",
-        "stop doing",
-        "never do",
-        "always use",
-        "always do",
-        "remember to",
-        "remember that",
-        "keep in mind",
-        "note that",
-        "must use",
-        "must not",
-        "should not",
-        "the rule is",
-        "convention is",
-        "sai rồi",
-        "không đúng",
-        "bạn sai",
-        "đừng",
-        "không được",
-        "thay vào đó",
-        "đừng bao giờ",
-        "hãy luôn",
-        "nhớ là",
-        "từ giờ",
-        "không dùng",
-        "quy tắc là",
-        "chú ý",
-        "phải luôn",
+
+    // 1. Core negative, preference, or directive indicators (English & Vietnamese)
+    const CORRECTION_STEMS: &[&str] = &[
+        "wrong", "incorrect", "mistake", "not right", "sai", "nhầm",
+        "instead", "thay vì", "thay vao", "thay bằng", "switch to",
+        "prefer", "chuộng", "ưu tiên", "đừng", "don't", "do not",
+        "never", "chớ", "không được", "stop", "dừng",
+        "must", "phải", "luôn", "always", "cần phải",
+        "rule", "quy tắc", "convention", "quy ước", "standard",
+        "remember", "nhớ", "note", "chú ý", "lưu ý",
     ];
-    PATTERNS.iter().any(|p| t.contains(p))
+    if CORRECTION_STEMS.iter().any(|stem| t.contains(stem)) {
+        return true;
+    }
+
+    // 2. Technical directives targeting files, tools, flags, or architecture
+    // (e.g. "use .json not .yaml", "set port 4000", "add flag --release")
+    let has_tech_token = t.contains(".rs")
+        || t.contains(".py")
+        || t.contains(".ts")
+        || t.contains(".js")
+        || t.contains(".json")
+        || t.contains(".toml")
+        || t.contains(".yaml")
+        || t.contains(".yml")
+        || t.contains(".env")
+        || t.contains(".sql")
+        || t.contains("cargo ")
+        || t.contains("npm ")
+        || t.contains("git ")
+        || t.contains("docker ")
+        || t.contains("port ")
+        || t.contains("--")
+        || t.contains("-C ")
+        || t.contains("-p ");
+
+    if has_tech_token {
+        const ACTION_WORDS: &[&str] = &[
+            "use", "set", "put", "add", "remove", "change", "format", "run", "keep",
+            "dùng", "đặt", "đổi", "thêm", "xóa", "sửa", "chạy", "giữ", "chuyển",
+        ];
+        if ACTION_WORDS.iter().any(|w| t.contains(w)) {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// A command that failed.
