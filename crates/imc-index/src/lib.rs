@@ -13,6 +13,12 @@ use imc_core::store;
 use imc_parser::RawChunk;
 use imc_search;
 
+pub mod watcher;
+pub use watcher::{
+    ensure_fresh_index, git_head_state, is_git_stale, record_git_state, resolve_git_dir,
+    spawn_git_watcher, GitWatcherHandle,
+};
+
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct IndexStats {
     pub new_files: usize,
@@ -225,6 +231,7 @@ pub fn run_with_progress(
     }
 
     store.set_meta(CHUNK_SIGNATURE_KEY, &chunk_signature)?;
+    let _ = watcher::record_git_state(&store, root);
 
     progress(Progress {
         phase: Phase::Finalize,

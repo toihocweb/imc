@@ -70,6 +70,12 @@ enum Command {
     /// Stop all running imc background services (proxy and web dashboard).
     #[command(name = "stop")]
     Stop,
+    /// Watch the repository for git branch or commit changes and auto re-index.
+    #[command(name = "watch")]
+    Watch {
+        /// Project directory to watch (defaults to current directory).
+        path: Option<PathBuf>,
+    },
     /// Index a project (incremental). Shortcut: `imc <path>` (e.g. `imc .`).
     #[command(hide = true)]
     Index {
@@ -827,7 +833,7 @@ fn main() -> Result<()> {
     // print the "using the active project" notice.
     let notify_active = !matches!(
         &cli.command,
-        Command::Index { .. } | Command::Proxy { .. } | Command::Stop
+        Command::Index { .. } | Command::Proxy { .. } | Command::Stop | Command::Watch { .. }
     );
     let root = resolve_root_with(&cfg, cli.root.clone(), true, notify_active)?;
 
@@ -858,6 +864,25 @@ fn main() -> Result<()> {
                     println!("no running imc services found");
                 }
             }
+        }
+        Command::Watch { path } => {
+            let target = match path {
+                Some(p) => std::fs::canonicalize(p).unwrap_or(root.clone()),
+                None => resolve_root_with(&cfg, None, false, false)?,
+            };
+            let _ = imc_cli::claude::ensure_project_indexed(&cfg, &target);
+            println!(
+                "[imc watch] Event-driven git watcher active for {}.\nWatching for branch/commit changes (0% CPU when idle). Press Ctrl-C to stop.",
+                target.display()
+            );
+            let mut handle = imc_index::spawn_git_watcher(cfg.clone())?;
+            setup_signal_handler();
+
+            while !STOP_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            handle.stop();
+            println!("\n[imc watch] Stopped.");
         }
         Command::Index {
             path,
@@ -2352,3 +2377,19 @@ fn now_secs() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
+
+static STOP_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+fn setup_signal_handler() {
+    extern "C" fn handler(_: libc::c_int) {
+        STOP_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    unsafe {
+        libc::signal(libc::SIGINT, handler as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, handler as *const () as libc::sighandler_t);
+    }
+}
+
+#[cfg(not(unix))]
+fn setup_signal_handler() {}

@@ -14,6 +14,7 @@ imc-cli-extra = { path = "../imc-cli-extra" }
 imc-search = { path = "../imc-search" }
 imc-embed = { path = "../imc-embed" }
 imc-memory = { path = "../imc-memory" }
+imc-index = { path = "../imc-index" }
 imc-support = { path = "../imc-support" }
 anyhow.workspace = true
 axum = "0.8"

@@ -248,9 +248,28 @@ pub fn serve(port: u16) -> Result<()> {
                 }
             }
 
+            // Start event-driven filesystem watcher for git branch and commit changes.
+            // Sleeps on OS inotify/FSEvents and automatically triggers incremental re-indexing.
+            let watcher_cfg = imc_core::config::Config::default();
+            let watcher_handle = match imc_index::spawn_git_watcher(watcher_cfg) {
+                Ok(h) => {
+                    log.info("Git event watcher initialized for registered repositories");
+                    Some(h)
+                }
+                Err(e) => {
+                    log.warning(&format!("Could not initialize git watcher: {e:#}"));
+                    None
+                }
+            };
+
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;
+
+            if let Some(mut h) = watcher_handle {
+                h.stop();
+            }
+
             log.info("Shutting down proxy application...");
             imc_proxy_types::logger::shutdown_logger_runtime();
             Ok(())
