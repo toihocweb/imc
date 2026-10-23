@@ -1,11 +1,9 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   FolderGit2,
-  Search,
   Network,
   ExternalLink,
   FileCode,
@@ -23,37 +21,17 @@ import { formatNumber } from "@/lib/format";
 export default function ProjectsPage() {
   const router = useRouter();
   const { projects, loading, selectedPath, setSelectedPath } = useProject();
-  const [filter, setFilter] = useState("");
-
-  const filtered = projects.filter((p) => {
-    const term = filter.toLowerCase();
-    return p.name.toLowerCase().includes(term) || p.path.toLowerCase().includes(term);
-  });
 
   return (
     <div className="w-full space-y-6 animate-in fade-in duration-200">
       {/* Header */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl flex items-center gap-2">
-            <FolderGit2 className="h-6 w-6 text-primary" /> Registered Projects
-          </h1>
-          <p className="text-xs sm:text-sm text-muted-foreground">
-            Repositories indexed with tree-sitter AST, call graphs, and vector chunks.
-          </p>
-        </div>
-
-        {/* Filter Input */}
-        <div className="relative w-full sm:w-64">
-          <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Filter projects..."
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="h-8 w-full rounded-md border border-border bg-card pl-9 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        </div>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl flex items-center gap-2">
+          <FolderGit2 className="h-6 w-6 text-primary" /> Registered Projects
+        </h1>
+        <p className="text-xs sm:text-sm text-muted-foreground">
+          Repositories indexed with tree-sitter AST, call graphs, and vector chunks.
+        </p>
       </div>
 
       {/* Projects Grid */}
@@ -62,12 +40,12 @@ export default function ProjectsPage() {
           <div className="col-span-full flex h-36 items-center justify-center rounded-xl border border-border/80 bg-card">
             <span className="text-xs text-muted-foreground">Loading repositories...</span>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : projects.length === 0 ? (
           <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-xs text-muted-foreground">
-            No projects matched the search filter.
+            No projects registered yet.
           </div>
         ) : (
-          filtered.map((p) => {
+          projects.map((p) => {
             const isSelected = selectedPath === p.path;
             return (
               <div
@@ -152,12 +130,12 @@ export default function ProjectsPage() {
       </div>
 
       {/* Projects Table */}
-      {filtered.length > 0 && (
+      {projects.length > 0 && (
         <Card className="border-border/80 shadow-xs">
           <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
             <CardTitle className="text-sm font-semibold flex items-center justify-between">
               <span>All Indexed Repositories</span>
-              <span className="text-xs text-muted-foreground font-mono">{filtered.length} total</span>
+              <span className="text-xs text-muted-foreground font-mono">{projects.length} total</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0 overflow-x-auto scroll-thin">
@@ -175,7 +153,7 @@ export default function ProjectsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody className="text-xs">
-                {filtered.map((p) => {
+                {projects.map((p) => {
                   const isSelected = selectedPath === p.path;
                   return (
                     <TableRow key={p.id} className="hover:bg-muted/40 transition-colors">
