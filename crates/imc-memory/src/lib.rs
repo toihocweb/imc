@@ -3,7 +3,7 @@
 //! `main/memory/{store,retrieval,extractor}.py` modules.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub mod extract;
 
@@ -514,6 +514,69 @@ pub fn delete(store: &Store, id: i64) -> Result<bool> {
     Ok(n > 0)
 }
 
+/// Fetch all active business rules and work methods for the project.
+pub fn list_active_rules(store: &Store) -> Result<Vec<Memory>> {
+    ensure_schema(store)?;
+    let mut stmt = store.conn.prepare(
+        "SELECT id, content, mem_type, scene, category, paths, tags, importance, use_count, created_at, last_used, source, state
+         FROM memories
+         WHERE state = 'active' AND mem_type IN ('business_rule', 'work_method')
+         ORDER BY importance DESC, created_at DESC",
+    )?;
+    let rows = stmt.query_map([], row_to_memory)?;
+    Ok(rows.flatten().collect())
+}
+
+/// Synchronize active business rules and work methods into `.claude/rules/project-rules.md`
+/// so Claude Code natively loads them as project-specific conventions.
+pub fn sync_project_rules(store: &Store, project_root: &Path) -> Result<Option<PathBuf>> {
+    let rules = list_active_rules(store)?;
+    let rules_dir = project_root.join(".claude").join("rules");
+    let target_path = rules_dir.join("project-rules.md");
+
+    if rules.is_empty() {
+        if target_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&target_path) {
+                if content.contains("<!-- Generated automatically by imc self-improvement review") {
+                    let _ = std::fs::remove_file(&target_path);
+                }
+            }
+        }
+        return Ok(None);
+    }
+
+    std::fs::create_dir_all(&rules_dir)?;
+
+    let mut doc = String::new();
+    doc.push_str("# Learned Project Rules & Conventions\n");
+    doc.push_str("<!-- Generated automatically by imc self-improvement review from developer corrections and workflow lessons. -->\n\n");
+    doc.push_str("The following project-specific rules and conventions were learned and verified for this codebase:\n\n");
+
+    for r in &rules {
+        let tag = match r.mem_type.as_str() {
+            "business_rule" => "Rule",
+            "work_method" => "Workflow",
+            _ => "Convention",
+        };
+        let scene_suffix = if r.scene.is_empty() {
+            String::new()
+        } else {
+            format!(" *(scope: {})*", r.scene)
+        };
+        let first_line = r.content.lines().next().unwrap_or("").trim();
+        doc.push_str(&format!("- **[{tag}]** {first_line}{scene_suffix}\n"));
+    }
+
+    if let Ok(existing) = std::fs::read_to_string(&target_path) {
+        if existing == doc {
+            return Ok(Some(target_path));
+        }
+    }
+
+    std::fs::write(&target_path, &doc)?;
+    Ok(Some(target_path))
+}
+
 pub fn touch(store: &Store, id: i64) -> Result<()> {
     reinforce(store, id)
 }
@@ -979,4 +1042,75 @@ pub struct MemoryCandidate {
     pub paths: Vec<String>,
     pub tags: Vec<String>,
     pub source: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_db(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("imc-rules-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    #[test]
+    fn sync_project_rules_generates_and_updates_markdown() {
+        let db_path = tmp_db("sync");
+        let store = imc_core::store::open(&db_path).unwrap();
+        let temp_proj = std::env::temp_dir().join(format!("proj-sync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_proj);
+        std::fs::create_dir_all(&temp_proj).unwrap();
+
+        // 1. Initially no rules
+        assert_eq!(sync_project_rules(&store, &temp_proj).unwrap(), None);
+
+        // 2. Add a business rule and a work method
+        add_typed(
+            &store,
+            "Always run cargo test before submitting code",
+            MemoryType::BusinessRule,
+            "testing",
+            "rule",
+            &[],
+            &[],
+            0.9,
+            "manual",
+        ).unwrap();
+
+        add_typed(
+            &store,
+            "Use imc claude as the single entrypoint",
+            MemoryType::WorkMethod,
+            "workflow",
+            "workflow",
+            &[],
+            &[],
+            0.8,
+            "manual",
+        ).unwrap();
+
+        // Add a normal work fact (should NOT be included in rules)
+        add_typed(
+            &store,
+            "The auth service is running on port 8080",
+            MemoryType::WorkFact,
+            "infra",
+            "fact",
+            &[],
+            &[],
+            0.5,
+            "manual",
+        ).unwrap();
+
+        let rules_file = sync_project_rules(&store, &temp_proj).unwrap().expect("must create rules file");
+        assert!(rules_file.exists());
+        let content = std::fs::read_to_string(&rules_file).unwrap();
+        assert!(content.contains("# Learned Project Rules & Conventions"));
+        assert!(content.contains("- **[Rule]** Always run cargo test before submitting code"));
+        assert!(content.contains("- **[Workflow]** Use imc claude as the single entrypoint"));
+        assert!(!content.contains("The auth service is running on port 8080"));
+
+        let _ = std::fs::remove_dir_all(&temp_proj);
+    }
 }

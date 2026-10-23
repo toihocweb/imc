@@ -27,6 +27,7 @@ pub const EXTRACTION_PROMPT: &str = r#"You extract durable work memories from a 
 A memory is worth keeping when it is:
 - a mistake that was made and how it was actually fixed,
 - a correction, preference or rule the user stated,
+- a project-specific convention, command, or workflow required by the user (e.g. 'always use cargo test -p ...', 'never use symlinks in rules', 'format numbers with US locale'),
 - a non-obvious gotcha: a trap, an edge case, a behaviour that surprised someone.
 
 A memory is NOT worth keeping when:
@@ -272,12 +273,33 @@ pub fn is_correction(text: &str) -> bool {
         "do not repeat",
         "instead use",
         "use this instead",
+        "stop doing",
+        "never do",
+        "always use",
+        "always do",
+        "remember to",
+        "remember that",
+        "keep in mind",
+        "note that",
+        "must use",
+        "must not",
+        "should not",
+        "the rule is",
+        "convention is",
         "sai rồi",
         "không đúng",
         "bạn sai",
         "đừng",
         "không được",
         "thay vào đó",
+        "đừng bao giờ",
+        "hãy luôn",
+        "nhớ là",
+        "từ giờ",
+        "không dùng",
+        "quy tắc là",
+        "chú ý",
+        "phải luôn",
     ];
     PATTERNS.iter().any(|p| t.contains(p))
 }

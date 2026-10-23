@@ -228,6 +228,12 @@ enum Command {
     /// Delete a memory by id.
     #[command(name = "memory-delete")]
     MemoryDelete { id: i64 },
+    /// Sync active project rules and methods into .claude/rules/project-rules.md.
+    #[command(name = "memory-sync")]
+    MemorySync {
+        /// Target project directory (defaults to current directory).
+        path: Option<PathBuf>,
+    },
     /// Learn from a transcript file, or from a lesson written as text.
     ///
     /// A file is mined with the rule-based extractor. Text is a lesson: the
@@ -1461,6 +1467,7 @@ fn main() -> Result<()> {
             )? {
                 Some(id) => {
                     imc_memory::embed_and_store(&store, embedder.as_deref(), id, &content)?;
+                    let _ = imc_memory::sync_project_rules(&store, &root);
                     if cli.json {
                         println!("{}", serde_json::json!({"id": id, "stored": true}));
                     } else {
@@ -1536,7 +1543,29 @@ fn main() -> Result<()> {
             let db = cfg.project_db(&root);
             let store = store::open(&db)?;
             let removed = imc_memory::delete(&store, *id)?;
+            let _ = imc_memory::sync_project_rules(&store, &root);
             println!("memory #{id} deleted: {removed}");
+        }
+        Command::MemorySync { path } => {
+            let target = match path {
+                Some(p) => std::fs::canonicalize(p).unwrap_or(root.clone()),
+                None => resolve_root_with(&cfg, None, false, false)?,
+            };
+            let db = cfg.project_db(&target);
+            let store = store::open(&db)?;
+            match imc_memory::sync_project_rules(&store, &target)? {
+                Some(p) => {
+                    let active = imc_memory::list_active_rules(&store)?;
+                    println!(
+                        "💾 Self-improvement review: Synchronized {} active rule(s) to {}",
+                        active.len(),
+                        p.display()
+                    );
+                }
+                None => {
+                    println!("No active business rules or work methods to synchronize.");
+                }
+            }
         }
         Command::Trace(a) => run_trace_arm(&cfg, &root, a, cli.json)?,
         Command::Context { target, depth, project } => {

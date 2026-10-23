@@ -531,6 +531,10 @@ pub fn run_claude_bin(cfg: &Config, root: &Path, args: &[String]) -> Result<()> 
     let _ = write_claude_settings(root, 12345)?;
     let _ = write_imc_rule(root)?;
     let _ = remove_legacy_claude_md_block(root)?;
+    let db = cfg.project_db(root);
+    if let Ok(store) = imc_core::store::open(&db) {
+        let _ = imc_memory::sync_project_rules(&store, root);
+    }
 
     let exe = which_claude_bin()?;
     let exe_disp = exe.display().to_string();
