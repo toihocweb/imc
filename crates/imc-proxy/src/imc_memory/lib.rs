@@ -1404,6 +1404,28 @@ pub fn get_auto_learning_context(_project_id: Option<&str>, _query: Option<&str>
     String::new()
 }
 
+/// Generate the compact repository map for the initial turn of a session.
+pub fn get_project_repo_map_section(project_id: &str, token_budget: usize) -> Option<String> {
+    let detected = DetectedProject {
+        id: project_id.to_string(),
+        path: String::new(),
+        source: DetectionSource::SessionCache,
+    };
+    let db = memory_db_path(&detected);
+    if !db.exists() {
+        return None;
+    }
+    let store = imc_core::store::open(&db).ok()?;
+    let report = imc_find::repomap::generate_repo_map(&store, token_budget).ok()?;
+    if report.shown_files == 0 || report.text.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "<repository-map>\n{}\n</repository-map>",
+        report.text.trim()
+    ))
+}
+
 /// Port of `append_learned_memories_to_payload`.
 pub fn append_learned_memories_to_payload(
     payload: &mut AnthropicMessagesPayload,
@@ -1505,12 +1527,28 @@ pub fn append_learned_memories_to_payload(
         }
     };
 
+    // Check if this is the initial turn of the session (no assistant messages yet)
+    let is_initial_turn = payload
+        .messages
+        .iter()
+        .filter(|m| matches!(m, AnthropicInputMessage::Assistant(_)))
+        .count() == 0;
+
+    let repo_map_section = if is_initial_turn {
+        get_project_repo_map_section(project_id, 800)
+    } else {
+        None
+    };
+
     let auto_lessons = get_auto_learning_context(Some(project_id), Some(&real_query));
-    if learned_memories.is_empty() && auto_lessons.is_empty() {
+    if learned_memories.is_empty() && auto_lessons.is_empty() && repo_map_section.is_none() {
         return false;
     }
 
     let mut sections: Vec<String> = Vec::new();
+    if let Some(map) = repo_map_section {
+        sections.push(map);
+    }
     if !learned_memories.is_empty() {
         sections.push(learned_memories.clone());
     }
@@ -1520,7 +1558,7 @@ pub fn append_learned_memories_to_payload(
             auto_lessons
         ));
     }
-    let memory_text = build_memory_block(&sections.join("\n"));
+    let memory_text = build_memory_block(&sections.join("\n\n"));
 
     if let (Some(key), true) = (&memory_session_key, !real_query.is_empty()) {
         if let Ok(mut m) = session_turn_memories().lock() {

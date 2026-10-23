@@ -1210,6 +1210,7 @@ dependencies = [
  "imc-cli-extra",
  "imc-core",
  "imc-embed",
+ "imc-find",
  "imc-index",
  "imc-mcp",
  "imc-memory",

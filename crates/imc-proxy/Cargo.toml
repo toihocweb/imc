@@ -15,6 +15,7 @@ imc-search = { path = "../imc-search" }
 imc-embed = { path = "../imc-embed" }
 imc-memory = { path = "../imc-memory" }
 imc-index = { path = "../imc-index" }
+imc-find = { path = "../imc-find" }
 imc-support = { path = "../imc-support" }
 anyhow.workspace = true
 axum = "0.8"
