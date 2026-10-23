@@ -524,6 +524,10 @@ impl Embedder for RemoteEmbedder {
 /// The hashing embedder is a lexical stand-in: measured on the `imc` repo it
 /// *lowered* top-1 accuracy vs BM25-only, so it must never be on by default.
 pub fn build(cfg: &EmbedConfig) -> Option<Box<dyn Embedder>> {
+    let m = cfg.model.trim().to_lowercase();
+    if m.is_empty() || m == "none" || m == "disabled" || m == "off" || m == "false" {
+        return None;
+    }
     if cfg.api_key.is_some() {
         return Some(Box::new(RemoteEmbedder::new(cfg.clone())));
     }
