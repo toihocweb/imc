@@ -257,17 +257,11 @@ fn learn_now(project_root: &PathBuf, query: &str, answer: &str, tool_output: &st
         Ok(n) => {
             // A success proves the pending lessons it shares words with.
             let promoted = imc_memory::promote_pending(&store, &exchange).unwrap_or(0);
-            let synced = imc_memory::sync_project_rules(&store, project_root).ok().flatten();
             log.info(&format!(
-                "💾 Self-improvement review: learned {n} memory(ies) for {}{}{}",
+                "💾 Self-improvement review: learned {n} memory(ies) in project store for {}{}",
                 project_root.display(),
                 if promoted > 0 {
                     format!(" (promoted {promoted} pending)")
-                } else {
-                    String::new()
-                },
-                if let Some(p) = synced {
-                    format!("; synchronized rules to {}", p.display())
                 } else {
                     String::new()
                 }
