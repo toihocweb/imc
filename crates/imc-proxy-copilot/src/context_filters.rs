@@ -39,18 +39,17 @@ use crate::non_stream_translation::{
 };
 
 // ---------------------------------------------------------------------------
-// Markdown and file inspection helpers
+// File inspection and content classification helpers
 // ---------------------------------------------------------------------------
 
-/// Returns true if a string ends with a markdown extension (ignoring quotes and casing).
-pub fn is_markdown_extension(path_or_token: &str) -> bool {
+fn clean_target_path(path_or_token: &str) -> &str {
     let p = path_or_token.trim().trim_matches(|c| c == '\'' || c == '"' || c == '`');
     let p = if let Some((base, _)) = p.split_once('#') {
         base
     } else {
         p
     };
-    let p = if let Some((base, suffix)) = p.rsplit_once(':') {
+    if let Some((base, suffix)) = p.rsplit_once(':') {
         if suffix.chars().all(|c| c.is_ascii_digit()) {
             base
         } else {
@@ -58,13 +57,184 @@ pub fn is_markdown_extension(path_or_token: &str) -> bool {
         }
     } else {
         p
-    };
+    }
+}
+
+/// Returns true if a string ends with a markdown extension (ignoring quotes and casing).
+pub fn is_markdown_extension(path_or_token: &str) -> bool {
+    let p = clean_target_path(path_or_token);
     let lower = p.to_lowercase();
     lower.ends_with(".md")
         || lower.ends_with(".markdown")
         || lower.ends_with(".mdx")
         || lower.ends_with(".mdown")
         || lower.ends_with(".mkdn")
+}
+
+/// Returns true if a path or token corresponds to any document, config, schema, or source code file.
+pub fn is_document_or_source_extension(path_or_token: &str) -> bool {
+    let p = clean_target_path(path_or_token);
+    let lower = p.to_lowercase();
+    let file_name = lower.split('/').last().unwrap_or(&lower);
+
+    // Exact common filenames without standard extensions
+    if matches!(
+        file_name,
+        "dockerfile"
+            | "makefile"
+            | "license"
+            | "changelog"
+            | "authors"
+            | "notice"
+            | "readme"
+            | "gemfile"
+            | "procfile"
+            | "vagrantfile"
+            | ".env"
+            | ".gitignore"
+            | ".dockerignore"
+            | ".editorconfig"
+    ) {
+        return true;
+    }
+
+    // Markdown & Documentation & Text
+    if is_markdown_extension(path_or_token)
+        || lower.ends_with(".txt")
+        || lower.ends_with(".text")
+        || lower.ends_with(".rst")
+        || lower.ends_with(".adoc")
+        || lower.ends_with(".asciidoc")
+        || lower.ends_with(".org")
+    {
+        return true;
+    }
+
+    // Structured config, data & schemas
+    if lower.ends_with(".json")
+        || lower.ends_with(".jsonl")
+        || lower.ends_with(".yaml")
+        || lower.ends_with(".yml")
+        || lower.ends_with(".toml")
+        || lower.ends_with(".xml")
+        || lower.ends_with(".html")
+        || lower.ends_with(".htm")
+        || lower.ends_with(".css")
+        || lower.ends_with(".scss")
+        || lower.ends_with(".sass")
+        || lower.ends_with(".less")
+        || lower.ends_with(".csv")
+        || lower.ends_with(".tsv")
+        || lower.ends_with(".sql")
+        || lower.ends_with(".env")
+        || lower.ends_with(".ini")
+        || lower.ends_with(".conf")
+        || lower.ends_with(".config")
+        || lower.ends_with(".properties")
+        || lower.ends_with(".proto")
+        || lower.ends_with(".graphql")
+        || lower.ends_with(".gql")
+    {
+        return true;
+    }
+
+    // Source code
+    if lower.ends_with(".rs")
+        || lower.ends_with(".py")
+        || lower.ends_with(".js")
+        || lower.ends_with(".mjs")
+        || lower.ends_with(".cjs")
+        || lower.ends_with(".ts")
+        || lower.ends_with(".mts")
+        || lower.ends_with(".cts")
+        || lower.ends_with(".tsx")
+        || lower.ends_with(".jsx")
+        || lower.ends_with(".go")
+        || lower.ends_with(".java")
+        || lower.ends_with(".c")
+        || lower.ends_with(".h")
+        || lower.ends_with(".cpp")
+        || lower.ends_with(".cc")
+        || lower.ends_with(".cxx")
+        || lower.ends_with(".hpp")
+        || lower.ends_with(".cs")
+        || lower.ends_with(".rb")
+        || lower.ends_with(".php")
+        || lower.ends_with(".swift")
+        || lower.ends_with(".kt")
+        || lower.ends_with(".kts")
+        || lower.ends_with(".scala")
+        || lower.ends_with(".sh")
+        || lower.ends_with(".bash")
+        || lower.ends_with(".zsh")
+        || lower.ends_with(".lua")
+        || lower.ends_with(".zig")
+        || lower.ends_with(".dart")
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Returns true if the command or tool is reading a file (source code, text, config, or data).
+pub fn is_file_read(command: &str, tool_name: &str) -> bool {
+    let tool_lower = tool_name.trim().to_lowercase();
+    let is_read_tool = matches!(
+        tool_lower.as_str(),
+        "read_file"
+            | "readfile"
+            | "view_file"
+            | "viewfile"
+            | "read"
+            | "view"
+            | "cat"
+            | "open_file"
+            | "openfile"
+            | "read_url_content"
+            | "file_reader"
+            | "get_file_contents"
+            | "read_document"
+            | "fetch_file"
+    );
+
+    if is_read_tool {
+        return true;
+    }
+
+    if is_document_or_source_extension(command) {
+        return true;
+    }
+
+    let cmd_lower = command.trim().to_lowercase();
+    for part in cmd_lower.split([';', '&', '|']) {
+        let p = part.trim();
+        if p.is_empty() {
+            continue;
+        }
+        let tokens: Vec<&str> = p.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        let read_verbs = [
+            "cat", "head", "tail", "bat", "batcat", "less", "more", "sed", "awk",
+            "view", "read", "glow",
+        ];
+        let has_read_verb = read_verbs.contains(&tokens[0])
+            || tokens[0].ends_with("/cat")
+            || tokens[0].ends_with("/head")
+            || tokens[0].ends_with("/tail")
+            || tokens[0].ends_with("/bat")
+            || tokens[0].ends_with("/view")
+            || tokens[0].ends_with("/read");
+
+        let has_file_arg = tokens.iter().skip(1).any(|t| is_document_or_source_extension(t));
+        if has_file_arg && (has_read_verb || tool_name.is_empty()) {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Returns true if the command or tool is reading a markdown file.
@@ -84,12 +254,10 @@ pub fn is_markdown_read(command: &str, tool_name: &str) -> bool {
             | "read_url_content"
     );
 
-    // If the path/command itself directly ends in a markdown extension
     if is_markdown_extension(command) {
         return true;
     }
 
-    // Inspect command line for file reading verbs or commands targeting a .md file
     let cmd_lower = command.trim().to_lowercase();
     for part in cmd_lower.split([';', '&', '|']) {
         let p = part.trim();
@@ -119,6 +287,140 @@ pub fn is_markdown_read(command: &str, tool_name: &str) -> bool {
     }
 
     false
+}
+
+/// Heuristic check whether text content is a structured configuration (YAML, TOML, JSON, INI).
+pub fn is_structured_config(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+    {
+        if serde_json::from_str::<Value>(trimmed).is_ok() {
+            return true;
+        }
+    }
+
+    if trimmed.starts_with('<') && (trimmed.ends_with('>') || trimmed.contains("</")) {
+        return true;
+    }
+
+    if trimmed.starts_with("---\n") || trimmed.starts_with("---\r\n") {
+        return true;
+    }
+
+    let sample_lines: Vec<&str> = trimmed.lines().take(40).collect();
+    if sample_lines.is_empty() {
+        return false;
+    }
+
+    let mut kv_or_section_count = 0;
+    let mut total_content_lines = 0;
+
+    for line in &sample_lines {
+        let l = line.trim();
+        if l.is_empty() || l.starts_with('#') || l.starts_with("//") || l.starts_with(';') {
+            continue;
+        }
+        total_content_lines += 1;
+        if l.starts_with('[') && l.ends_with(']') && !l.contains(' ') {
+            kv_or_section_count += 1;
+            continue;
+        }
+        if let Some((key, _)) = l.split_once(':') {
+            let k = key.trim();
+            if !k.is_empty() && !k.contains(' ') && k.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.') {
+                kv_or_section_count += 1;
+                continue;
+            }
+        }
+        if let Some((key, _)) = l.split_once('=') {
+            let k = key.trim();
+            if !k.is_empty() && !k.contains(' ') && k.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.') {
+                kv_or_section_count += 1;
+                continue;
+            }
+        }
+    }
+
+    total_content_lines >= 3 && kv_or_section_count * 2 >= total_content_lines
+}
+
+/// Heuristic check whether text content is tabular data (CSV, TSV, or formatted table).
+pub fn is_tabular_data(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let sample_lines: Vec<&str> = trimmed.lines().take(30).collect();
+    if sample_lines.len() < 3 {
+        return false;
+    }
+
+    let pipe_lines = sample_lines.iter().filter(|l| l.contains('|')).count();
+    if pipe_lines >= 3 && pipe_lines * 2 >= sample_lines.len() {
+        return true;
+    }
+
+    let comma_counts: Vec<usize> = sample_lines.iter().map(|l| l.matches(',').count()).collect();
+    if let Some(&first_count) = comma_counts.first() {
+        if first_count >= 2 && comma_counts.iter().filter(|&&c| c == first_count).count() * 2 >= sample_lines.len() {
+            return true;
+        }
+    }
+
+    let tab_counts: Vec<usize> = sample_lines.iter().map(|l| l.matches('\t').count()).collect();
+    if let Some(&first_count) = tab_counts.first() {
+        if first_count >= 2 && tab_counts.iter().filter(|&&c| c == first_count).count() * 2 >= sample_lines.len() {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Heuristic check whether text is prose/documentation rather than build/test terminal output.
+pub fn is_prose_or_documentation(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let sample_lines: Vec<&str> = trimmed.lines().take(40).collect();
+    if sample_lines.is_empty() {
+        return false;
+    }
+
+    let has_log_markers = sample_lines.iter().any(|l| {
+        let t = l.trim_start();
+        t.starts_with("Compiling ")
+            || t.starts_with("Finished ")
+            || t.starts_with("Running ")
+            || t.starts_with("test result:")
+            || t.starts_with("--> ")
+            || t.starts_with("=== ")
+            || t.starts_with("FAILED ")
+            || t.starts_with("PASS ")
+            || t.starts_with("FAIL ")
+            || t.starts_with("error: ")
+            || t.starts_with("warning: ")
+            || (t.starts_with('[') && (t.starts_with("[INFO]") || t.starts_with("[DEBUG]") || t.starts_with("[ERROR]") || t.starts_with("[WARN]")))
+    });
+
+    if has_log_markers {
+        return false;
+    }
+
+    let sentence_ends = trimmed.matches(". ").count()
+        + trimmed.matches(".\n").count()
+        + trimmed.matches("? ").count()
+        + trimmed.matches("!\n").count();
+
+    sentence_ends >= 4
 }
 
 /// Heuristic check whether text content is a markdown document.
@@ -454,8 +756,8 @@ pub fn collect_observations(payload: &AnthropicMessagesPayload) -> Vec<FilterObs
                     .join("\n"),
             };
             if text.trim().is_empty()
-                || is_markdown_read(&command, &tool)
-                || is_markdown_content(&text)
+                || is_file_read(&command, &tool)
+                || is_code_or_structured_content(&text)
             {
                 continue;
             }
@@ -874,6 +1176,21 @@ pub fn is_code_or_structured_content(text: &str) -> bool {
 
     // Markdown documents should NEVER be filtered, truncated, or stripped of headings/dividers.
     if is_markdown_content(text) {
+        return true;
+    }
+
+    // Structured configuration (JSON, YAML, TOML, XML, HTML, INI)
+    if is_structured_config(text) {
+        return true;
+    }
+
+    // Tabular data (tables, CSV, TSV)
+    if is_tabular_data(text) {
+        return true;
+    }
+
+    // Natural prose or documentation without log signatures
+    if is_prose_or_documentation(text) {
         return true;
     }
 
@@ -1560,8 +1877,8 @@ pub fn filter_tool_result_content(text: &str, command: &str, tool_name: &str) ->
         return text.to_string();
     }
 
-    // Markdown file reads are NEVER filtered or truncated!
-    if is_markdown_read(command, tool_name) {
+    // File reads (source code, text, configs, markdown, data) are NEVER filtered or truncated!
+    if is_file_read(command, tool_name) {
         return text.to_string();
     }
 

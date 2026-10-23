@@ -16,6 +16,13 @@ pub fn compress(content: &str) -> String {
     if is_search_or_discovery_content(trimmed) {
         return content.to_string();
     }
+    // Structured configs (YAML, TOML, JSON, INI), tabular data, and markdown should never drop lines or sentences
+    if imc_proxy_copilot::context_filters::is_structured_config(trimmed)
+        || imc_proxy_copilot::context_filters::is_tabular_data(trimmed)
+        || imc_proxy_copilot::context_filters::is_markdown_content(trimmed)
+    {
+        return content.to_string();
+    }
     let sentences: Vec<String> = split_sentences(trimmed);
     if sentences.len() <= 3 {
         // No sentence structure. A file listing, a grep result, a table —

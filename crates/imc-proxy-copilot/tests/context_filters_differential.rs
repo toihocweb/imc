@@ -10,7 +10,7 @@
 
 use imc_proxy_copilot::context_filters::{
     cap_inline, clean_line, execute_transforms_pipeline, filter_tool_result_content,
-    is_code_or_structured_content, is_markdown_content, is_markdown_read,
+    is_code_or_structured_content, is_file_read, is_markdown_content, is_markdown_read,
     is_separator_line, keep_markdown_sections, keep_matching_lines, match_tool_result_rule,
     normalize_log_line, remove_markdown_section, remove_matching_lines, squish_multi_space,
     truncate_lines_content,
@@ -366,4 +366,49 @@ fn markdown_file_reads_are_never_filtered() {
     // Even with empty command/tool, markdown content recognition prevents log filtering
     let filtered_content = filter_tool_result_content(&large_md, "", "");
     assert_eq!(filtered_content, large_md);
+}
+
+#[test]
+fn text_and_config_file_reads_bypass_filtering() {
+    assert!(is_file_read("cat config.yaml", "Bash"));
+    assert!(is_file_read("cat settings.toml", "Bash"));
+    assert!(is_file_read("head -n 40 data.csv", "Bash"));
+    assert!(is_file_read("cat prompt.txt", "Bash"));
+    assert!(is_file_read("cat schema.sql", "Bash"));
+    assert!(is_file_read("cat Dockerfile", "Bash"));
+    assert!(is_file_read("cat .env", "Bash"));
+    assert!(is_file_read("config.yaml", "read_file"));
+    assert!(is_file_read("data.csv", "view_file"));
+    assert!(is_file_read("app.py", "read"));
+
+    // Long YAML config with separators and repetition
+    let mut yaml_content = String::from("---\nversion: '3.8'\nservices:\n");
+    for i in 0..50 {
+        yaml_content.push_str(&format!("  worker_{i}:\n    image: redis:alpine\n    restart: always\n"));
+    }
+    yaml_content.push_str("---\n# End of config\n");
+
+    assert!(yaml_content.len() > 1500);
+
+    // Filter must leave YAML completely intact (no stripped ---, no folded lines)
+    let filtered_yaml = filter_tool_result_content(&yaml_content, "cat docker-compose.yml", "Bash");
+    assert_eq!(filtered_yaml, yaml_content);
+
+    // Text file with paragraphs and lines > 200 chars
+    let long_sentence = "This is a very long descriptive paragraph in a plain text document that contains comprehensive explanation and continues well beyond two hundred characters so that normal log line truncation would mangle it if it were improperly classified as a terminal log.\n";
+    let mut txt_content = String::new();
+    for _ in 0..20 {
+        txt_content.push_str(long_sentence);
+    }
+    assert!(txt_content.len() > 1500);
+
+    let filtered_txt = filter_tool_result_content(&txt_content, "cat notes.txt", "Bash");
+    assert_eq!(filtered_txt, txt_content);
+
+    // Even without command hint, structured config and prose heuristics protect the text
+    let filtered_yaml_raw = filter_tool_result_content(&yaml_content, "", "");
+    assert_eq!(filtered_yaml_raw, yaml_content);
+
+    let filtered_txt_raw = filter_tool_result_content(&txt_content, "", "");
+    assert_eq!(filtered_txt_raw, txt_content);
 }

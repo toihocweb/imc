@@ -239,8 +239,8 @@ pub fn is_bypass_command(cmd: &str) -> bool {
                 return true;
             }
 
-            // Markdown file reads (e.g. cat README.md, head docs/guide.md)
-            if imc_proxy_copilot::context_filters::is_markdown_read(p, "") {
+            // File reads (e.g. cat README.md, cat config.yaml, head -n 50 data.csv)
+            if imc_proxy_copilot::context_filters::is_file_read(p, "") {
                 return true;
             }
         }
@@ -355,9 +355,9 @@ pub fn should_bypass_compression(
             return true;
         }
 
-        // 2. Reading a markdown file (.md, .markdown, .mdx, etc.) — do not compress
+        // 2. Reading a file (source code, markdown, config, text, data) — do not compress
         if let Some(cmd) = cmd_opt {
-            if imc_proxy_copilot::context_filters::is_markdown_read(cmd, &name_lower) {
+            if imc_proxy_copilot::context_filters::is_file_read(cmd, &name_lower) {
                 return true;
             }
         }
@@ -372,8 +372,12 @@ pub fn should_bypass_compression(
         }
     }
 
-    // 4. Fallback content heuristic: markdown content, search results, or status
-    if imc_proxy_copilot::context_filters::is_markdown_content(text) {
+    // 4. Fallback content heuristic: markdown, structured config, tabular, prose, search results, or status
+    if imc_proxy_copilot::context_filters::is_markdown_content(text)
+        || imc_proxy_copilot::context_filters::is_structured_config(text)
+        || imc_proxy_copilot::context_filters::is_tabular_data(text)
+        || imc_proxy_copilot::context_filters::is_prose_or_documentation(text)
+    {
         return true;
     }
 
@@ -834,5 +838,42 @@ mod tests {
         let mut msgs2 = vec![asst2, user2];
         let report2 = compress_tool_results(&mut msgs2, &db);
         assert_eq!(report2.compressed, 0, "view_file on SKILL.md must bypass compression");
+    }
+
+    #[test]
+    fn text_and_config_file_reads_bypass_compression() {
+        let db = tmp_db("config-bypass");
+        let mut yaml_content = String::from("---\nversion: '3.8'\nservices:\n");
+        for i in 0..60 {
+            yaml_content.push_str(&format!("  worker_{i}:\n    image: redis:alpine\n    restart: always\n"));
+        }
+        yaml_content.push_str("---\n# End of config\n");
+        assert!(yaml_content.len() > MIN_TOKENS * 4);
+
+        // 1. Tool use with command = "cat config.yaml"
+        let mut input1 = BTreeMap::new();
+        input1.insert("command".to_string(), Value::String("cat config.yaml".to_string()));
+        let asst1 = assistant_with_tool_use("toolu_cat_yaml", "bash", input1);
+        let mut tr1 = tool_result(StringOrBlocks::Text(yaml_content.clone()));
+        tr1.tool_use_id = "toolu_cat_yaml".to_string();
+        let user1 = user_with_tool_result(tr1);
+
+        let mut msgs = vec![asst1, user1];
+        let report = compress_tool_results(&mut msgs, &db);
+        assert_eq!(report.compressed, 0, "cat on config.yaml must bypass compression");
+
+        // 2. Tool use with view_file path = "notes.txt"
+        let txt_content = "This is a detailed explanation in documentation.\n".repeat(60);
+        assert!(txt_content.len() > MIN_TOKENS * 4);
+        let mut input2 = BTreeMap::new();
+        input2.insert("path".to_string(), Value::String("notes.txt".to_string()));
+        let asst2 = assistant_with_tool_use("toolu_view_txt", "view_file", input2);
+        let mut tr2 = tool_result(StringOrBlocks::Text(txt_content.clone()));
+        tr2.tool_use_id = "toolu_view_txt".to_string();
+        let user2 = user_with_tool_result(tr2);
+
+        let mut msgs2 = vec![asst2, user2];
+        let report2 = compress_tool_results(&mut msgs2, &db);
+        assert_eq!(report2.compressed, 0, "view_file on notes.txt must bypass compression");
     }
 }
