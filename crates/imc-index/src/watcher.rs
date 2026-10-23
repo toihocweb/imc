@@ -12,6 +12,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Config as NotifyConfig, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use imc_core::config::{load_registry, registry_path, upsert_project, Config, ProjectMeta};
@@ -215,6 +216,46 @@ pub fn is_ignored_dir_name(name: &str) -> bool {
     )
 }
 
+/// Load and parse gitignore rules for a project root, including `.gitignore` and `.git/info/exclude`.
+pub fn load_project_gitignore(root: &Path) -> Option<Gitignore> {
+    let mut builder = GitignoreBuilder::new(root);
+    let gitignore = root.join(".gitignore");
+    if gitignore.exists() {
+        let _ = builder.add(&gitignore);
+    }
+    let git_exclude = root.join(".git").join("info").join("exclude");
+    if git_exclude.exists() {
+        let _ = builder.add(&git_exclude);
+    }
+    builder.build().ok()
+}
+
+/// Checks if a path should be ignored, combining hardcoded safety list and project `.gitignore`.
+pub fn is_path_ignored(
+    root: &Path,
+    path: &Path,
+    is_dir: bool,
+    gitignore: Option<&Gitignore>,
+) -> bool {
+    let s = path.to_string_lossy();
+    if is_ignored_path(&s) {
+        return true;
+    }
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if is_dir && is_ignored_dir_name(name) {
+            return true;
+        }
+    }
+    if let Some(gi) = gitignore {
+        if let Ok(rel) = path.strip_prefix(root) {
+            if gi.matched_path_or_any_parents(rel, is_dir).is_ignore() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Handle to a running background git watcher thread.
 pub struct GitWatcherHandle {
     stop: Arc<AtomicBool>,
@@ -278,11 +319,14 @@ pub fn spawn_git_watcher(cfg: Config) -> Result<GitWatcherHandle> {
 
             // Track currently watched directories -> project_root
             let mut watched_dirs: HashMap<PathBuf, PathBuf> = HashMap::new();
+            // Track loaded gitignore per project_root
+            let mut project_gitignores: HashMap<PathBuf, Option<Gitignore>> = HashMap::new();
 
             fn sync_watches(
                 cfg: &Config,
                 watcher: &mut RecommendedWatcher,
                 watched: &mut HashMap<PathBuf, PathBuf>,
+                gitignores: &mut HashMap<PathBuf, Option<Gitignore>>,
             ) {
                 let current_registry = load_registry(cfg);
                 let current_roots: HashSet<PathBuf> = current_registry
@@ -300,9 +344,12 @@ pub fn spawn_git_watcher(cfg: Config) -> Result<GitWatcherHandle> {
                         true
                     }
                 });
+                gitignores.retain(|proj_root, _| current_roots.contains(proj_root));
 
                 // Add watches for projects
                 for root in current_roots {
+                    let gi = load_project_gitignore(&root);
+
                     // 1. Watch root non-recursively (main.rs, Cargo.toml, etc.)
                     if !watched.contains_key(&root) {
                         if watcher.watch(&root, RecursiveMode::NonRecursive).is_ok() {
@@ -315,8 +362,9 @@ pub fn spawn_git_watcher(cfg: Config) -> Result<GitWatcherHandle> {
                         for entry in entries.flatten() {
                             let path = entry.path();
                             if path.is_dir() {
-                                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                                if !is_ignored_dir_name(&name) && !watched.contains_key(&path) {
+                                if !is_path_ignored(&root, &path, true, gi.as_ref())
+                                    && !watched.contains_key(&path)
+                                {
                                     if watcher.watch(&path, RecursiveMode::Recursive).is_ok() {
                                         watched.insert(path, root.clone());
                                     }
@@ -337,10 +385,12 @@ pub fn spawn_git_watcher(cfg: Config) -> Result<GitWatcherHandle> {
                             }
                         }
                     }
+
+                    gitignores.insert(root, gi);
                 }
             }
 
-            sync_watches(&cfg, &mut watcher, &mut watched_dirs);
+            sync_watches(&cfg, &mut watcher, &mut watched_dirs, &mut project_gitignores);
 
             while !stop_clone.load(Ordering::SeqCst) {
                 // Blocks in the OS kernel until an inotify/fsevent arrives
@@ -368,10 +418,11 @@ pub fn spawn_git_watcher(cfg: Config) -> Result<GitWatcherHandle> {
                     break;
                 }
 
-                // Check if registry changed (new project added)
+                // Check if registry changed (new project added) or .gitignore updated
                 let reg_changed = touched.iter().any(|p| p.ends_with("projects.json"));
-                if reg_changed {
-                    sync_watches(&cfg, &mut watcher, &mut watched_dirs);
+                let gitignore_changed = touched.iter().any(|p| p.ends_with(".gitignore"));
+                if reg_changed || gitignore_changed {
+                    sync_watches(&cfg, &mut watcher, &mut watched_dirs, &mut project_gitignores);
                 }
 
                 // Classify touched paths: git state changes vs uncommitted working tree changes
@@ -386,10 +437,15 @@ pub fn spawn_git_watcher(cfg: Config) -> Result<GitWatcherHandle> {
                                 git_check_roots.insert(root.clone());
                             }
                         }
-                    } else if is_source_or_resource_file(p) || (p.is_dir() && !is_ignored_path(&p_str)) {
+                    } else {
                         for (watched_dir, root) in &watched_dirs {
                             if p.starts_with(watched_dir) || p.starts_with(root) {
-                                tree_check_roots.insert(root.clone());
+                                let gi_ref = project_gitignores.get(root).and_then(|g| g.as_ref());
+                                if !is_path_ignored(root, p, p.is_dir(), gi_ref) {
+                                    if is_source_or_resource_file(p) || p.is_dir() {
+                                        tree_check_roots.insert(root.clone());
+                                    }
+                                }
                             }
                         }
                     }
@@ -535,6 +591,62 @@ mod tests {
         let db = cfg.project_db(&repo);
         let store = imc_core::store::open(&db).unwrap();
         assert_eq!(store.count_symbols(), 2, "uncommitted file edit must be auto-indexed in SQLite");
+
+        watcher.stop();
+        let _ = std::fs::remove_dir_all(&td);
+    }
+
+    #[test]
+    fn watcher_respects_custom_gitignore_rules() {
+        let td = std::env::temp_dir().join(format!("test_watcher_gitignore_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&td);
+        let repo = td.join("repo");
+        let src = repo.join("src");
+        let custom_cache = repo.join("custom_cache");
+        let data = td.join("data");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&custom_cache).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+
+        let _ = std::process::Command::new("git").args(["init"]).current_dir(&repo).output().unwrap();
+        let _ = std::process::Command::new("git").args(["config", "user.name", "T"]).current_dir(&repo).output().unwrap();
+        let _ = std::process::Command::new("git").args(["config", "user.email", "t@t.com"]).current_dir(&repo).output().unwrap();
+
+        std::fs::write(repo.join(".gitignore"), "custom_cache/\n").unwrap();
+        std::fs::write(src.join("main.py"), "def run():\n    pass\n").unwrap();
+        std::fs::write(custom_cache.join("junk.py"), "def junk():\n    pass\n").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.data_dir = data;
+
+        let stats = run(&cfg, &repo, &[], false).unwrap();
+        assert_eq!(stats.symbols, 1, "custom_cache/ must not be indexed initially");
+
+        let meta = ProjectMeta {
+            id: md5_hex(repo.to_string_lossy().as_bytes())[..16].to_string(),
+            name: "repo".to_string(),
+            path: repo.to_string_lossy().to_string(),
+            indexed_at: Some(1),
+            file_count: Some(1),
+        };
+        upsert_project(&cfg, meta).unwrap();
+
+        let mut watcher = spawn_git_watcher(cfg.clone()).unwrap();
+
+        // 1. Modifying gitignored folder must NOT trigger indexing
+        std::fs::write(custom_cache.join("junk.py"), "def junk():\n    pass\ndef junk2():\n    pass\n").unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+
+        let db = cfg.project_db(&repo);
+        let store = imc_core::store::open(&db).unwrap();
+        assert_eq!(store.count_symbols(), 1, "ignored custom_cache file must be ignored by watcher");
+
+        // 2. Modifying tracked file must trigger incremental indexing
+        std::fs::write(src.join("main.py"), "def run():\n    pass\ndef stop():\n    pass\n").unwrap();
+        std::thread::sleep(Duration::from_millis(1500));
+
+        let store = imc_core::store::open(&db).unwrap();
+        assert_eq!(store.count_symbols(), 2, "source file must be indexed");
 
         watcher.stop();
         let _ = std::fs::remove_dir_all(&td);

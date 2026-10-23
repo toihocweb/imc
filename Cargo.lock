@@ -1152,6 +1152,7 @@ name = "imc-index"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "ignore",
  "imc-core",
  "imc-embed",
  "imc-parser",

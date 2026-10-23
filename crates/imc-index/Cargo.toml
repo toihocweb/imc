@@ -12,4 +12,5 @@ imc-search = { path = "../imc-search" }
 anyhow.workspace = true
 rayon.workspace = true
 serde.workspace = true
+ignore.workspace = true
 notify = "8.2.0"
