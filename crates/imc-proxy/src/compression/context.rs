@@ -422,10 +422,19 @@ pub fn compress_tool_results(
         }
     }
 
+    let total_user_messages = messages
+        .iter()
+        .filter(|m| matches!(m, AnthropicInputMessage::User(_)))
+        .count();
+    let mut current_user_idx = 0;
+
     for message in messages.iter_mut() {
         let AnthropicInputMessage::User(user) = message else {
             continue;
         };
+        let is_recent_turn = total_user_messages.saturating_sub(1 + current_user_idx) < 2;
+        current_user_idx += 1;
+
         let StringOrBlocks::Blocks(blocks) = &mut user.content else {
             continue;
         };
@@ -445,14 +454,18 @@ pub fn compress_tool_results(
             let tool_meta = tool_uses.get(&result.tool_use_id);
             match &mut result.content {
                 StringOrBlocks::Text(text) => {
-                    if !should_bypass_compression(tool_meta, text) {
+                    if !is_recent_turn && maybe_microcompact(text, tool_meta, &mut store, &mut report) {
+                        // Successfully microcompacted older historical turn
+                    } else if !should_bypass_compression(tool_meta, text) {
                         maybe_shrink(text, &mut store, &mut report);
                     }
                 }
                 StringOrBlocks::Blocks(inner) => {
                     for b in inner.iter_mut() {
                         if let AnthropicToolResultContentBlock::Text(t) = b {
-                            if !should_bypass_compression(tool_meta, &t.text) {
+                            if !is_recent_turn && maybe_microcompact(&mut t.text, tool_meta, &mut store, &mut report) {
+                                // Successfully microcompacted older historical turn
+                            } else if !should_bypass_compression(tool_meta, &t.text) {
                                 maybe_shrink(&mut t.text, &mut store, &mut report);
                             }
                         }
@@ -462,6 +475,51 @@ pub fn compress_tool_results(
         }
     }
     report
+}
+
+/// Microcompact large file reads or outputs from older historical turns (>= 2 turns ago).
+/// Preserves disk retrieval handle via CcrStore while relieving context window bloat.
+fn maybe_microcompact(
+    text: &mut String,
+    tool_meta: Option<&(String, Option<String>)>,
+    store: &mut CcrStore,
+    report: &mut CompressionReport,
+) -> bool {
+    // Only microcompact substantive older outputs (> 1,000 chars)
+    if text.len() < 1000 {
+        return false;
+    }
+    if text.contains("[imc: ") || text.contains("[Earlier turn:") || text.contains("## Shortened (full text on demand)") {
+        return false;
+    }
+
+    let orig_tokens = text.chars().count() / 4;
+    let line_count = text.lines().count();
+    let target = tool_meta
+        .and_then(|(_, cmd)| cmd.as_deref())
+        .unwrap_or("file");
+
+    let placeholder = format!(
+        "[Earlier turn: inspected {} ({} lines, {} chars). Full content cached in CCR store. Retrieve with `imc retrieve {{id}}`]",
+        target, line_count, text.len()
+    );
+    let comp_tokens = placeholder.chars().count() / 4;
+
+    let id = match store.store("microcompact", text, &placeholder, orig_tokens as i64, comp_tokens as i64) {
+        Ok(id) => id,
+        Err(_) => return false,
+    };
+
+    report.considered += 1;
+    report.compressed += 1;
+    report.original_tokens += orig_tokens;
+    report.compressed_tokens += comp_tokens;
+
+    *text = format!(
+        "[Earlier turn: inspected {} ({} lines, {} chars). Full content cached in CCR store. Retrieve with `imc retrieve {}` or POST /v1/retrieve {{\"id\":\"{}\"}}]",
+        target, line_count, text.len(), id, id
+    );
+    true
 }
 
 /// Compress one text payload in place if it is big enough and the win is real.
@@ -875,5 +933,59 @@ mod tests {
         let mut msgs2 = vec![asst2, user2];
         let report2 = compress_tool_results(&mut msgs2, &db);
         assert_eq!(report2.compressed, 0, "view_file on notes.txt must bypass compression");
+    }
+
+    #[test]
+    fn microcompact_preserves_active_turn_and_compacts_older_turns() {
+        let db = tmp_db("microcompact-test");
+        let large_file = "pub fn important_feature() -> bool {\n    true\n}\n".repeat(40);
+        assert!(large_file.len() > 1200);
+
+        // Turn 0 (Older historical turn): read file
+        let mut in0 = BTreeMap::new();
+        in0.insert("command".to_string(), Value::String("cat src/old.rs".to_string()));
+        let asst0 = assistant_with_tool_use("tool_old", "bash", in0);
+        let mut tr0 = tool_result(StringOrBlocks::Text(large_file.clone()));
+        tr0.tool_use_id = "tool_old".to_string();
+        let user0 = user_with_tool_result(tr0);
+
+        // Turn 1 (Previous turn): assistant reply + user followup
+        let asst1 = AnthropicInputMessage::Assistant(imc_proxy_types::types::anthropic::AnthropicAssistantMessage {
+            role: "assistant".to_string(),
+            content: StringOrBlocks::Text("I inspected old.rs".to_string()),
+        });
+        let user1 = AnthropicInputMessage::User(imc_proxy_types::types::anthropic::AnthropicUserMessage {
+            role: "user".to_string(),
+            content: StringOrBlocks::Text("Now check the new file".to_string()),
+        });
+
+        // Turn 2 (Active turn): read current file
+        let mut in2 = BTreeMap::new();
+        in2.insert("command".to_string(), Value::String("cat src/new.rs".to_string()));
+        let asst2 = assistant_with_tool_use("tool_new", "bash", in2);
+        let mut tr2 = tool_result(StringOrBlocks::Text(large_file.clone()));
+        tr2.tool_use_id = "tool_new".to_string();
+        let user2 = user_with_tool_result(tr2);
+
+        let mut msgs = vec![asst0, user0, asst1, user1, asst2, user2];
+        let report = compress_tool_results(&mut msgs, &db);
+
+        // Turn 0 should be microcompacted
+        assert_eq!(report.compressed, 1, "only the older turn file read should be microcompacted");
+
+        // Check content of user0 (Turn 0)
+        let AnthropicInputMessage::User(u0) = &msgs[1] else { panic!() };
+        let StringOrBlocks::Blocks(b0) = &u0.content else { panic!() };
+        let AnthropicUserContentBlock::ToolResult(r0) = &b0[0] else { panic!() };
+        let StringOrBlocks::Text(t0) = &r0.content else { panic!() };
+        assert!(t0.contains("[Earlier turn: inspected cat src/old.rs"), "old turn must have microcompact header: {t0}");
+        assert!(t0.contains("`imc retrieve "), "old turn must carry retrieve handle: {t0}");
+
+        // Check content of user2 (Active turn) — MUST REMAIN VERBATIM
+        let AnthropicInputMessage::User(u2) = &msgs[5] else { panic!() };
+        let StringOrBlocks::Blocks(b2) = &u2.content else { panic!() };
+        let AnthropicUserContentBlock::ToolResult(r2) = &b2[0] else { panic!() };
+        let StringOrBlocks::Text(t2) = &r2.content else { panic!() };
+        assert_eq!(t2, &large_file, "active turn file read must remain 100% verbatim!");
     }
 }

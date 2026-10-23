@@ -8,3 +8,4 @@
 /// Symbols-only outline result, shared by `find` modes.
 pub mod find;
 pub mod context;
+pub mod repomap;

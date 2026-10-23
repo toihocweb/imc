@@ -161,6 +161,15 @@ enum Command {
         #[arg(long)]
         rerank: bool,
     },
+    /// Generate a compact architectural repository map within a token budget.
+    #[command(name = "map", aliases = ["repomap"])]
+    Map {
+        /// Target project directory (defaults to current directory).
+        path: Option<PathBuf>,
+        /// Token budget for the repository map (default 1024).
+        #[arg(long, short = 't', default_value_t = 1024)]
+        tokens: usize,
+    },
     /// Print the original behind a compression handle.
     #[command(name = "retrieve")]
     Retrieve {
@@ -1168,6 +1177,23 @@ fn main() -> Result<()> {
                 );
             } else {
                 print!("{}", imc_cli::pack::render_markdown(&pack, &root));
+            }
+        }
+        Command::Map { path, tokens } => {
+            let target = match path {
+                Some(p) => std::fs::canonicalize(p).unwrap_or(root.clone()),
+                None => resolve_root_with(&cfg, None, false, false)?,
+            };
+            let db = cfg.project_db(&target);
+            if !db.exists() {
+                bail!("project is not indexed yet. Run `imc {}` first.", target.display());
+            }
+            let store = store::open(&db)?;
+            let report = imc_find::repomap::generate_repo_map(&store, *tokens)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", report.text);
             }
         }
         Command::Retrieve { id, compressed } => {
