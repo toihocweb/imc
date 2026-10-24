@@ -506,6 +506,16 @@ fn resolve_root_with(
         }
         dir = d.parent();
     }
+
+    // If cwd or any ancestor is a git repository, that repository root is the project.
+    let mut git_walk: Option<&std::path::Path> = Some(cwd.as_path());
+    while let Some(d) = git_walk {
+        if d.join(".git").exists() {
+            return Ok(d.to_path_buf());
+        }
+        git_walk = d.parent();
+    }
+
     if use_active {
         if let Some(p) = cfg.active_project() {
             if p.exists() {
@@ -758,13 +768,16 @@ fn main() -> Result<()> {
     let cli = Cli::parse_from(&args);
     let cfg = Config::default();
     cfg.ensure_dirs()?;
-    // `imc index` decides its own root (see the Index arm), so it must not
-    // print the "using the active project" notice.
-    let notify_active = !matches!(
+    let use_active = !matches!(
         &cli.command,
-        Command::Index { .. } | Command::Proxy { .. } | Command::Stop
+        Command::Index { .. }
+            | Command::Proxy { .. }
+            | Command::Stop
+            | Command::Claude { .. }
+            | Command::Setup { .. }
     );
-    let root = resolve_root_with(&cfg, cli.root.clone(), true, notify_active)?;
+    let notify_active = use_active;
+    let root = resolve_root_with(&cfg, cli.root.clone(), use_active, notify_active)?;
 
     match &cli.command {
         Command::Stop => {
