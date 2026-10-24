@@ -158,6 +158,7 @@ Return ONLY this structured summary to the lead agent:
 - **Target Files & Lines**: `path/to/file:L10-L25`
 - **Root Cause / Mechanism**: Exact technical finding
 - **Blast Radius**: Callers and dependencies from `imc trace`
+- **Next Step**: Delegate to `imc-planner` with this finding.
 "#;
 
 pub const PLANNER_AGENT_MD: &str = r#"---
@@ -186,6 +187,7 @@ Produce a clean `plan.md` in the repository root and return ONLY:
 - **Summary**: 1-line objective
 - **Key Decisions**: D1..Dn highlights
 - **Verification Command**: Exact command to test
+- **Next Step**: Delegate to `imc-builder` to implement plan.md.
 "#;
 
 pub const BUILDER_AGENT_MD: &str = r#"---
@@ -213,6 +215,7 @@ Return ONLY:
 - **Files Modified**: Exact paths touched
 - **Tests Added/Updated**: Test cases verifying the change
 - **Ready for Verifier**: Yes/No
+- **Next Step**: Delegate to `imc-verifier` to run verification tests.
 "#;
 
 pub const VERIFIER_AGENT_MD: &str = r#"---
@@ -238,6 +241,7 @@ Return ONLY:
 - **Command Executed**: Full test/check command
 - **Result**: PASS or FAIL (with shortest decisive error trace if fail)
 - **Workspace Status**: CLEAN or DIRTY (any stray/untracked files)
+- **Next Step**: Task complete if PASS and CLEAN. Otherwise, return failure trace to `imc-builder`.
 "#;
 
 /// Write the standard set of 4 full-flow harness agents to `.claude/agents/`
@@ -835,6 +839,7 @@ mod tests {
             assert!(text.starts_with("---\nname: "), "must contain YAML frontmatter: {name}");
             assert!(text.contains("maxTurns: "), "must specify maxTurns: {name}");
             assert!(text.contains("## Output Contract"), "must define output contract: {name}");
+            assert!(text.contains("- **Next Step**:"), "must define next step handoff: {name}");
         }
 
         let scout_text = std::fs::read_to_string(root.join(".claude").join("agents").join("imc-scout.md")).unwrap();
