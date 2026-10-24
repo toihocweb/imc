@@ -309,7 +309,6 @@ list lives.
 | `imc context <target>` | Resolved context for a file: outline, dependencies, endpoints, tests. |
 | `imc pack "<query>"` | Retrieval + graph + memories packed within a token budget (`--budget`). |
 | `imc map` / `repomap` | Generate architectural repository skeleton within token budget (`--tokens`). |
-| `imc watch` | Event-driven watcher for git branch/commit and dirty working tree changes. |
 | `imc memory-…` | Durable project memory: `memory-add`, `memory-search`, `memory-list`, `memory-delete`. |
 | `imc compress` / `retrieve <id>` | Compress text using CCR store; retrieve exact original bytes by handle. |
 | `imc mcp [install]` | MCP server over stdio; `install` writes project `.mcp.json`. |
