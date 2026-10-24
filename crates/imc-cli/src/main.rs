@@ -32,7 +32,7 @@ struct Cli {
     json: bool,
 
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 /// Subcommands of `imc capture`. Bare `imc capture` shows the status.
@@ -322,9 +322,6 @@ enum Command {
         #[command(subcommand)]
         action: Option<McpAction>,
     },
-    /// Start the proxy and the dashboard — what a bare `imc` does.
-    #[command(name = "start")]
-    Start,
     /// Install this build somewhere on PATH (plus the dashboard app).
     #[command(name = "install")]
     Install {
@@ -754,11 +751,6 @@ fn main() -> Result<()> {
 
     // Allow `imc <path>` as a shortcut for `imc index <path>`.
     let mut args: Vec<String> = std::env::args().collect();
-    // A bare `imc` starts the proxy and the dashboard: one command to get
-    // the whole setup running.
-    if args.len() == 1 {
-        args.push("start".to_string());
-    }
     if args.len() == 2 {
         let p = &args[1];
         if !p.starts_with('-') && std::path::Path::new(p).exists() {
@@ -772,18 +764,58 @@ fn main() -> Result<()> {
     let cli = Cli::parse_from(&args);
     let cfg = Config::default();
     cfg.ensure_dirs()?;
-    let use_active = !matches!(
-        &cli.command,
-        Command::Index { .. }
-            | Command::Proxy { .. }
-            | Command::Stop
-            | Command::Claude { .. }
-            | Command::Setup { .. }
-    );
+    let use_active = match &cli.command {
+        None => false,
+        Some(cmd) => !matches!(
+            cmd,
+            Command::Index { .. }
+                | Command::Proxy { .. }
+                | Command::Stop
+                | Command::Claude { .. }
+                | Command::Setup { .. }
+        ),
+    };
     let notify_active = use_active;
     let root = resolve_root_with(&cfg, cli.root.clone(), use_active, notify_active)?;
 
-    match &cli.command {
+    let Some(cmd) = &cli.command else {
+        // Bare `imc`: the whole setup in one command — the proxy that
+        // Claude Code talks to, and the dashboard to drive everything else.
+        let proxy_port: u16 = 12345;
+        let web_port: u16 = 4789;
+        if cli.json {
+            let proxy = match imc_cli::claude::start_proxy(&cfg, proxy_port) {
+                Ok(v) => v,
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            };
+            let running = imc_cli::claude::proxy_status(&cfg)
+                .map(|s| s.get("running").and_then(|v| v.as_bool()).unwrap_or(false))
+                .unwrap_or(false);
+            println!(
+                "{}",
+                serde_json::json!({
+                    "proxy": {"port": proxy_port, "running": running, "state": proxy},
+                    "dashboard": {"port": web_port, "url": format!("http://localhost:{web_port}")},
+                })
+            );
+        } else {
+            match imc_cli::claude::start_proxy(&cfg, proxy_port) {
+                Ok(v) => {
+                    let pid = v.get("pid").and_then(|p| p.as_i64()).unwrap_or(0);
+                    println!("proxy    → http://127.0.0.1:{proxy_port}  (pid {pid})");
+                }
+                Err(e) => {
+                    println!("proxy    → not started: {e}");
+                    println!("           the proxy runs as `imc proxy serve` — nothing else to build");
+                }
+            }
+            wire_claude_to_proxy(&cfg, &root, proxy_port);
+            imc_cli::web::run(web_port, false, None)?;
+        }
+        return Ok(());
+    };
+
+    match cmd {
         Command::Stop => {
             let proxy_stopped = imc_cli::claude::stop_proxy(&cfg)?;
             let dashboard_stopped = imc_cli::web::stop_dashboard();
@@ -1854,41 +1886,6 @@ saved to {}", st::path().display());
                 println!("MCP client will discover: search, ask, trace, read, context, memory_search, pack");
             }
         },
-        Command::Start => {
-            // Bare `imc`: the whole setup in one command — the proxy that
-            // Claude Code talks to, and the dashboard to drive everything else.
-            let proxy_port: u16 = 12345;
-            let web_port: u16 = 4789;
-            if cli.json {
-                let proxy = match imc_cli::claude::start_proxy(&cfg, proxy_port) {
-                    Ok(v) => v,
-                    Err(e) => serde_json::json!({"error": e.to_string()}),
-                };
-                let running = imc_cli::claude::proxy_status(&cfg)
-                    .map(|s| s.get("running").and_then(|v| v.as_bool()).unwrap_or(false))
-                    .unwrap_or(false);
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "proxy": {"port": proxy_port, "running": running, "state": proxy},
-                        "dashboard": {"port": web_port, "url": format!("http://localhost:{web_port}")},
-                    })
-                );
-            } else {
-                match imc_cli::claude::start_proxy(&cfg, proxy_port) {
-                    Ok(v) => {
-                        let pid = v.get("pid").and_then(|p| p.as_i64()).unwrap_or(0);
-                        println!("proxy    → http://127.0.0.1:{proxy_port}  (pid {pid})");
-                    }
-                    Err(e) => {
-                        println!("proxy    → not started: {e}");
-                        println!("           the proxy runs as `imc proxy serve` — nothing else to build");
-                    }
-                }
-                wire_claude_to_proxy(&cfg, &root, proxy_port);
-                imc_cli::web::run(web_port, false, None)?;
-            }
-        }
         Command::Install {
             bin_dir,
             no_dashboard,
@@ -2045,7 +2042,7 @@ saved to {}", st::path().display());
     if !cli.json
         && !matches!(
             &cli.command,
-            Command::Update { .. } | Command::Proxy { .. }
+            Some(Command::Update { .. }) | Some(Command::Proxy { .. })
         )
     {
         imc_cli::update::maybe_notify();
