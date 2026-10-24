@@ -312,7 +312,7 @@ list lives.
 | `imc memory-…` | Durable project memory: `memory-add`, `memory-search`, `memory-list`, `memory-delete`. |
 | `imc compress` / `retrieve <id>` | Compress text using CCR store; retrieve exact original bytes by handle. |
 | `imc mcp [install]` | MCP server over stdio; `install` writes project `.mcp.json`. |
-| `imc stop` | Stop running background services (proxy on port 12345 and dashboard on port 4789). |
+| `imc` / `imc stop` | Start or stop background services (proxy on port 12345 and dashboard on port 4789). |
 | `imc web` | Open web dashboard in browser. |
 | `imc list` | List registered/indexed projects. |
 | `imc config …` | Interactive config (`config setup`), list masked keys, or test endpoint. |
