@@ -25,7 +25,7 @@ cd /root/verify/gakkaweo
 /target/release/imc -C . trace "GET /auth/..."
 /target/release/imc -C . search "<câu hỏi>"        # -r/--raw lấy hits, --json, không truyền gọi LLM
 /target/release/imc -C . memory-add … -p <file>
-/target/release/imc -C . claude wire
+/target/release/imc setup                          # Index và cấu hình proxy/rule cho Claude Code
 ```
 
 ## Kết quả từng lệnh (trên repo thật)
@@ -43,7 +43,7 @@ cd /root/verify/gakkaweo
 | `search` (agentic/LLM) | PASS (với config model) | Cần `llm.model=claude-haiku-4.5` trong config tạm; trả lời có trích dẫn, `−r/--json` không gọi LLM, câu rác không gọi LLM, LLM kết nối lỗi degrade về raw hits (rc=0), LLM trả lỗi rc=1 |
 | `graph` | PASS | `graph getCurrentUser` in definición + callees/callers; symbol không tồn tại bây giờ ra **rc=1** (đã sửa) |
 | `memory-add/-list/-search/-delete` | PASS | Lưu/truy vấn memory theo file, có điểm số |
-| `claude wire` | PASS | Viết `.claude/settings.local.json` + `CLAUDE.md` vào repo |
+| `setup` | PASS | Viết `.claude/settings.local.json` + `imc-rule.md` vào repo |
 
 ## Bug tìm được và đã sửa (trong session này)
 
