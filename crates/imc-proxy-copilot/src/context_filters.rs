@@ -196,17 +196,22 @@ pub fn is_file_read(command: &str, tool_name: &str) -> bool {
             | "get_file_contents"
             | "read_document"
             | "fetch_file"
+            | "retrieve"
+            | "imc_retrieve"
     );
 
     if is_read_tool {
         return true;
     }
 
-    if is_document_or_source_extension(command) {
+    let cmd_lower = command.trim().to_lowercase();
+    if cmd_lower.contains("retrieve") {
         return true;
     }
 
-    let cmd_lower = command.trim().to_lowercase();
+    if is_document_or_source_extension(command) {
+        return true;
+    }
     for part in cmd_lower.split([';', '&', '|']) {
         let p = part.trim();
         if p.is_empty() {

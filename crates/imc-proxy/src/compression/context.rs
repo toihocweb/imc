@@ -122,6 +122,8 @@ pub fn is_bypass_tool_name(name: &str) -> bool {
         "memory",
         "memory_search",
         "imc_memory",
+        "retrieve",
+        "imc_retrieve",
         "web_search",
         "search_web",
         "brave_search",
@@ -141,7 +143,7 @@ pub fn is_bypass_tool_name(name: &str) -> bool {
     for part in parts {
         if matches!(
             part,
-            "search" | "grep" | "ripgrep" | "rg" | "glob" | "find" | "trace" | "memory" | "ls"
+            "search" | "grep" | "ripgrep" | "rg" | "glob" | "find" | "trace" | "memory" | "ls" | "retrieve"
         ) {
             return true;
         }
@@ -184,9 +186,12 @@ pub fn is_bypass_command(cmd: &str) -> bool {
                 || p.starts_with("imc memory-search")
                 || p.starts_with("imc context")
                 || p.starts_with("imc ask")
+                || p.starts_with("imc retrieve")
+                || p.starts_with("retrieve")
                 || p.contains("/imc search")
                 || p.contains("/imc trace")
                 || p.contains("/imc memory")
+                || p.contains("/imc retrieve")
             {
                 return true;
             }
@@ -350,6 +355,17 @@ pub fn should_bypass_compression(
     if let Some((name, cmd_opt)) = tool_meta {
         let name_lower = name.trim().to_lowercase();
 
+        // 0. Explicit retrieve operations must NEVER be compressed
+        if name_lower.contains("retrieve") {
+            return true;
+        }
+        if let Some(cmd) = cmd_opt {
+            let cmd_lower = cmd.trim().to_lowercase();
+            if cmd_lower.contains("retrieve") {
+                return true;
+            }
+        }
+
         // 1. Tool name indicates search, discovery, navigation, or retrieval
         if is_bypass_tool_name(&name_lower) {
             return true;
@@ -404,14 +420,14 @@ pub fn compress_tool_results(
             if let StringOrBlocks::Blocks(blocks) = &assistant.content {
                 for b in blocks {
                     if let AnthropicAssistantContentBlock::ToolUse(tu) = b {
-                        if tu.name.contains("retrieve") {
+                        let cmd_or_query = extract_command_or_query(&tu.input);
+                        if tu.name.to_lowercase().contains("retrieve") {
                             retrieve_tool_ids.insert(tu.id.clone());
-                        } else if let Some(cmd) = tu.input.get("command").and_then(|v| v.as_str()) {
-                            if cmd.contains("retrieve") {
+                        } else if let Some(ref cmd) = cmd_or_query {
+                            if cmd.to_lowercase().contains("retrieve") {
                                 retrieve_tool_ids.insert(tu.id.clone());
                             }
                         }
-                        let cmd_or_query = extract_command_or_query(&tu.input);
                         tool_uses.insert(
                             tu.id.clone(),
                             (tu.name.clone(), cmd_or_query),
@@ -485,6 +501,19 @@ fn maybe_microcompact(
     store: &mut CcrStore,
     report: &mut CompressionReport,
 ) -> bool {
+    // Explicit retrieve results must never be microcompacted
+    if let Some((name, cmd_opt)) = tool_meta {
+        let name_lower = name.trim().to_lowercase();
+        if name_lower.contains("retrieve") {
+            return false;
+        }
+        if let Some(cmd) = cmd_opt {
+            if cmd.to_lowercase().contains("retrieve") {
+                return false;
+            }
+        }
+    }
+
     // Only microcompact substantive older outputs (> 1,000 chars)
     if text.len() < 1000 {
         return false;
@@ -987,5 +1016,56 @@ mod tests {
         let AnthropicUserContentBlock::ToolResult(r2) = &b2[0] else { panic!() };
         let StringOrBlocks::Text(t2) = &r2.content else { panic!() };
         assert_eq!(t2, &large_file, "active turn file read must remain 100% verbatim!");
+    }
+
+    #[test]
+    fn retrieve_tool_results_are_never_compressed_or_microcompacted() {
+        let db = tmp_db("retrieve-bypass-test");
+        let raw_original = "BUILD FAILED: compilation error in line 42\n".repeat(80);
+        assert!(raw_original.len() > 1500);
+
+        // 1. Calling via bash tool: "imc retrieve 8fbc1234"
+        let mut in0 = BTreeMap::new();
+        in0.insert("command".to_string(), Value::String("imc retrieve 8fbc1234".to_string()));
+        let asst0 = assistant_with_tool_use("tool_ret1", "bash", in0);
+        let mut tr0 = tool_result(StringOrBlocks::Text(raw_original.clone()));
+        tr0.tool_use_id = "tool_ret1".to_string();
+        let user0 = user_with_tool_result(tr0);
+
+        // Turn 1: user follow-up
+        let asst1 = AnthropicInputMessage::Assistant(imc_proxy_types::types::anthropic::AnthropicAssistantMessage {
+            role: "assistant".to_string(),
+            content: StringOrBlocks::Text("Inspected retrieved log".to_string()),
+        });
+        let user1 = AnthropicInputMessage::User(imc_proxy_types::types::anthropic::AnthropicUserMessage {
+            role: "user".to_string(),
+            content: StringOrBlocks::Text("Continue".to_string()),
+        });
+
+        // Turn 2: another retrieve via MCP / direct retrieve tool
+        let mut in2 = BTreeMap::new();
+        in2.insert("id".to_string(), Value::String("deadbeef".to_string()));
+        let asst2 = assistant_with_tool_use("tool_ret2", "imc_retrieve", in2);
+        let mut tr2 = tool_result(StringOrBlocks::Text(raw_original.clone()));
+        tr2.tool_use_id = "tool_ret2".to_string();
+        let user2 = user_with_tool_result(tr2);
+
+        let mut msgs = vec![asst0, user0, asst1, user1, asst2, user2];
+        let report = compress_tool_results(&mut msgs, &db);
+
+        assert_eq!(report.compressed, 0, "imc retrieve operations must NEVER be compressed or microcompacted");
+
+        // Content in both turns must remain completely verbatim
+        let AnthropicInputMessage::User(u0) = &msgs[1] else { panic!() };
+        let StringOrBlocks::Blocks(b0) = &u0.content else { panic!() };
+        let AnthropicUserContentBlock::ToolResult(r0) = &b0[0] else { panic!() };
+        let StringOrBlocks::Text(t0) = &r0.content else { panic!() };
+        assert_eq!(t0, &raw_original);
+
+        let AnthropicInputMessage::User(u2) = &msgs[5] else { panic!() };
+        let StringOrBlocks::Blocks(b2) = &u2.content else { panic!() };
+        let AnthropicUserContentBlock::ToolResult(r2) = &b2[0] else { panic!() };
+        let StringOrBlocks::Text(t2) = &r2.content else { panic!() };
+        assert_eq!(t2, &raw_original);
     }
 }
