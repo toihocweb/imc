@@ -109,6 +109,15 @@ When tool output is compressed with `[imc: ... full output is id <id>]`, run thi
 6. **Empty means "not in the index"**, not "does not exist". Fall back to Read/Grep.
 7. **Use `-C <project-root>`** (or `-p <id>`) when the cwd may not be the project root.
 8. Tool results are filtered before they reach you; large tool outputs carry retrieval handles (`imc retrieve <id>`).
+
+## Autonomous Subagent Harness
+
+For any non-trivial coding task or bug fix, delegate work across the specialized subagents to isolate context and prevent conversation bloat:
+
+1. **Locate & Investigate**: Proactively delegate to `imc-scout` when you need to search symbols, inspect call graphs, locate bug sources, or analyze dependencies. Scout has read-only tools and runs imc CLI without modifying files.
+2. **Plan & Architecture**: Proactively delegate to `imc-planner` when you need an implementation plan, architectural decision ledger, or test criteria. Planner is strictly read-only and produces `plan.md`.
+3. **Implement**: Proactively delegate to `imc-builder` to write the code and tests according to the plan. Builder implements changes following Lazy Senior principles.
+4. **Verify**: Proactively delegate to `imc-verifier` after code changes to run tests, check compiler diagnostics, and verify workspace cleanliness without modifying files.
 "#
 }
 
@@ -120,6 +129,151 @@ pub fn write_imc_rule(project_root: &Path) -> Result<PathBuf> {
     let path = rules_dir.join("imc-rule.md");
     std::fs::write(&path, imc_rule_md().to_string()).with_context(|| format!("write {}", path.display()))?;
     Ok(path)
+}
+
+pub const SCOUT_AGENT_MD: &str = r#"---
+name: imc-scout
+description: Proactively delegate to this agent to investigate codebase, locate bug root causes, inspect structure, and trace call graphs before modifying code. Read-only.
+tools: Read, Grep, Glob, Bash
+disallowedTools: Edit, Write
+color: cyan
+---
+
+You are the IMC Scout agent. Your sole purpose is rapid, precise codebase investigation and fault localization without polluting the main conversation context.
+
+## Core Rules
+1. Read-only: Never attempt to edit or create files.
+2. Code intelligence first: Always prefer `imc` CLI commands over raw grep/find:
+   - `imc search "<query>" --raw` for semantic & lexical matches.
+   - `imc trace <symbol> --callers --depth 3` for blast radius and dependency tracing.
+   - `imc read <file> --symbols` for structure outline.
+   - `imc read <file> --method <name>` to inspect targeted functions.
+   - `imc pack "<query>"` for a comprehensive task bundle under a token budget.
+3. Be ultra-terse: Report file paths, exact line numbers, and callers/callees. No boilerplate text.
+"#;
+
+pub const PLANNER_AGENT_MD: &str = r#"---
+name: imc-planner
+description: Proactively delegate to this agent to design architecture, produce minimal-diff implementation plans (plan.md), and define verification criteria. Read-only.
+tools: Read, Grep, Glob
+disallowedTools: Edit, Write, Bash
+color: purple
+---
+
+You are the IMC Planner agent. Your role is designing minimal-diff, high-precision technical plans following the plan-ledger principles.
+
+## Core Rules
+1. Read-only: Do not write code, edit files, or execute shell commands.
+2. Structure the plan around:
+   - **Decisions Ledger (D1..Dn)**: Concrete choices made and alternatives rejected.
+   - **Invariants**: What existing behavior must NOT break.
+   - **Proposed Diff Summary**: Exact files to touch and minimal changes needed.
+   - **Verification Command**: The decisive, non-flaky test/build command to run.
+3. Apply Lazy Senior philosophy: Standard library first, shortest diff wins.
+"#;
+
+pub const BUILDER_AGENT_MD: &str = r#"---
+name: imc-builder
+description: Proactively delegate to this agent to implement approved technical plans and write clean, minimal code and tests.
+tools: Read, Edit, Write, Bash, Grep, Glob
+color: green
+---
+
+You are the IMC Builder agent. Your role is implementing approved technical plans cleanly and minimally.
+
+## Core Rules
+1. Implement strictly according to the plan. Never perform unrequested refactoring.
+2. Lazy Senior philosophy:
+   - Does this need to exist? (YAGNI).
+   - Standard library and native platform features first.
+   - Shortest working diff wins.
+   - Boring code over clever code.
+3. Test-driven verification: Leave behind at least one runnable test verifying the fix/feature.
+4. Keep edits focused and concise.
+"#;
+
+pub const VERIFIER_AGENT_MD: &str = r#"---
+name: imc-verifier
+description: Proactively delegate to this agent after code changes to execute test suites, inspect blast radius regressions, and verify workspace cleanliness. Read-only.
+tools: Read, Grep, Glob, Bash
+disallowedTools: Edit, Write
+color: orange
+---
+
+You are the IMC Verifier agent. Your role is executing verification suites and inspecting modified boundaries.
+
+## Core Rules
+1. Grounded in reality: The deliverable is working execution, not promises or descriptions.
+2. Run test suites, linters, and compiler diagnostics.
+3. Check blast radius with `imc trace <modified_symbol> --callers` to ensure call sites remain valid.
+4. Verify `git status` and `git diff`: Ensure no stray files or leftover temporary artifacts.
+5. Report strictly: what passed, what failed (with exact error trace), and confirmation of clean workspace.
+"#;
+
+/// Write the standard set of 4 full-flow harness agents to `.claude/agents/`
+/// and register `.claude/agents/` in `.git/info/exclude` to preserve local hygiene.
+pub fn write_imc_agents(project_root: &Path) -> Result<Vec<PathBuf>> {
+    let agents_dir = project_root.join(".claude").join("agents");
+    std::fs::create_dir_all(&agents_dir)
+        .with_context(|| format!("create {}", agents_dir.display()))?;
+
+    let agents = [
+        ("imc-scout.md", SCOUT_AGENT_MD),
+        ("imc-planner.md", PLANNER_AGENT_MD),
+        ("imc-builder.md", BUILDER_AGENT_MD),
+        ("imc-verifier.md", VERIFIER_AGENT_MD),
+    ];
+
+    let mut written = Vec::new();
+    for (filename, content) in agents {
+        let path = agents_dir.join(filename);
+        std::fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
+        written.push(path);
+    }
+
+    // Exclude .claude/agents/ from git tracking locally via .git/info/exclude
+    let _ = ensure_git_exclude(project_root, ".claude/agents/");
+
+    Ok(written)
+}
+
+/// Ensure an entry exists in `.git/info/exclude` without duplicating lines.
+pub fn ensure_git_exclude(project_root: &Path, pattern: &str) -> Result<()> {
+    let git_path = project_root.join(".git");
+    let info_dir = if git_path.is_dir() {
+        Some(git_path.join("info"))
+    } else if git_path.is_file() {
+        if let Ok(content) = std::fs::read_to_string(&git_path) {
+            if let Some(gitdir) = content.trim().strip_prefix("gitdir:") {
+                let p = PathBuf::from(gitdir.trim());
+                let target = if p.is_absolute() { p } else { project_root.join(p) };
+                Some(target.join("info"))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(dir) = info_dir {
+        std::fs::create_dir_all(&dir)?;
+        let exclude_path = dir.join("exclude");
+        let content = std::fs::read_to_string(&exclude_path).unwrap_or_default();
+        if !content.lines().any(|line| line.trim() == pattern.trim()) {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&exclude_path)?;
+            if !content.is_empty() && !content.ends_with('\n') {
+                writeln!(file)?;
+            }
+            writeln!(file, "{pattern}")?;
+        }
+    }
+    Ok(())
 }
 
 /// Write `.claude/settings.local.json` so Claude Code talks to our proxy.
@@ -459,6 +613,8 @@ pub fn setup_and_start(
     log.push(format!("wrote {}", settings.display()));
     let rule = write_imc_rule(root)?;
     log.push(format!("wrote {}", rule.display()));
+    let agents = write_imc_agents(root)?;
+    log.push(format!("wrote {} harness subagents to .claude/agents/", agents.len()));
     // An older setup wrote a block into CLAUDE.md. That block is a stale
     // second copy of the rule; leaving it there means the agent reads the
     // old instructions.
@@ -530,6 +686,7 @@ pub fn run_claude_bin(cfg: &Config, root: &Path, args: &[String]) -> Result<()> 
     // too — wiring is cheap, and a stale rule is worse than a fresh one.
     let _ = write_claude_settings(root, 12345)?;
     let _ = write_imc_rule(root)?;
+    let _ = write_imc_agents(root)?;
     let _ = remove_legacy_claude_md_block(root)?;
 
     let exe = which_claude_bin()?;
@@ -622,4 +779,52 @@ pub fn chrono_now() -> u64 {
 pub fn print_stderr(msg: &str) {
     let mut err = std::io::stderr();
     let _ = writeln!(err, "{msg}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_imc_agents_creates_all_subagents_and_excludes_git() {
+        let root = std::env::temp_dir().join(format!("imc-agents-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Create dummy .git directory
+        let git_dir = root.join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+
+        let agents = write_imc_agents(&root).unwrap();
+        assert_eq!(agents.len(), 4);
+
+        for name in ["imc-scout.md", "imc-planner.md", "imc-builder.md", "imc-verifier.md"] {
+            let p = root.join(".claude").join("agents").join(name);
+            assert!(p.exists(), "missing agent file: {name}");
+            let text = std::fs::read_to_string(&p).unwrap();
+            assert!(text.starts_with("---\nname: "), "must contain YAML frontmatter: {name}");
+        }
+
+        let exclude = git_dir.join("info").join("exclude");
+        assert!(exclude.exists());
+        let text = std::fs::read_to_string(&exclude).unwrap();
+        assert!(text.contains(".claude/agents/"));
+
+        // Running again is idempotent and doesn't duplicate lines in exclude
+        let _ = write_imc_agents(&root).unwrap();
+        let text2 = std::fs::read_to_string(&exclude).unwrap();
+        assert_eq!(text2.matches(".claude/agents/").count(), 1);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn imc_rule_md_mentions_subagent_harness() {
+        let rule = imc_rule_md();
+        assert!(rule.contains("Autonomous Subagent Harness"));
+        assert!(rule.contains("imc-scout"));
+        assert!(rule.contains("imc-planner"));
+        assert!(rule.contains("imc-builder"));
+        assert!(rule.contains("imc-verifier"));
+    }
 }
