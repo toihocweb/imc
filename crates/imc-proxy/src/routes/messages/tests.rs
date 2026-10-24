@@ -64,6 +64,28 @@ fn normalize_system_keeps_existing_blocks() {
     assert_eq!(v.len(), 2);
 }
 
+#[test]
+fn inject_terse_directive_appends_block_once() {
+    let mut p = payload(vec![]);
+    p.system = Some(StringOrBlocks::Blocks(vec![
+        AnthropicTextBlock { r#type: "text".into(), text: "You are Claude Code".into(), cache_control: None },
+    ]));
+    inject_terse_directive(&mut p);
+    let Some(StringOrBlocks::Blocks(v)) = &p.system else {
+        panic!("expected blocks");
+    };
+    assert_eq!(v.len(), 2);
+    assert!(v[1].text.contains("<response-style>"));
+    assert!(v[1].text.contains("Ultra-terse communication protocol"));
+
+    // Running again does not duplicate the directive
+    inject_terse_directive(&mut p);
+    let Some(StringOrBlocks::Blocks(v2)) = &p.system else {
+        panic!("expected blocks");
+    };
+    assert_eq!(v2.len(), 2);
+}
+
 // ── system_reminder assembly across the whole request ────────────────────────
 
 #[test]

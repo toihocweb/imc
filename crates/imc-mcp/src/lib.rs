@@ -16,14 +16,14 @@ use std::process::{Command, Stdio};
 /// that much. The cross-cutting rules live here, not only in
 /// `docs/imc-rule.md`, which an MCP client never reads.
 const INSTRUCTIONS: &str = "\
-imc searches and explains an indexed codebase. Order: search for the chunks, \
-read or context for the file around them, trace for the call graph, pack when \
-you need a whole bundle under a token budget. Search output is evidence, not \
-proof — check the cited path:line before trusting it. A miss means the index \
-does not hold it, not that the code does not exist. Always read the top 5 \
-hits, never stop at hit 1. The index holds one project; the root is pinned by \
-the client. Read-only tools: search, ask, trace, read, context, \
-memory_search, pack.";
+imc searches and explains an indexed codebase. Order: map for the architectural \
+skeleton, search for the chunks, read or context for the file around them, \
+trace for the call graph, pack when you need a whole bundle under a token \
+budget. Search output is evidence, not proof — check the cited path:line \
+before trusting it. A miss means the index does not hold it, not that the code \
+does not exist. Always read the top 5 hits, never stop at hit 1. The index \
+holds one project; the root is pinned by the client. Read-only tools: map, \
+search, ask, trace, read, context, memory_search, pack.";
 
 /// Annotations for a read-only tool: the client may auto-approve it and retry
 /// it without asking the user.
@@ -131,6 +131,16 @@ pub fn tools() -> Vec<Value> {
                 "required": ["query"]
             }
         }),
+        json!({
+            "name": "map",
+            "description": "Generate a compact architectural repository map within a token budget.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tokens": {"type": "number", "description": "Token budget for the repository map (default 1024)"}
+                }
+            }
+        }),
     ];
     // Every tool here only reads the index.
     for t in list.iter_mut() {
@@ -213,7 +223,12 @@ fn build_argv(name: &str, a: &Value) -> Result<Vec<String>> {
             v.push("pack".into());
             v.push(req_str(a, "query")?);
             v.push("--json".into());
-            push_num(&mut v, a, "budget", "-b");
+            push_num(&mut v, a, "budget", "--budget");
+        }
+        "map" => {
+            v.push("map".into());
+            v.push("--json".into());
+            push_num(&mut v, a, "tokens", "-t");
         }
         other => bail!("Unknown tool: {other}"),
     }
@@ -480,9 +495,21 @@ mod tests {
     #[test]
     fn tools_cover_the_core_verbs() {
         let n = names();
-        for want in ["search", "ask", "trace", "read", "context", "memory_search", "pack"] {
+        for want in ["map", "search", "ask", "trace", "read", "context", "memory_search", "pack"] {
             assert!(n.contains(&want.to_string()), "missing tool {want}");
         }
+    }
+
+    #[test]
+    fn pack_argv_handles_budget() {
+        let argv = build_argv("pack", &json!({"query": "auth", "budget": 4000})).unwrap();
+        assert_eq!(argv, vec!["pack", "auth", "--json", "--budget", "4000"]);
+    }
+
+    #[test]
+    fn map_argv_handles_tokens() {
+        let argv = build_argv("map", &json!({"tokens": 2048})).unwrap();
+        assert_eq!(argv, vec!["map", "--json", "-t", "2048"]);
     }
 
     #[test]

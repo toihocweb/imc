@@ -234,6 +234,62 @@ pub fn normalize_system(payload: &mut AnthropicMessagesPayload) {
     }
 }
 
+pub const TERSE_RESPONSE_DIRECTIVE: &str = "\
+<response-style>
+Ultra-terse communication protocol:
+1. Answer first. Pattern: [thing] [action] [reason]. [next step].
+2. Kill ceremony. No greeting, hedging, pleasantries, recap, or closer. No \"Sure!\", \"I'd be happy to\", \"Let me\", \"Hope this helps\", \"basically\", \"actually\".
+3. One idea per sentence (< 20 words). Active voice. Strip unnecessary conjunctions.
+4. Payload verbatim. Code blocks, commands, file paths, numbers, API names, error traces exact.
+5. Tool runs: no conversational text between routine calls. One line before multi-step run, one line result at end.
+6. User's language: Compress style, preserve language. Technical identifiers verbatim.
+7. Break-list (write normal full sentences only for): security warnings, irreversible actions, step order ambiguity, user confusion.
+8. Never perform terse: no \"terse mode on\", no \"me think\", no decorative tables or emoji.
+</response-style>";
+
+/// Injects the terse response directive into payload.system as a distinct block.
+/// Placing it at the end of system blocks guarantees it sits right above messages,
+/// and receives an ephemeral cache breakpoint via `apply_system_cache_control`.
+pub fn inject_terse_directive(payload: &mut AnthropicMessagesPayload) {
+    let has_directive = match &payload.system {
+        Some(StringOrBlocks::Text(s)) => s.contains("<response-style>"),
+        Some(StringOrBlocks::Blocks(blocks)) => blocks.iter().any(|b| b.text.contains("<response-style>")),
+        None => false,
+    };
+    if has_directive {
+        return;
+    }
+    match &mut payload.system {
+        Some(StringOrBlocks::Blocks(blocks)) => {
+            blocks.push(AnthropicTextBlock {
+                r#type: "text".to_string(),
+                text: TERSE_RESPONSE_DIRECTIVE.to_string(),
+                cache_control: None,
+            });
+        }
+        Some(StringOrBlocks::Text(s)) => {
+            let mut blocks = vec![AnthropicTextBlock {
+                r#type: "text".to_string(),
+                text: std::mem::take(s),
+                cache_control: None,
+            }];
+            blocks.push(AnthropicTextBlock {
+                r#type: "text".to_string(),
+                text: TERSE_RESPONSE_DIRECTIVE.to_string(),
+                cache_control: None,
+            });
+            payload.system = Some(StringOrBlocks::Blocks(blocks));
+        }
+        None => {
+            payload.system = Some(StringOrBlocks::Blocks(vec![AnthropicTextBlock {
+                r#type: "text".to_string(),
+                text: TERSE_RESPONSE_DIRECTIVE.to_string(),
+                cache_control: None,
+            }]));
+        }
+    }
+}
+
 /// Port of the "DYNAMIC PROMPT TEMPLATES OVERRIDE" block: project detection,
 /// then system-reminder template + learned-memory injection.
 pub struct InjectionOutcome {
@@ -429,6 +485,7 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
         log.info(&format!("[USER] {}", injection.user_text));
     }
     normalize_system(&mut payload);
+    inject_terse_directive(&mut payload);
 
     // Prompt capture: store the payload exactly as the model will see it
     // (templates + injected memories included). Off unless

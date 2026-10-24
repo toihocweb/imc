@@ -134,7 +134,7 @@ enum Command {
         /// What the agent wants to know or do.
         query: String,
         /// Token budget for the whole bundle.
-        #[arg(long, default_value_t = 6000)]
+        #[arg(long, short = 'b', default_value_t = 6000)]
         budget: usize,
         /// Candidate chunks considered before the budget is applied.
         #[arg(long, default_value_t = 12)]
