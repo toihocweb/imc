@@ -72,6 +72,33 @@ impl CcrStore {
         Ok(id)
     }
 
+    /// Store an original + its compressed form with an explicit deterministic id.
+    pub fn store_with_id(
+        &mut self,
+        id: &str,
+        kind: &str,
+        original: &str,
+        compressed: &str,
+        orig_tokens: i64,
+        comp_tokens: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO ccr_originals
+             (id, kind, original, compressed, orig_tokens, comp_tokens, created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                id,
+                kind,
+                original,
+                compressed,
+                orig_tokens,
+                comp_tokens,
+                SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Retrieve an original by id.
     pub fn get(&self, id: &str) -> Result<Option<String>> {
         let row: Option<String> = self

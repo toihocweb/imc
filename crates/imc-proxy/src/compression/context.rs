@@ -524,30 +524,30 @@ fn maybe_microcompact(
 
     let orig_tokens = text.chars().count() / 4;
     let line_count = text.lines().count();
+    let original_chars = text.len();
     let target = tool_meta
         .and_then(|(_, cmd)| cmd.as_deref())
         .unwrap_or("file");
+    let clean_target = target.trim();
 
-    let placeholder = format!(
-        "[Earlier turn: inspected {} ({} lines, {} chars). Full content cached in CCR store. Retrieve with `imc retrieve {{id}}`]",
-        target, line_count, text.len()
+    let id = imc_core::hash::md5_hex(format!("microcompact:{text}").as_bytes())[..16].to_string();
+
+    let summary = format!(
+        "[Earlier turn: inspected {} ({} lines, {} chars). Full content cached in CCR store. Retrieve with `imc retrieve {}` or POST /v1/retrieve {{\"id\":\"{}\"}}]",
+        clean_target, line_count, original_chars, id, id
     );
-    let comp_tokens = placeholder.chars().count() / 4;
+    let comp_tokens = summary.chars().count() / 4;
 
-    let id = match store.store("microcompact", text, &placeholder, orig_tokens as i64, comp_tokens as i64) {
-        Ok(id) => id,
-        Err(_) => return false,
-    };
+    if store.store_with_id(&id, "microcompact", text, &summary, orig_tokens as i64, comp_tokens as i64).is_err() {
+        return false;
+    }
 
     report.considered += 1;
     report.compressed += 1;
     report.original_tokens += orig_tokens;
     report.compressed_tokens += comp_tokens;
 
-    *text = format!(
-        "[Earlier turn: inspected {} ({} lines, {} chars). Full content cached in CCR store. Retrieve with `imc retrieve {}` or POST /v1/retrieve {{\"id\":\"{}\"}}]",
-        target, line_count, text.len(), id, id
-    );
+    *text = summary;
     true
 }
 
