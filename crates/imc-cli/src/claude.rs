@@ -136,6 +136,8 @@ name: imc-scout
 description: Proactively delegate to this agent to investigate codebase, locate bug root causes, inspect structure, and trace call graphs before modifying code. Read-only.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write
+maxTurns: 15
+omitClaudeMd: true
 color: cyan
 ---
 
@@ -150,6 +152,12 @@ You are the IMC Scout agent. Your sole purpose is rapid, precise codebase invest
    - `imc read <file> --method <name>` to inspect targeted functions.
    - `imc pack "<query>"` for a comprehensive task bundle under a token budget.
 3. Be ultra-terse: Report file paths, exact line numbers, and callers/callees. No boilerplate text.
+
+## Output Contract
+Return ONLY this structured summary to the lead agent:
+- **Target Files & Lines**: `path/to/file:L10-L25`
+- **Root Cause / Mechanism**: Exact technical finding
+- **Blast Radius**: Callers and dependencies from `imc trace`
 "#;
 
 pub const PLANNER_AGENT_MD: &str = r#"---
@@ -157,6 +165,8 @@ name: imc-planner
 description: Proactively delegate to this agent to design architecture, produce minimal-diff implementation plans (plan.md), and define verification criteria. Read-only.
 tools: Read, Grep, Glob
 disallowedTools: Edit, Write, Bash
+maxTurns: 8
+omitClaudeMd: true
 color: purple
 ---
 
@@ -170,12 +180,19 @@ You are the IMC Planner agent. Your role is designing minimal-diff, high-precisi
    - **Proposed Diff Summary**: Exact files to touch and minimal changes needed.
    - **Verification Command**: The decisive, non-flaky test/build command to run.
 3. Apply Lazy Senior philosophy: Standard library first, shortest diff wins.
+
+## Output Contract
+Produce a clean `plan.md` in the repository root and return ONLY:
+- **Summary**: 1-line objective
+- **Key Decisions**: D1..Dn highlights
+- **Verification Command**: Exact command to test
 "#;
 
 pub const BUILDER_AGENT_MD: &str = r#"---
 name: imc-builder
 description: Proactively delegate to this agent to implement approved technical plans and write clean, minimal code and tests.
 tools: Read, Edit, Write, Bash, Grep, Glob
+maxTurns: 25
 color: green
 ---
 
@@ -190,6 +207,12 @@ You are the IMC Builder agent. Your role is implementing approved technical plan
    - Boring code over clever code.
 3. Test-driven verification: Leave behind at least one runnable test verifying the fix/feature.
 4. Keep edits focused and concise.
+
+## Output Contract
+Return ONLY:
+- **Files Modified**: Exact paths touched
+- **Tests Added/Updated**: Test cases verifying the change
+- **Ready for Verifier**: Yes/No
 "#;
 
 pub const VERIFIER_AGENT_MD: &str = r#"---
@@ -197,6 +220,7 @@ name: imc-verifier
 description: Proactively delegate to this agent after code changes to execute test suites, inspect blast radius regressions, and verify workspace cleanliness. Read-only.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write
+maxTurns: 10
 color: orange
 ---
 
@@ -208,6 +232,12 @@ You are the IMC Verifier agent. Your role is executing verification suites and i
 3. Check blast radius with `imc trace <modified_symbol> --callers` to ensure call sites remain valid.
 4. Verify `git status` and `git diff`: Ensure no stray files or leftover temporary artifacts.
 5. Report strictly: what passed, what failed (with exact error trace), and confirmation of clean workspace.
+
+## Output Contract
+Return ONLY:
+- **Command Executed**: Full test/check command
+- **Result**: PASS or FAIL (with shortest decisive error trace if fail)
+- **Workspace Status**: CLEAN or DIRTY (any stray/untracked files)
 "#;
 
 /// Write the standard set of 4 full-flow harness agents to `.claude/agents/`
@@ -803,7 +833,15 @@ mod tests {
             assert!(p.exists(), "missing agent file: {name}");
             let text = std::fs::read_to_string(&p).unwrap();
             assert!(text.starts_with("---\nname: "), "must contain YAML frontmatter: {name}");
+            assert!(text.contains("maxTurns: "), "must specify maxTurns: {name}");
+            assert!(text.contains("## Output Contract"), "must define output contract: {name}");
         }
+
+        let scout_text = std::fs::read_to_string(root.join(".claude").join("agents").join("imc-scout.md")).unwrap();
+        assert!(scout_text.contains("omitClaudeMd: true"));
+
+        let planner_text = std::fs::read_to_string(root.join(".claude").join("agents").join("imc-planner.md")).unwrap();
+        assert!(planner_text.contains("omitClaudeMd: true"));
 
         let exclude = git_dir.join("info").join("exclude");
         assert!(exclude.exists());
