@@ -232,7 +232,7 @@ pub fn serve(port: u16) -> Result<()> {
             // must open the same file, or a handle written during compression
             // cannot be resolved afterwards.
             let ccr_db = crate::compression::context::ccr_db_path();
-            let app = app(ccr_db);
+            let app = app(ccr_db.clone());
 
             // Also serve on web dashboard default port (4789) if available and distinct
             let web_port: u16 = 4789;
@@ -261,6 +261,23 @@ pub fn serve(port: u16) -> Result<()> {
                     None
                 }
             };
+
+            // Periodic background cleanup of CCR records older than 7 days
+            let ccr_db_cleanup = ccr_db.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
+                loop {
+                    interval.tick().await;
+                    if let Ok(mut store) = crate::compression::ccr_store::CcrStore::open(&ccr_db_cleanup) {
+                        let cutoff = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64
+                            - 7 * 86_400;
+                        let _ = store.prune_before(cutoff);
+                    }
+                }
+            });
 
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal())

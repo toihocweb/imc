@@ -431,9 +431,9 @@ enum CcrAction {
     },
     /// Delete everything (the originals are gone, handles stop resolving).
     Clear,
-    /// Drop records older than N days.
+    /// Drop records older than N days (default 7).
     Prune {
-        #[arg(long, default_value_t = 30)]
+        #[arg(long, default_value_t = 7)]
         days: i64,
     },
 }
