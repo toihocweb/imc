@@ -269,12 +269,7 @@ pub fn serve(port: u16) -> Result<()> {
                 loop {
                     interval.tick().await;
                     if let Ok(mut store) = crate::compression::ccr_store::CcrStore::open(&ccr_db_cleanup) {
-                        let cutoff = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64
-                            - 7 * 86_400;
-                        let _ = store.prune_before(cutoff);
+                        let _ = store.prune_older_than_days(7);
                     }
                 }
             });

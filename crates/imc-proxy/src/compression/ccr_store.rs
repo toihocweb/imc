@@ -40,16 +40,6 @@ impl CcrStore {
             CREATE INDEX IF NOT EXISTS idx_ccr_created ON ccr_originals(created_at DESC);
             "#,
         )?;
-        // Auto-prune records older than 7 days (7 * 86_400 seconds)
-        let cutoff = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64
-            - 7 * 86_400;
-        let _ = conn.execute(
-            "DELETE FROM ccr_originals WHERE created_at < ?1",
-            params![cutoff],
-        );
         Ok(Self { conn })
     }
 
@@ -170,6 +160,16 @@ impl CcrStore {
         )?;
         Ok(n)
     }
+
+    /// Delete originals older than `days` days.
+    pub fn prune_older_than_days(&mut self, days: i64) -> Result<usize> {
+        let cutoff = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+            - days * 86_400;
+        self.prune_before(cutoff)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -243,9 +243,9 @@ mod tests {
 
         let fresh_id = store.store("test", "fresh content", "comp", 10, 5).unwrap();
 
-        drop(store);
-        let store2 = CcrStore::open(&db).unwrap();
-        assert!(store2.get("old_id").unwrap().is_none(), "records older than 7 days must be pruned");
-        assert!(store2.get(&fresh_id).unwrap().is_some(), "recent records must be preserved");
+        let pruned = store.prune_older_than_days(7).unwrap();
+        assert_eq!(pruned, 1);
+        assert!(store.get("old_id").unwrap().is_none(), "records older than 7 days must be pruned");
+        assert!(store.get(&fresh_id).unwrap().is_some(), "recent records must be preserved");
     }
 }

@@ -1202,12 +1202,7 @@ fn main() -> Result<()> {
                     println!("cleared {n} record(s) from {}", db.display());
                 }
                 CcrAction::Prune { days } => {
-                    let cutoff = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64
-                        - days * 86_400;
-                    let n = store.prune_before(cutoff)?;
+                    let n = store.prune_older_than_days(*days)?;
                     println!("pruned {n} record(s) older than {days} day(s)");
                 }
             }
