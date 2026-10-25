@@ -143,6 +143,10 @@ color: cyan
 
 You are the IMC Scout agent. Your sole purpose is rapid, precise codebase investigation and fault localization without polluting the main conversation context.
 
+## Project Context
+- Primary working directory: {PROJECT_ROOT}
+- Always pass `-C "{PROJECT_ROOT}"` to imc CLI commands.
+
 ## Core Rules
 1. Read-only: Never attempt to edit or create files.
 2. Code intelligence first: Always prefer `imc` CLI commands over raw grep/find:
@@ -173,6 +177,10 @@ color: purple
 
 You are the IMC Planner agent. Your role is designing minimal-diff, high-precision technical plans following the plan-ledger principles.
 
+## Project Context
+- Primary working directory: {PROJECT_ROOT}
+- Target project path: {PROJECT_ROOT}
+
 ## Core Rules
 1. Read-only: Do not write code, edit files, or execute shell commands.
 2. Structure the plan around:
@@ -199,6 +207,10 @@ color: green
 ---
 
 You are the IMC Builder agent. Your role is implementing approved technical plans cleanly and minimally.
+
+## Project Context
+- Primary working directory: {PROJECT_ROOT}
+- Target project path: {PROJECT_ROOT}
 
 ## Core Rules
 1. Implement strictly according to the plan. Never perform unrequested refactoring.
@@ -229,6 +241,10 @@ color: orange
 
 You are the IMC Verifier agent. Your role is executing verification suites and inspecting modified boundaries.
 
+## Project Context
+- Primary working directory: {PROJECT_ROOT}
+- Always pass `-C "{PROJECT_ROOT}"` to imc CLI commands.
+
 ## Core Rules
 1. Grounded in reality: The deliverable is working execution, not promises or descriptions.
 2. Run test suites, linters, and compiler diagnostics.
@@ -251,17 +267,18 @@ pub fn write_imc_agents(project_root: &Path) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(&agents_dir)
         .with_context(|| format!("create {}", agents_dir.display()))?;
 
+    let root_str = project_root.to_string_lossy();
     let agents = [
-        ("imc-scout.md", SCOUT_AGENT_MD),
-        ("imc-planner.md", PLANNER_AGENT_MD),
-        ("imc-builder.md", BUILDER_AGENT_MD),
-        ("imc-verifier.md", VERIFIER_AGENT_MD),
+        ("imc-scout.md", SCOUT_AGENT_MD.replace("{PROJECT_ROOT}", &root_str)),
+        ("imc-planner.md", PLANNER_AGENT_MD.replace("{PROJECT_ROOT}", &root_str)),
+        ("imc-builder.md", BUILDER_AGENT_MD.replace("{PROJECT_ROOT}", &root_str)),
+        ("imc-verifier.md", VERIFIER_AGENT_MD.replace("{PROJECT_ROOT}", &root_str)),
     ];
 
     let mut written = Vec::new();
     for (filename, content) in agents {
         let path = agents_dir.join(filename);
-        std::fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
+        std::fs::write(&path, &content).with_context(|| format!("write {}", path.display()))?;
         written.push(path);
     }
 
@@ -840,6 +857,10 @@ mod tests {
             assert!(text.contains("maxTurns: "), "must specify maxTurns: {name}");
             assert!(text.contains("## Output Contract"), "must define output contract: {name}");
             assert!(text.contains("- **Next Step**:"), "must define next step handoff: {name}");
+            assert!(
+                text.contains(&format!("Primary working directory: {}", root.to_string_lossy())),
+                "must carry project root context: {name}"
+            );
         }
 
         let scout_text = std::fs::read_to_string(root.join(".claude").join("agents").join("imc-scout.md")).unwrap();

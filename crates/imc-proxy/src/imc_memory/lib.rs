@@ -806,6 +806,8 @@ pub enum DetectionSource {
     MessageFallback,
     /// Process CWD (used when the payload says nothing).
     CurrentWorkingDirectory,
+    /// Active project fallback from ~/.indexmycode-rs/active_project.txt.
+    ActiveProject,
 }
 
 /// A detected project binding for the current request.
@@ -1049,6 +1051,17 @@ pub fn detect_project(
                 id: p.id,
                 path: p.path,
                 source: DetectionSource::CurrentWorkingDirectory,
+            });
+        }
+    }
+    let cfg = imc_core::config::Config::default();
+    if let Some(active) = cfg.active_project() {
+        let active_str = strip_trailing_sep(&active.to_string_lossy());
+        if let Some(p) = projects.iter().find(|p| path_matches(&strip_trailing_sep(&p.path), &active_str)) {
+            return Some(DetectedProject {
+                id: p.id.clone(),
+                path: p.path.clone(),
+                source: DetectionSource::ActiveProject,
             });
         }
     }
