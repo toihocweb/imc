@@ -26,8 +26,6 @@ impl EmbedConfig {
             if std::env::var("IMC_EMBED_MODEL").is_err() {
                 c.model = m.clone();
             }
-        } else if std::env::var("IMC_EMBED_MODEL").is_err() {
-            c.model = "none".to_string();
         }
         c
     }
@@ -52,7 +50,7 @@ impl Default for EmbedConfig {
                 .or_else(|_| std::env::var("OPENAI_API_KEY"))
                 .ok(),
             model: std::env::var("IMC_EMBED_MODEL")
-                .unwrap_or_else(|_| "none".to_string()),
+                .unwrap_or_else(|_| "text-embedding-3-small".to_string()),
             fallback_dim: 384,
         }
     }
