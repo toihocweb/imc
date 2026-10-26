@@ -81,12 +81,13 @@ When tool output is compressed with `[imc: ... full output is id <id>]`, run thi
 6. **Empty means "not in the index"**, not "does not exist". Fall back to Read/Grep.
 7. **Use `-C <project-root>`** (or `-p <id>`) when the cwd may not be the project root.
 8. Tool results are filtered before they reach you; large tool outputs carry retrieval handles (`imc retrieve <id>`).
+9. **Run standalone single commands.** Never chain commands with `&&`, `;`, or pipe with `|` (`head`, `grep`). Compound shell commands trigger Auto Mode safety blocks. Use built-in imc flags: `-l <n>` for limits, `--depth <d>` for trace depth, `--budget <b>` for packing, and `-C <dir>` for directory targeting.
 
 ## Autonomous Subagent Harness
 
 For any non-trivial coding task or bug fix, delegate work across the specialized subagents to isolate context and prevent conversation bloat:
 
 1. **Locate & Investigate**: Proactively delegate to `imc-scout` when you need to search symbols, inspect call graphs, locate bug sources, or analyze dependencies. Scout has read-only tools and runs imc CLI without modifying files.
-2. **Plan & Architecture**: Proactively delegate to `imc-planner` when you need an implementation plan, architectural decision ledger, or test criteria. Planner is strictly read-only and produces `plan.md`.
+2. **Plan & Architecture**: Proactively delegate to `imc-planner` when you need an implementation plan, architectural decision ledger, or test criteria. Planner inspects dependencies via imc CLI and writes `plan.md` without modifying source code.
 3. **Implement**: Proactively delegate to `imc-builder` to write the code and tests according to the plan. Builder implements changes following Lazy Senior principles.
 4. **Verify**: Proactively delegate to `imc-verifier` after code changes to run tests, check compiler diagnostics, and verify workspace cleanliness without modifying files.

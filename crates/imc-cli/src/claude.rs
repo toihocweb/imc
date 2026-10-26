@@ -109,13 +109,14 @@ When tool output is compressed with `[imc: ... full output is id <id>]`, run thi
 6. **Empty means "not in the index"**, not "does not exist". Fall back to Read/Grep.
 7. **Use `-C <project-root>`** (or `-p <id>`) when the cwd may not be the project root.
 8. Tool results are filtered before they reach you; large tool outputs carry retrieval handles (`imc retrieve <id>`).
+9. **Run standalone single commands.** Never chain commands with `&&`, `;`, or pipe with `|` (`head`, `grep`). Compound shell commands trigger Auto Mode safety blocks. Use built-in imc flags: `-l <n>` for limits, `--depth <d>` for trace depth, `--budget <b>` for packing, and `-C <dir>` for directory targeting.
 
 ## Autonomous Subagent Harness
 
 For any non-trivial coding task or bug fix, delegate work across the specialized subagents to isolate context and prevent conversation bloat:
 
 1. **Locate & Investigate**: Proactively delegate to `imc-scout` when you need to search symbols, inspect call graphs, locate bug sources, or analyze dependencies. Scout has read-only tools and runs imc CLI without modifying files.
-2. **Plan & Architecture**: Proactively delegate to `imc-planner` when you need an implementation plan, architectural decision ledger, or test criteria. Planner is strictly read-only and produces `plan.md`.
+2. **Plan & Architecture**: Proactively delegate to `imc-planner` when you need an implementation plan, architectural decision ledger, or test criteria. Planner inspects dependencies via imc CLI and writes `plan.md` without modifying source code.
 3. **Implement**: Proactively delegate to `imc-builder` to write the code and tests according to the plan. Builder implements changes following Lazy Senior principles.
 4. **Verify**: Proactively delegate to `imc-verifier` after code changes to run tests, check compiler diagnostics, and verify workspace cleanliness without modifying files.
 "#
@@ -154,7 +155,8 @@ You are the IMC Scout agent. Your sole purpose is rapid, precise codebase invest
    - `imc read <file> --symbols` for structure outline.
    - `imc read <file> --method <name>` to inspect targeted functions.
    - `imc pack "<query>"` for a comprehensive task bundle under a token budget.
-3. Be ultra-terse: Report file paths, exact line numbers, and callers/callees. No boilerplate text.
+3. Standalone commands only: Never pipe or chain commands with `&&`, `|`, or `;`. Always pass `-C "{PROJECT_ROOT}"` and use native flags (`-l`, `--depth`). Compound shell commands trigger Auto Mode safety denials.
+4. Be ultra-terse: Report file paths, exact line numbers, and callers/callees. No boilerplate text.
 
 ## Output Contract
 Return ONLY this structured summary to the lead agent:
@@ -166,10 +168,10 @@ Return ONLY this structured summary to the lead agent:
 
 pub const PLANNER_AGENT_MD: &str = r#"---
 name: imc-planner
-description: Proactively delegate to this agent to design architecture, produce minimal-diff implementation plans (plan.md), and define verification criteria. Read-only.
-tools: Read, Grep, Glob
-disallowedTools: Edit, Write, Bash
-maxTurns: 8
+description: Proactively delegate to this agent to design architecture, produce minimal-diff implementation plans (plan.md), and define verification criteria.
+tools: Read, Write, Bash, Grep, Glob
+disallowedTools: Edit
+maxTurns: 10
 color: purple
 ---
 
@@ -180,16 +182,18 @@ You are the IMC Planner agent. Your role is designing minimal-diff, high-precisi
 - Target project path: {PROJECT_ROOT}
 
 ## Core Rules
-1. Read-only: Do not write code, edit files, or execute shell commands.
-2. Structure the plan around:
+1. Do not modify source code: You may write `plan.md` in the project root, but never edit or overwrite source code files (`Edit` is disallowed).
+2. Code intelligence first: Always run standalone `imc` CLI commands (`imc pack`, `imc search --raw`, `imc trace --callers`) via Bash with `-C "{PROJECT_ROOT}"` to inspect dependencies before planning.
+3. Standalone commands only: Never pipe or chain commands with `&&`, `|`, or `;`. Compound shell commands trigger Auto Mode safety denials.
+4. Structure the plan around:
    - **Decisions Ledger (D1..Dn)**: Concrete choices made and alternatives rejected.
    - **Invariants**: What existing behavior must NOT break.
    - **Proposed Diff Summary**: Exact files to touch and minimal changes needed.
    - **Verification Command**: The decisive, non-flaky test/build command to run.
-3. Apply Lazy Senior philosophy: Standard library first, shortest diff wins.
+5. Apply Lazy Senior philosophy: Standard library first, shortest diff wins.
 
 ## Output Contract
-Produce a clean `plan.md` in the repository root and return ONLY:
+Write `plan.md` in the repository root and return ONLY:
 - **Summary**: 1-line objective
 - **Key Decisions**: D1..Dn highlights
 - **Verification Command**: Exact command to test
@@ -217,8 +221,9 @@ You are the IMC Builder agent. Your role is implementing approved technical plan
    - Standard library and native platform features first.
    - Shortest working diff wins.
    - Boring code over clever code.
-3. Test-driven verification: Leave behind at least one runnable test verifying the fix/feature.
-4. Keep edits focused and concise.
+3. Standalone commands only: Never pipe or chain commands with `&&`, `|`, or `;`. Always pass `-C "{PROJECT_ROOT}"` when running `imc`.
+4. Test-driven verification: Leave behind at least one runnable test verifying the fix/feature.
+5. Keep edits focused and concise.
 
 ## Output Contract
 Return ONLY:
@@ -246,9 +251,10 @@ You are the IMC Verifier agent. Your role is executing verification suites and i
 ## Core Rules
 1. Grounded in reality: The deliverable is working execution, not promises or descriptions.
 2. Run test suites, linters, and compiler diagnostics.
-3. Check blast radius with `imc trace <modified_symbol> --callers` to ensure call sites remain valid.
-4. Verify `git status` and `git diff`: Ensure no stray files or leftover temporary artifacts.
-5. Report strictly: what passed, what failed (with exact error trace), and confirmation of clean workspace.
+3. Standalone commands only: Never pipe or chain commands with `&&`, `|`, or `;`. Always pass `-C "{PROJECT_ROOT}"` to imc commands. Compound shell commands trigger Auto Mode safety denials.
+4. Check blast radius with `imc trace <modified_symbol> --callers` to ensure call sites remain valid.
+5. Verify `git status` and `git diff`: Ensure no stray files or leftover temporary artifacts.
+6. Report strictly: what passed, what failed (with exact error trace), and confirmation of clean workspace.
 
 ## Output Contract
 Return ONLY:
