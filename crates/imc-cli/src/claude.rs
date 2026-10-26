@@ -137,7 +137,6 @@ description: Proactively delegate to this agent to investigate codebase, locate 
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write
 maxTurns: 15
-omitClaudeMd: true
 color: cyan
 ---
 
@@ -171,7 +170,6 @@ description: Proactively delegate to this agent to design architecture, produce 
 tools: Read, Grep, Glob
 disallowedTools: Edit, Write, Bash
 maxTurns: 8
-omitClaudeMd: true
 color: purple
 ---
 
@@ -864,10 +862,10 @@ mod tests {
         }
 
         let scout_text = std::fs::read_to_string(root.join(".claude").join("agents").join("imc-scout.md")).unwrap();
-        assert!(scout_text.contains("omitClaudeMd: true"));
+        assert!(!scout_text.contains("omitClaudeMd"));
 
         let planner_text = std::fs::read_to_string(root.join(".claude").join("agents").join("imc-planner.md")).unwrap();
-        assert!(planner_text.contains("omitClaudeMd: true"));
+        assert!(!planner_text.contains("omitClaudeMd"));
 
         let exclude = git_dir.join("info").join("exclude");
         assert!(exclude.exists());
