@@ -12,7 +12,6 @@ import {
   Cpu,
   Brain,
   FolderGit2,
-  Terminal,
   Settings,
   Sliders,
   ChevronDown,
@@ -31,7 +30,6 @@ const NAV_ITEMS = [
 ];
 
 const MORE_ITEMS = [
-  { href: "/captures", label: "Prompt Captures", icon: Terminal },
   { href: "/model-map", label: "Model Map", icon: Sliders },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

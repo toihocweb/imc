@@ -15,9 +15,15 @@ use std::time::SystemTime;
 
 use crate::config::Config;
 
-/// Directory holding the captured payloads.
-pub fn captures_dir() -> PathBuf {
-    Config::default().data_dir.join("captures")
+/// Directory holding the captured payloads. When a `project_root` is given,
+/// payloads are saved into `<project_root>/captures/`. Otherwise, falls back
+/// to `<data dir>/captures/`.
+pub fn captures_dir(project_root: Option<&Path>) -> PathBuf {
+    if let Some(root) = project_root {
+        root.join("captures")
+    } else {
+        Config::default().data_dir.join("captures")
+    }
 }
 
 /// File holding the on/off state.
@@ -91,10 +97,15 @@ fn next_id(dir: &Path) -> String {
 /// Write the payload to the capture directory. Returns the file path.
 /// Does nothing (and returns `None`) when capture is off.
 pub fn record_payload(payload: &Value) -> Option<PathBuf> {
+    record_payload_for_project(None, payload)
+}
+
+/// Write the payload to `<project_root>/captures/system<N>.json`.
+pub fn record_payload_for_project(project_root: Option<&Path>, payload: &Value) -> Option<PathBuf> {
     if !is_enabled() {
         return None;
     }
-    let dir = captures_dir();
+    let dir = captures_dir(project_root);
     std::fs::create_dir_all(&dir).ok()?;
     let target = dir.join(format!("{}.json", next_id(&dir)));
     let body = serde_json::to_string_pretty(payload).ok()?;
@@ -146,8 +157,8 @@ fn preview_of(payload: &Value) -> String {
 }
 
 /// All captured payloads, newest first.
-pub fn list_captures() -> Vec<CaptureInfo> {
-    let dir = captures_dir();
+pub fn list_captures(project_root: Option<&Path>) -> Vec<CaptureInfo> {
+    let dir = captures_dir(project_root);
     let mut out: Vec<CaptureInfo> = Vec::new();
     let entries = match std::fs::read_dir(&dir) {
         Ok(e) => e,
@@ -191,21 +202,21 @@ pub fn list_captures() -> Vec<CaptureInfo> {
 }
 
 /// Read one captured payload.
-pub fn get_capture(id: &str) -> Option<Value> {
-    let path = captures_dir().join(format!("{id}.json"));
+pub fn get_capture(id: &str, project_root: Option<&Path>) -> Option<Value> {
+    let path = captures_dir(project_root).join(format!("{id}.json"));
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
 }
 
 /// Delete one captured payload.
-pub fn delete_capture(id: &str) -> bool {
-    let path = captures_dir().join(format!("{id}.json"));
+pub fn delete_capture(id: &str, project_root: Option<&Path>) -> bool {
+    let path = captures_dir(project_root).join(format!("{id}.json"));
     std::fs::remove_file(path).is_ok()
 }
 
 /// Delete every captured payload. Returns how many were removed.
-pub fn clear_captures() -> usize {
-    let dir = captures_dir();
+pub fn clear_captures(project_root: Option<&Path>) -> usize {
+    let dir = captures_dir(project_root);
     let mut n = 0;
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
@@ -221,11 +232,11 @@ pub fn clear_captures() -> usize {
 }
 
 /// Small helper for callers that only want the summary.
-pub fn status() -> Value {
+pub fn status(project_root: Option<&Path>) -> Value {
     json!({
         "enabled": is_enabled(),
-        "captures": list_captures().len(),
-        "dir": captures_dir().to_string_lossy(),
+        "captures": list_captures(project_root).len(),
+        "dir": captures_dir(project_root).to_string_lossy(),
     })
 }
 
@@ -261,5 +272,37 @@ mod tests {
         });
         let p = preview_of(&payload);
         assert!(p.contains("hello world"), "{p}");
+    }
+
+    #[test]
+    fn record_payload_with_project_root() {
+        let temp = std::env::temp_dir().join(format!("imc-cap-proj-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        std::env::set_var("IMC_DATA_DIR", &temp);
+
+        set_enabled(true).unwrap();
+
+        let proj_root = temp.join("my_proj");
+        std::fs::create_dir_all(&proj_root).unwrap();
+
+        let payload = json!({"messages": [{"role": "user", "content": "test payload"}]});
+        let path = record_payload_for_project(Some(&proj_root), &payload).expect("should write");
+        assert!(path.starts_with(proj_root.join("captures")));
+        assert!(path.exists());
+
+        let list = list_captures(Some(&proj_root));
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "system1");
+
+        let cap = get_capture("system1", Some(&proj_root));
+        assert!(cap.is_some());
+
+        assert!(delete_capture("system1", Some(&proj_root)));
+        assert_eq!(list_captures(Some(&proj_root)).len(), 0);
+
+        set_enabled(false).unwrap();
+        std::env::remove_var("IMC_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

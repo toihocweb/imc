@@ -1967,9 +1967,10 @@ saved to {}", st::path().display());
         }
         Command::Capture { action } => {
             use imc_core::capture;
+            let project_root = Some(root.as_path());
             match action {
                 None | Some(CaptureAction::Status) => {
-                    let status = capture::status();
+                    let status = capture::status(project_root);
                     if cli.json {
                         println!("{}", serde_json::to_string_pretty(&status)?);
                     } else {
@@ -1986,14 +1987,18 @@ saved to {}", st::path().display());
                 }
                 Some(CaptureAction::On) => {
                     capture::set_enabled(true)?;
-                    println!("prompt capture: on");
+                    let _ = imc_cli::claude::ensure_git_exclude(&root, "captures/");
+                    println!(
+                        "prompt capture: on (saving to {})",
+                        capture::captures_dir(project_root).display()
+                    );
                 }
                 Some(CaptureAction::Off) => {
                     capture::set_enabled(false)?;
                     println!("prompt capture: off");
                 }
                 Some(CaptureAction::List) => {
-                    let list = capture::list_captures();
+                    let list = capture::list_captures(project_root);
                     if cli.json {
                         println!("{}", serde_json::to_string_pretty(&list)?);
                     } else {
@@ -2012,20 +2017,20 @@ saved to {}", st::path().display());
                     }
                 }
                 Some(CaptureAction::Show { id }) => {
-                    match capture::get_capture(&id) {
+                    match capture::get_capture(&id, project_root) {
                         Some(v) => println!("{}", serde_json::to_string_pretty(&v)?),
                         None => bail!("no capture with id {id:?}"),
                     }
                 }
                 Some(CaptureAction::Rm { id }) => {
-                    if capture::delete_capture(&id) {
+                    if capture::delete_capture(&id, project_root) {
                         println!("deleted {id}");
                     } else {
                         bail!("no capture with id {id:?}");
                     }
                 }
                 Some(CaptureAction::Clear) => {
-                    let n = capture::clear_captures();
+                    let n = capture::clear_captures(project_root);
                     println!("deleted {n} capture(s)");
                 }
             }

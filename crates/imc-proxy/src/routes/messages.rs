@@ -294,6 +294,7 @@ pub fn inject_terse_directive(payload: &mut AnthropicMessagesPayload) {
 /// then system-reminder template + learned-memory injection.
 pub struct InjectionOutcome {
     pub project_id: Option<String>,
+    pub project_path: Option<String>,
     pub user_text: String,
 }
 
@@ -310,6 +311,7 @@ pub fn apply_prompts_and_memories(
 
     let detected = memory::detect_project(payload, &projects, cached.as_deref(), cwd.as_deref());
     let project_id = detected.as_ref().map(|d| d.id.clone());
+    let project_path = detected.as_ref().map(|d| d.path.clone());
     if let (Some(detected), Some(sid)) = (detected.as_ref(), session_id) {
         memory::set_session_project(sid, &detected.id);
     }
@@ -360,6 +362,7 @@ pub fn apply_prompts_and_memories(
 
     InjectionOutcome {
         project_id,
+        project_path,
         user_text,
     }
 }
@@ -489,11 +492,12 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
 
     // Prompt capture: store the payload exactly as the model will see it
     // (templates + injected memories included). Off unless
-    // `imc capture on` (or the dashboard toggle) turned it on.
+    // `imc capture on` turned it on.
     if imc_core::capture::is_enabled() {
         if let Ok(v) = serde_json::to_value(&payload) {
-            if let Some(path) = imc_core::capture::record_payload(&v) {
-                log.debug(&format!("[Proxy] captured prompt -> {}", path.display()));
+            let project_root = injection.project_path.as_deref().map(std::path::Path::new);
+            if let Some(path) = imc_core::capture::record_payload_for_project(project_root, &v) {
+                log.info(&format!("[Proxy] captured prompt -> {}", path.display()));
             }
         }
     }

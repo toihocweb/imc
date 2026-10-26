@@ -651,29 +651,32 @@ async fn compress(Json(body): Json<Value>) -> Response {
 // GET|POST /api/captures
 // ---------------------------------------------------------------------------
 async fn captures_get(Query(q): Query<HashMap<String, String>>) -> Response {
+    let root = q.get("root").map(|s| Path::new(s.as_str()));
     if let Some(id) = q.get("id") {
-        return match imc_core::capture::get_capture(id) {
+        return match imc_core::capture::get_capture(id, root) {
             Some(payload) => Json(json!({ "ok": true, "payload": payload })).into_response(),
             None => error(format!("no capture {id}")),
         };
     }
     Json(json!({
         "ok": true,
-        "status": imc_core::capture::status(),
-        "captures": imc_core::capture::list_captures(),
+        "status": imc_core::capture::status(root),
+        "captures": imc_core::capture::list_captures(root),
     }))
     .into_response()
 }
 
 async fn captures_post(Json(body): Json<Value>) -> Response {
     let action = body.get("action").and_then(Value::as_str).unwrap_or("");
+    let root_str = body.get("root").and_then(Value::as_str);
+    let root = root_str.map(Path::new);
     let result = match action {
         "on" => imc_core::capture::set_enabled(true).map(|_| "capture on".to_string()),
         "off" => imc_core::capture::set_enabled(false).map(|_| "capture off".to_string()),
-        "clear" => Ok(format!("cleared {}", imc_core::capture::clear_captures())),
+        "clear" => Ok(format!("cleared {}", imc_core::capture::clear_captures(root))),
         "delete" => match body.get("id").and_then(Value::as_str) {
             Some(id) => {
-                if imc_core::capture::delete_capture(id) {
+                if imc_core::capture::delete_capture(id, root) {
                     Ok(format!("deleted {id}"))
                 } else {
                     Err(anyhow::anyhow!("no capture {id}"))
@@ -687,8 +690,8 @@ async fn captures_post(Json(body): Json<Value>) -> Response {
         Ok(message) => Json(json!({
             "ok": true,
             "message": message,
-            "status": imc_core::capture::status(),
-            "captures": imc_core::capture::list_captures(),
+            "status": imc_core::capture::status(root),
+            "captures": imc_core::capture::list_captures(root),
         }))
         .into_response(),
         Err(e) => error(format!("{e:#}")),

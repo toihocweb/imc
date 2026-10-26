@@ -229,7 +229,7 @@ memories, tool results. The fastest way to answer *"what did the agent actually 
 imc capture on && imc capture list && imc capture show system12
 ```
 
-Off by default; toggleable from the dashboard at `/captures`.
+Off by default; managed via `imc capture on` / `imc capture off` (saved to `<project_root>/captures/`).
 
 ### Staying current
 
