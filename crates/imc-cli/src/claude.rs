@@ -360,6 +360,34 @@ pub fn write_claude_settings(project_root: &Path, port: u16) -> Result<PathBuf> 
         env.insert(k.to_string(), v);
     }
 
+    // Pre-approve imc CLI commands under Bash so Claude Code's Auto Mode
+    // bypasses the classifier check and does not safety-block imc calls.
+    let perms = obj
+        .entry("permissions")
+        .or_insert_with(|| json!({}));
+    if !perms.is_object() {
+        *perms = json!({});
+    }
+    let perms_obj = perms.as_object_mut().expect("permissions object");
+    let allow = perms_obj
+        .entry("allow")
+        .or_insert_with(|| json!([]));
+    if !allow.is_array() {
+        *allow = json!([]);
+    }
+    if let Some(arr) = allow.as_array_mut() {
+        let has_broad = arr.iter().any(|v| {
+            v.as_str() == Some("Bash") || v.as_str() == Some("Bash(*)")
+        });
+        if !has_broad {
+            for cmd in ["Bash(imc *)", "Bash(imc)"] {
+                if !arr.iter().any(|v| v.as_str() == Some(cmd)) {
+                    arr.push(json!(cmd));
+                }
+            }
+        }
+    }
+
     let mut text = serde_json::to_string_pretty(&data)?;
     text.push('\n');
     std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
@@ -888,5 +916,45 @@ mod tests {
         assert!(rule.contains("imc-planner"));
         assert!(rule.contains("imc-builder"));
         assert!(rule.contains("imc-verifier"));
+    }
+
+    #[test]
+    fn write_claude_settings_adds_permissions_allow() {
+        let root = std::env::temp_dir().join(format!("imc-test-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let path = write_claude_settings(&root, 12345).unwrap();
+        assert!(path.exists());
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let val: Value = serde_json::from_str(&raw).unwrap();
+        let allow = val["permissions"]["allow"].as_array().expect("allow array");
+        assert!(allow.iter().any(|v| v.as_str() == Some("Bash(imc *)")));
+        assert!(allow.iter().any(|v| v.as_str() == Some("Bash(imc)")));
+
+        // Calling again does not duplicate entries
+        let _ = write_claude_settings(&root, 12345).unwrap();
+        let raw2 = std::fs::read_to_string(&path).unwrap();
+        let val2: Value = serde_json::from_str(&raw2).unwrap();
+        let allow2 = val2["permissions"]["allow"].as_array().unwrap();
+        assert_eq!(allow2.iter().filter(|v| v.as_str() == Some("Bash(imc *)")).count(), 1);
+
+        // Pre-existing broad "Bash" is not polluted with specific commands
+        let broad_root = std::env::temp_dir().join(format!("imc-test-settings-broad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&broad_root);
+        std::fs::create_dir_all(broad_root.join(".claude")).unwrap();
+        let init_settings = json!({
+            "permissions": { "allow": ["Bash"] }
+        });
+        std::fs::write(broad_root.join(".claude/settings.local.json"), serde_json::to_string_pretty(&init_settings).unwrap()).unwrap();
+        let _ = write_claude_settings(&broad_root, 12345).unwrap();
+        let broad_val: Value = serde_json::from_str(&std::fs::read_to_string(broad_root.join(".claude/settings.local.json")).unwrap()).unwrap();
+        let broad_allow = broad_val["permissions"]["allow"].as_array().unwrap();
+        assert_eq!(broad_allow.len(), 1);
+        assert_eq!(broad_allow[0].as_str(), Some("Bash"));
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&broad_root);
     }
 }
