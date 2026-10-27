@@ -50,6 +50,7 @@ Use this instead of stacking manual search, read, and context calls.
 - `--raw` — **Recommended for agents**: returns raw ranked chunks directly without LLM summarization. Read the top 5, never stop at hit 1.
 - `--rerank` — use LLM to score and rerank candidate chunks, outputting ranked code directly.
 - `--concise` — one line per hit (~8x fewer tokens) to survey matches quickly.
+- `--budget 1500` (or `-b`) — limit returned chunks by token budget to prevent context bloat.
 - `-l 20` — how many chunks to retrieve (10 by default).
 - `--offset N` — page through a long result set.
 - `--no-vector` — BM25 only: no embedding call, offline and deterministic.

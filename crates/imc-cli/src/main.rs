@@ -103,6 +103,9 @@ enum Command {
         /// Target project by registered id or name (Python's `-p/--project`).
         #[arg(long, short = 'p')]
         project: Option<String>,
+        /// Token budget for returned chunks (stops adding chunks when exceeded).
+        #[arg(long, short = 'b')]
+        budget: Option<usize>,
         /// When search returns no hits, automatically record the query as a
         /// project memory (work_fact / search_fail) so the next agentic pass
         /// can surface it. Follow up with `imc memory-add` to refine the rule.
@@ -742,6 +745,61 @@ fn print_hits(hits: &[imc_core::types::SearchHit], query: &str) {
     }
 }
 
+fn apply_budget_and_cliff(
+    hits: Vec<imc_core::types::SearchHit>,
+    budget: usize,
+) -> (Vec<imc_core::types::SearchHit>, Vec<imc_core::types::SearchHit>) {
+    if hits.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    let top_score = hits[0].score;
+    let min_score = if top_score > 0.0 { top_score * 0.25 } else { f64::MIN };
+
+    let mut within = Vec::new();
+    let mut overflow = Vec::new();
+    let mut accumulated_tokens = 0usize;
+
+    for hit in hits {
+        if hit.score < min_score {
+            continue;
+        }
+
+        let hit_tokens = (hit.snippet.len().max(hit.text.len()) / 4).max(1);
+        if accumulated_tokens + hit_tokens > budget && !within.is_empty() {
+            overflow.push(hit);
+        } else {
+            accumulated_tokens += hit_tokens;
+            within.push(hit);
+        }
+    }
+
+    (within, overflow)
+}
+
+fn print_overflow_summary(overflow: &[imc_core::types::SearchHit], next_offset: usize) {
+    if overflow.is_empty() {
+        return;
+    }
+    let preview: Vec<String> = overflow
+        .iter()
+        .take(3)
+        .map(|h| format!("{}:L{}-L{} (score {:.2})", h.file, h.start_line, h.end_line, h.score))
+        .collect();
+    let more = if overflow.len() > 3 {
+        format!(" +{} more", overflow.len() - 3)
+    } else {
+        String::new()
+    };
+    println!(
+        "\n[+{} chunk(s) outside budget: {}{} · Page with --offset {} or raise --budget]",
+        overflow.len(),
+        preview.join(", "),
+        more,
+        next_offset
+    );
+}
+
 fn main() -> Result<()> {
     // Rust ignores SIGPIPE, so `imc search ... | head` prints a panic
     // ("failed printing to stdout: Broken pipe") instead of exiting quietly.
@@ -934,6 +992,7 @@ fn main() -> Result<()> {
             concise,
             raw,
             project,
+            budget,
             no_on_miss,
             rerank,
         } => {
@@ -982,12 +1041,22 @@ fn main() -> Result<()> {
             hits.truncate(want + offset);
             let skipped = (*offset).min(hits.len());
             hits.drain(0..skipped);
+
+            let (displayed_hits, overflow_hits) = if let Some(b) = *budget {
+                apply_budget_and_cliff(hits, b)
+            } else {
+                (hits, Vec::new())
+            };
+            let hits = displayed_hits;
+
             if *rerank || cli.json || *raw {
                 if cli.json {
                     println!("{}", serde_json::to_string_pretty(&hits)?);
                 } else if *concise {
                     print_hits_concise(&hits, query);
-                    if has_more {
+                    if !overflow_hits.is_empty() {
+                        print_overflow_summary(&overflow_hits, skipped + hits.len());
+                    } else if has_more {
                         println!(
                             "\nmore matches exist — narrow the query, or page with --offset {}",
                             skipped + hits.len()
@@ -995,7 +1064,9 @@ fn main() -> Result<()> {
                     }
                 } else {
                     print_hits(&hits, query);
-                    if has_more {
+                    if !overflow_hits.is_empty() {
+                        print_overflow_summary(&overflow_hits, skipped + hits.len());
+                    } else if has_more {
                         println!(
                             "\nmore matches exist — narrow the query, or page with --offset {}",
                             skipped + hits.len()
@@ -2174,4 +2245,49 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use imc_core::types::SearchHit;
+
+    fn mock_hit(score: f64, len: usize) -> SearchHit {
+        SearchHit {
+            score,
+            file: "test.rs".to_string(),
+            start_line: 1,
+            end_line: 10,
+            text: "a".repeat(len),
+            snippet: "a".repeat(len),
+            sym_name: Some("test_fn".to_string()),
+            sym_kind: Some("function".to_string()),
+            source: "bm25",
+        }
+    }
+
+    #[test]
+    fn budget_truncates_and_marks_overflow() {
+        let hits = vec![
+            mock_hit(0.9, 400),
+            mock_hit(0.85, 400),
+            mock_hit(0.80, 400),
+        ];
+        let (within, overflow) = apply_budget_and_cliff(hits, 250);
+        assert_eq!(within.len(), 2);
+        assert_eq!(overflow.len(), 1);
+        assert_eq!(overflow[0].score, 0.80);
+    }
+
+    #[test]
+    fn score_cliff_drops_noisy_tail() {
+        let hits = vec![
+            mock_hit(0.90, 100),
+            mock_hit(0.85, 100),
+            mock_hit(0.15, 100),
+        ];
+        let (within, overflow) = apply_budget_and_cliff(hits, 1000);
+        assert_eq!(within.len(), 2);
+        assert_eq!(overflow.len(), 0);
+    }
 }
