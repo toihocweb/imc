@@ -329,6 +329,13 @@ pub fn start_proxy(cfg: &Config, port: u16) -> Result<Value> {
             }
         }
     }
+    // If the port is open but we reached here, an orphan or unmanaged process
+    // is holding the port. Force-kill it before attempting to bind.
+    if port_open(port) {
+        let _ = stop_proxy(cfg);
+        crate::web::kill_listener_on_port(port);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
     let exe_disp = exe.display().to_string();
     let log_dir = cfg.data_dir.join("logs");
     std::fs::create_dir_all(&log_dir).ok();
@@ -592,13 +599,11 @@ pub fn run_claude_bin(cfg: &Config, root: &Path, args: &[String]) -> Result<()> 
     // 1. Ensure the project is indexed so code intelligence is ready.
     let _ = ensure_project_indexed(cfg, root);
 
-    // 2. Ensure the proxy is running so Claude Code talks to our compression
-    // proxy instead of hitting the upstream LLM directly.
-    if !proxy_is_running(cfg) {
-        let port = 12345u16;
-        let _ = start_proxy(cfg, port)
-            .with_context(|| format!("start imc proxy on port {port}"))?;
-    }
+    // 2. Ensure the proxy is running and fresh so Claude Code talks to our
+    // compression proxy instead of hitting the upstream LLM directly.
+    let port = 12345u16;
+    let _ = start_proxy(cfg, port)
+        .with_context(|| format!("start imc proxy on port {port}"))?;
 
     // The settings and the rule file are what make Claude Code use imc. A
     // project that was never wired would run Claude Code against the

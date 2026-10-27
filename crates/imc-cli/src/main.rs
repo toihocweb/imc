@@ -1945,12 +1945,19 @@ saved to {}", st::path().display());
                         }
                     } else if newer || *force {
                         match update::install_with_force(timeout, *force) {
-                            Ok((tag, path)) => println!(
-                                "updated v{} → v{} ({})",
-                                update::current_version(),
-                                tag,
-                                path.display()
-                            ),
+                            Ok((tag, path)) => {
+                                println!(
+                                    "updated v{} → v{} ({})",
+                                    update::current_version(),
+                                    tag,
+                                    path.display()
+                                );
+                                if imc_cli::claude::proxy_is_running(&cfg) {
+                                    let _ = imc_cli::claude::stop_proxy(&cfg);
+                                    let _ = imc_cli::claude::start_proxy(&cfg, 12345);
+                                    println!("restarted proxy with the new binary (port 12345)");
+                                }
+                            }
                             Err(e) => eprintln!("update failed: {e:#}"),
                         }
                     } else {

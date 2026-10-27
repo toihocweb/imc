@@ -174,6 +174,14 @@ pub fn run(bin_dir: Option<PathBuf>, with_dashboard: bool) -> Result<Vec<String>
         ));
     }
 
+    // If the proxy is running, restart it with the newly installed binary
+    let cfg = imc_core::config::Config::default();
+    if crate::claude::proxy_is_running(&cfg) {
+        let _ = crate::claude::stop_proxy(&cfg);
+        let _ = crate::claude::start_proxy(&cfg, 12345);
+        log.push("proxy   → restarted (port 12345)".to_string());
+    }
+
     Ok(log)
 }
 

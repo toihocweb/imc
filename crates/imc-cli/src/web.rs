@@ -176,7 +176,7 @@ pub fn stop_dashboard() -> bool {
 }
 
 pub(crate) fn kill_listener_on_port(port: u16) -> bool {
-    let mut killed = false;
+    let mut pids = Vec::new();
     if let Ok(out) = Command::new("ss")
         .args(["-tulpnH", &format!("sport = :{port}")])
         .output()
@@ -185,15 +185,14 @@ pub(crate) fn kill_listener_on_port(port: u16) -> bool {
         for part in text.split("pid=") {
             if let Some(num_str) = part.split(|c: char| !c.is_ascii_digit()).next() {
                 if let Ok(pid) = num_str.parse::<i64>() {
-                    if pid > 0 {
-                        let _ = Command::new("kill").arg(pid.to_string()).status();
-                        killed = true;
+                    if pid > 0 && !pids.contains(&pid) {
+                        pids.push(pid);
                     }
                 }
             }
         }
     }
-    if !killed {
+    if pids.is_empty() {
         if let Ok(out) = Command::new("lsof")
             .args(["-ti", &format!("tcp:{port}"), "-sTCP:LISTEN"])
             .output()
@@ -201,21 +200,33 @@ pub(crate) fn kill_listener_on_port(port: u16) -> bool {
             let text = String::from_utf8_lossy(&out.stdout);
             for line in text.lines() {
                 if let Ok(pid) = line.trim().parse::<i64>() {
-                    if pid > 0 {
-                        let _ = Command::new("kill").arg(pid.to_string()).status();
-                        killed = true;
+                    if pid > 0 && !pids.contains(&pid) {
+                        pids.push(pid);
                     }
                 }
             }
         }
     }
-    if killed {
-        let start = std::time::Instant::now();
-        while is_up(port) && start.elapsed() < Duration::from_millis(1500) {
+    if pids.is_empty() {
+        return false;
+    }
+    for pid in &pids {
+        let _ = Command::new("kill").arg(pid.to_string()).status();
+    }
+    let start = std::time::Instant::now();
+    while is_up(port) && start.elapsed() < Duration::from_millis(800) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if is_up(port) {
+        for pid in &pids {
+            let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+        }
+        let start_kill = std::time::Instant::now();
+        while is_up(port) && start_kill.elapsed() < Duration::from_millis(500) {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
-    killed
+    true
 }
 
 /// Stop the dashboard that `imc` started earlier.
