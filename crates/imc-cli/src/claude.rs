@@ -204,7 +204,6 @@ pub const BUILDER_AGENT_MD: &str = r#"---
 name: imc-builder
 description: Proactively delegate to this agent to implement approved technical plans and write clean, minimal code and tests.
 tools: Read, Edit, Write, Bash, Grep, Glob
-maxTurns: 25
 color: green
 ---
 
@@ -893,7 +892,11 @@ mod tests {
             assert!(p.exists(), "missing agent file: {name}");
             let text = std::fs::read_to_string(&p).unwrap();
             assert!(text.starts_with("---\nname: "), "must contain YAML frontmatter: {name}");
-            assert!(text.contains("maxTurns: "), "must specify maxTurns: {name}");
+            if name != "imc-builder.md" {
+                assert!(text.contains("maxTurns: "), "must specify maxTurns: {name}");
+            } else {
+                assert!(!text.contains("maxTurns"), "imc-builder must not cap maxTurns");
+            }
             assert!(text.contains("## Output Contract"), "must define output contract: {name}");
             assert!(text.contains("- **Next Step**:"), "must define next step handoff: {name}");
             assert!(

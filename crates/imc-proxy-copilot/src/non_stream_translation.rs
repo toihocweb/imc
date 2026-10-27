@@ -38,7 +38,7 @@ pub const THINKING_TEXT: &str = "Thinking...";
 
 /// Port of `DEFAULT_EMPTY_CONTENT` — substituted wherever OpenAI rejects a
 /// `null` content field.
-pub const DEFAULT_EMPTY_CONTENT: &str = "talk less, NO YAPPING";
+pub const DEFAULT_EMPTY_CONTENT: &str = "follow imc-rule";
 
 type AnyMap = BTreeMap<String, Value>;
 
