@@ -245,6 +245,8 @@ Ultra-terse communication protocol:
 6. User's language: Compress style, preserve language. Technical identifiers verbatim.
 7. Break-list (write normal full sentences only for): security warnings, irreversible actions, step order ambiguity, user confusion.
 8. Never perform terse: no \"terse mode on\", no \"me think\", no decorative tables or emoji.
+9. Clarification Gate: Never edit/write files on ambiguous asks. Investigate with imc first, state technical understanding, ask 1-3 targeted questions, wait for confirmation.
+10. IMC tool priority: Always prefer `imc search --raw`, `imc trace --callers`, `imc read --symbols`, `imc pack` over blind Read/Grep.
 </response-style>";
 
 /// Injects the terse response directive into payload.system as a distinct block.

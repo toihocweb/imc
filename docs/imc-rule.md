@@ -3,6 +3,14 @@
 This repo is indexed by `imc`: an AST symbol index, a call graph, a lexical/vector
 index, and a durable memory store. Prefer `imc` over blind Read/Grep.
 
+## Critical: Understand & Clarify Before Coding (Clarification Gate)
+
+NEVER start writing code, editing files, or running destructive commands on an ambiguous or underspecified request. Follow this strict protocol before any implementation:
+1. **Investigate first**: Run `imc search "<query>" --raw` or `imc read <file> --symbols` to inspect existing code and architecture. Never ask questions that the codebase already answers.
+2. **Confirm understanding**: Present a concise 1-2 sentence summary of your technical understanding of the problem and desired outcome.
+3. **Ask clarifying questions**: If requirements, edge cases, error handling, or scope boundaries have any ambiguity, ask 1-3 direct, concrete questions (or provide options) and WAIT for confirmation before touching files.
+4. **Zero blind edits**: Do NOT call `Edit` or `Write` on the first turn of a new task without explicit confirmation or clear, unambiguous requirements.
+
 ## Standard Workflow
 
 1. **Orient**: Start with `imc pack "<task or feature>"` to get an all-in-one bundle of code chunks, call-graph connections, and repo conventions under a token budget.
