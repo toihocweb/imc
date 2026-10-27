@@ -90,4 +90,4 @@ For any non-trivial coding task or bug fix, delegate work across the specialized
 1. **Locate & Investigate**: Proactively delegate to `imc-scout` when you need to search symbols, inspect call graphs, locate bug sources, or analyze dependencies. Scout has read-only tools and runs imc CLI without modifying files.
 2. **Plan & Architecture**: Proactively delegate to `imc-planner` when you need an implementation plan, architectural decision ledger, or test criteria. Planner inspects dependencies via imc CLI and writes `plan.md` without modifying source code.
 3. **Implement**: Proactively delegate to `imc-builder` to write the code and tests according to the plan. Builder implements changes following Lazy Senior principles.
-4. **Verify**: Proactively delegate to `imc-verifier` after code changes to run tests, check compiler diagnostics, and verify workspace cleanliness without modifying files.
+4. **Verify**: Proactively delegate to `imc-verifier` after code changes to perform architectural verification, blast radius regression checks, packaging/dependency audits, and test execution.
