@@ -136,8 +136,8 @@ enum Command {
     Pack {
         /// What the agent wants to know or do.
         query: String,
-        /// Token budget for the whole bundle.
-        #[arg(long, short = 'b', default_value_t = 6000)]
+        /// Token budget for the whole bundle (default 3000).
+        #[arg(long, short = 'b', default_value_t = 3000)]
         budget: usize,
         /// Candidate chunks considered before the budget is applied.
         #[arg(long, default_value_t = 12)]
@@ -1042,7 +1042,12 @@ fn main() -> Result<()> {
             let skipped = (*offset).min(hits.len());
             hits.drain(0..skipped);
 
-            let (displayed_hits, overflow_hits) = if let Some(b) = *budget {
+            let effective_budget = match *budget {
+                Some(b) => Some(b),
+                None if *raw => Some(1500),
+                None => None,
+            };
+            let (displayed_hits, overflow_hits) = if let Some(b) = effective_budget {
                 apply_budget_and_cliff(hits, b)
             } else {
                 (hits, Vec::new())

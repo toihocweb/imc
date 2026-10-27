@@ -41,13 +41,13 @@ NEVER start writing code, editing files, or running destructive commands on an a
 **`imc pack "<query>"`** — assemble the context an agent needs in one command:
 hybrid retrieval plus call-graph neighborhood plus project memories, budgeted into tokens.
 Use this instead of stacking manual search, read, and context calls.
-- `--budget 12000` — token budget for the whole bundle (default 6000).
+- `--budget 6000` — token budget for the whole bundle (default 3000).
 - `--rerank` — use LLM to score and rerank candidate chunks before packing.
 - `--no-memories` — leave memories out if only code is needed.
 - `--json` — machine-readable bundle.
 
 **`imc search "<query>"`** — hybrid retrieval (BM25 + vector) over codebase chunks.
-- `--raw` — **Recommended for agents**: returns raw ranked chunks directly without LLM summarization. Read the top 5, never stop at hit 1.
+- `--raw` — **Recommended for agents**: returns raw ranked chunks directly without LLM summarization (default budget 1500 tokens). Read the top 5, never stop at hit 1.
 - `--rerank` — use LLM to score and rerank candidate chunks, outputting ranked code directly.
 - `--concise` — one line per hit (~8x fewer tokens) to survey matches quickly.
 - `--budget 1500` (or `-b`) — limit returned chunks by token budget to prevent context bloat.

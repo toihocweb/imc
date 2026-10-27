@@ -126,7 +126,7 @@ pub fn tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "What the agent wants to know or do"},
-                    "budget": {"type": "number", "description": "Token budget for the whole bundle, default 6000"}
+                    "budget": {"type": "number", "description": "Token budget for the whole bundle, default 3000"}
                 },
                 "required": ["query"]
             }

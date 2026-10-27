@@ -21,7 +21,7 @@ use imc_core::types::SearchHit;
 use imc_support::context::{pack_context, ContextResult};
 
 /// `DEFAULT_CONTEXT_TOKEN_BUDGET` from `main/search/context.py:9`.
-const CONTEXT_TOKEN_BUDGET: i64 = 6000;
+const CONTEXT_TOKEN_BUDGET: i64 = 3000;
 
 /// The tuned retrieval prompt, kept in-crate so the binary carries it.
 /// `docs/search_prompt_tuned.md` keeps the same text plus the tuning method and

@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-pub const DEFAULT_CONTEXT_TOKEN_BUDGET: i64 = 6000;
+pub const DEFAULT_CONTEXT_TOKEN_BUDGET: i64 = 3000;
 pub const TRUNCATION_MARKER: &str =
     "\n[Context truncated: approximate token budget reached; final source range may be partial.]\n";
 
