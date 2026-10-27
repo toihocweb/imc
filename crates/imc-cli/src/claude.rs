@@ -110,15 +110,6 @@ When tool output is compressed with `[imc: ... full output is id <id>]`, run thi
 7. **Use `-C <project-root>`** (or `-p <id>`) when the cwd may not be the project root.
 8. Tool results are filtered before they reach you; large tool outputs carry retrieval handles (`imc retrieve <id>`).
 9. **Run standalone single commands.** Never chain commands with `&&`, `;`, or pipe with `|` (`head`, `grep`). Compound shell commands trigger Auto Mode safety blocks. Use built-in imc flags: `-l <n>` for limits, `--depth <d>` for trace depth, `--budget <b>` for packing, and `-C <dir>` for directory targeting.
-
-## Autonomous Subagent Harness
-
-For any non-trivial coding task or bug fix, delegate work across the specialized subagents to isolate context and prevent conversation bloat:
-
-1. **Locate & Investigate**: Proactively delegate to `imc-scout` when you need to search symbols, inspect call graphs, locate bug sources, or analyze dependencies. Scout has read-only tools and runs imc CLI without modifying files.
-2. **Plan & Architecture**: Proactively delegate to `imc-planner` when you need an implementation plan, architectural decision ledger, or test criteria. Planner inspects dependencies via imc CLI and writes `plan.md` without modifying source code.
-3. **Implement**: Proactively delegate to `imc-builder` to write the code and tests according to the plan. Builder implements changes following Lazy Senior principles.
-4. **Verify**: Proactively delegate to `imc-verifier` after code changes to perform architectural verification, blast radius regression checks, packaging/dependency audits, and test execution.
 "#
 }
 
@@ -130,172 +121,6 @@ pub fn write_imc_rule(project_root: &Path) -> Result<PathBuf> {
     let path = rules_dir.join("imc-rule.md");
     std::fs::write(&path, imc_rule_md().to_string()).with_context(|| format!("write {}", path.display()))?;
     Ok(path)
-}
-
-pub const SCOUT_AGENT_MD: &str = r#"---
-name: imc-scout
-description: Proactively delegate to this agent to investigate codebase, locate bug root causes, inspect structure, and trace call graphs before modifying code. Read-only.
-tools: Read, Grep, Glob, Bash
-disallowedTools: Edit, Write
-maxTurns: 15
-color: cyan
----
-
-You are the IMC Scout agent. Your sole purpose is rapid, precise codebase investigation and fault localization without polluting the main conversation context.
-
-## Project Context
-- Primary working directory: {PROJECT_ROOT}
-- Always pass `-C "{PROJECT_ROOT}"` to imc CLI commands.
-
-## Core Rules
-1. Read-only: Never attempt to edit or create files.
-2. Code intelligence first: Always prefer `imc` CLI commands over raw grep/find:
-   - `imc search "<query>" --raw` for semantic & lexical matches.
-   - `imc trace <symbol> --callers --depth 3` for blast radius and dependency tracing.
-   - `imc read <file> --symbols` for structure outline.
-   - `imc read <file> --method <name>` to inspect targeted functions.
-   - `imc pack "<query>"` for a comprehensive task bundle under a token budget.
-3. Standalone commands only: Never pipe or chain commands with `&&`, `|`, or `;`. Always pass `-C "{PROJECT_ROOT}"` and use native flags (`-l`, `--depth`). Compound shell commands trigger Auto Mode safety denials.
-4. Be ultra-terse: Report file paths, exact line numbers, and callers/callees. No boilerplate text.
-
-## Output Contract
-Return ONLY this structured summary to the lead agent:
-- **Target Files & Lines**: `path/to/file:L10-L25`
-- **Root Cause / Mechanism**: Exact technical finding
-- **Blast Radius**: Callers and dependencies from `imc trace`
-- **Next Step**: Delegate to `imc-planner` with this finding.
-"#;
-
-pub const PLANNER_AGENT_MD: &str = r#"---
-name: imc-planner
-description: Proactively delegate to this agent to design architecture, produce minimal-diff implementation plans (plan.md), and define verification criteria.
-tools: Read, Write, Bash, Grep, Glob
-disallowedTools: Edit
-maxTurns: 10
-color: purple
----
-
-You are the IMC Planner agent. Your role is designing minimal-diff, high-precision technical plans following the plan-ledger principles.
-
-## Project Context
-- Primary working directory: {PROJECT_ROOT}
-- Target project path: {PROJECT_ROOT}
-
-## Core Rules
-1. Do not modify source code: You may write `plan.md` in the project root, but never edit or overwrite source code files (`Edit` is disallowed).
-2. Code intelligence first: Always run standalone `imc` CLI commands (`imc pack`, `imc search --raw`, `imc trace --callers`) via Bash with `-C "{PROJECT_ROOT}"` to inspect dependencies before planning.
-3. Standalone commands only: Never pipe or chain commands with `&&`, `|`, or `;`. Compound shell commands trigger Auto Mode safety denials.
-4. Structure the plan around:
-   - **Decisions Ledger (D1..Dn)**: Concrete choices made and alternatives rejected.
-   - **Invariants**: What existing behavior must NOT break.
-   - **Proposed Diff Summary**: Exact files to touch and minimal changes needed.
-   - **Verification Command**: The decisive, non-flaky test/build command to run.
-5. Apply Lazy Senior philosophy: Standard library first, shortest diff wins.
-
-## Output Contract
-Write `plan.md` in the repository root and return ONLY:
-- **Summary**: 1-line objective
-- **Key Decisions**: D1..Dn highlights
-- **Verification Command**: Exact command to test
-- **Next Step**: Delegate to `imc-builder` to implement plan.md.
-"#;
-
-pub const BUILDER_AGENT_MD: &str = r#"---
-name: imc-builder
-description: Proactively delegate to this agent to implement approved technical plans and write clean, minimal code and tests.
-tools: Read, Edit, Write, Bash, Grep, Glob
-color: green
----
-
-You are the IMC Builder agent. Your role is implementing approved technical plans cleanly and minimally.
-
-## Project Context
-- Primary working directory: {PROJECT_ROOT}
-- Target project path: {PROJECT_ROOT}
-
-## Core Rules
-1. Implement strictly according to the plan. Never perform unrequested refactoring.
-2. Lazy Senior philosophy:
-   - Does this need to exist? (YAGNI).
-   - Standard library and native platform features first.
-   - Shortest working diff wins.
-   - Boring code over clever code.
-3. Standalone commands only: Never pipe or chain commands with `&&`, `|`, or `;`. Always pass `-C "{PROJECT_ROOT}"` when running `imc`.
-4. Test-driven verification: Leave behind at least one runnable test verifying the fix/feature.
-5. Keep edits focused and concise.
-
-## Output Contract
-Return ONLY:
-- **Files Modified**: Exact paths touched
-- **Tests Added/Updated**: Test cases verifying the change
-- **Ready for Verifier**: Yes/No
-- **Next Step**: Delegate to `imc-verifier` to run verification tests.
-"#;
-
-pub const VERIFIER_AGENT_MD: &str = r#"---
-name: imc-verifier
-description: Proactively delegate to this agent after code changes to perform architectural verification, blast radius regression checks, packaging/dependency audits, and test execution. Read-only.
-tools: Read, Grep, Glob, Bash
-disallowedTools: Edit, Write
-maxTurns: 15
-color: orange
----
-
-You are the IMC Verifier agent. Your role is acting as an adversarial quality gatekeeper and architectural verifier before changes land.
-
-## Project Context
-- Primary working directory: {PROJECT_ROOT}
-- Always pass `-C "{PROJECT_ROOT}"` to imc CLI commands.
-
-## Core Rules
-1. Adversarial verification mindset: Green tests do NOT mean the change is safe. Assume the builder missed implicit dependencies, configuration side effects, or runtime integration contracts. Seek out ways this change could trigger incidents or break clean checkouts.
-2. Implicit dependencies & packaging audit:
-   - When `.gitignore`, build scripts, or asset directories are touched, verify whether embedded resource macros (`RustEmbed`, `include_bytes!`, `include_str!`) depend on those files.
-   - Guard against Local State Bias: Verify whether success relies on untracked local cache, temporary files, or stale artifacts on disk that a fresh clone would lack.
-3. Blast radius & contract integrity:
-   - For every modified function or structure, run standalone `imc trace <modified_symbol> --callers --depth 3` via Bash with `-C "{PROJECT_ROOT}"`.
-   - Verify that all upstream call sites satisfy the updated assumptions.
-4. Reality-grounded test execution:
-   - Run compilation diagnostics, linters, and full test suites.
-   - Inspect `git status` and `git diff`: Ensure zero stray temporary artifacts, uncommitted dependencies, or accidental file deletions.
-5. Standalone commands only: Never pipe or chain commands with `&&`, `|`, or `;`. Always pass `-C "{PROJECT_ROOT}"` to imc commands. Compound shell commands trigger Auto Mode safety denials.
-
-## Output Contract
-Return ONLY:
-- **Architectural Risk Assessment**: SAFE or RISKS DETECTED (implicit dependencies, build packaging, and environment biases)
-- **Blast Radius Audit**: Upstream callers verified via `imc trace` and confirmed compatible
-- **Verification Execution**: Exact test/lint command run and output status (PASS or shortest decisive failure trace)
-- **Workspace Status**: CLEAN or DIRTY (any stray/untracked files)
-- **Verdict**: APPROVED (only if all checks pass) or REJECTED (with concrete incident scenario and failure evidence)
-- **Next Step**: Task complete if APPROVED. Otherwise, return failure trace and incident scenario to `imc-builder`.
-"#;
-
-/// Write the standard set of 4 full-flow harness agents to `.claude/agents/`
-/// and register `.claude/agents/` in `.git/info/exclude` to preserve local hygiene.
-pub fn write_imc_agents(project_root: &Path) -> Result<Vec<PathBuf>> {
-    let agents_dir = project_root.join(".claude").join("agents");
-    std::fs::create_dir_all(&agents_dir)
-        .with_context(|| format!("create {}", agents_dir.display()))?;
-
-    let root_str = project_root.to_string_lossy();
-    let agents = [
-        ("imc-scout.md", SCOUT_AGENT_MD.replace("{PROJECT_ROOT}", &root_str)),
-        ("imc-planner.md", PLANNER_AGENT_MD.replace("{PROJECT_ROOT}", &root_str)),
-        ("imc-builder.md", BUILDER_AGENT_MD.replace("{PROJECT_ROOT}", &root_str)),
-        ("imc-verifier.md", VERIFIER_AGENT_MD.replace("{PROJECT_ROOT}", &root_str)),
-    ];
-
-    let mut written = Vec::new();
-    for (filename, content) in agents {
-        let path = agents_dir.join(filename);
-        std::fs::write(&path, &content).with_context(|| format!("write {}", path.display()))?;
-        written.push(path);
-    }
-
-    // Exclude .claude/agents/ from git tracking locally via .git/info/exclude
-    let _ = ensure_git_exclude(project_root, ".claude/agents/");
-
-    Ok(written)
 }
 
 /// Ensure an entry exists in `.git/info/exclude` without duplicating lines.
@@ -702,8 +527,6 @@ pub fn setup_and_start(
     log.push(format!("wrote {}", settings.display()));
     let rule = write_imc_rule(root)?;
     log.push(format!("wrote {}", rule.display()));
-    let agents = write_imc_agents(root)?;
-    log.push(format!("wrote {} harness subagents to .claude/agents/", agents.len()));
     // An older setup wrote a block into CLAUDE.md. That block is a stale
     // second copy of the rule; leaving it there means the agent reads the
     // old instructions.
@@ -775,7 +598,6 @@ pub fn run_claude_bin(cfg: &Config, root: &Path, args: &[String]) -> Result<()> 
     // too — wiring is cheap, and a stale rule is worse than a fresh one.
     let _ = write_claude_settings(root, 12345)?;
     let _ = write_imc_rule(root)?;
-    let _ = write_imc_agents(root)?;
     let _ = remove_legacy_claude_md_block(root)?;
 
     let exe = which_claude_bin()?;
@@ -873,70 +695,6 @@ pub fn print_stderr(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn write_imc_agents_creates_all_subagents_and_excludes_git() {
-        let root = std::env::temp_dir().join(format!("imc-agents-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-
-        // Create dummy .git directory
-        let git_dir = root.join(".git");
-        std::fs::create_dir_all(&git_dir).unwrap();
-
-        let agents = write_imc_agents(&root).unwrap();
-        assert_eq!(agents.len(), 4);
-
-        for name in ["imc-scout.md", "imc-planner.md", "imc-builder.md", "imc-verifier.md"] {
-            let p = root.join(".claude").join("agents").join(name);
-            assert!(p.exists(), "missing agent file: {name}");
-            let text = std::fs::read_to_string(&p).unwrap();
-            assert!(text.starts_with("---\nname: "), "must contain YAML frontmatter: {name}");
-            if name != "imc-builder.md" {
-                assert!(text.contains("maxTurns: "), "must specify maxTurns: {name}");
-            } else {
-                assert!(!text.contains("maxTurns"), "imc-builder must not cap maxTurns");
-            }
-            assert!(text.contains("## Output Contract"), "must define output contract: {name}");
-            assert!(text.contains("- **Next Step**:"), "must define next step handoff: {name}");
-            assert!(
-                text.contains(&format!("Primary working directory: {}", root.to_string_lossy())),
-                "must carry project root context: {name}"
-            );
-        }
-
-        let scout_text = std::fs::read_to_string(root.join(".claude").join("agents").join("imc-scout.md")).unwrap();
-        assert!(!scout_text.contains("omitClaudeMd"));
-
-        let planner_text = std::fs::read_to_string(root.join(".claude").join("agents").join("imc-planner.md")).unwrap();
-        assert!(!planner_text.contains("omitClaudeMd"));
-
-        let verifier_text = std::fs::read_to_string(root.join(".claude").join("agents").join("imc-verifier.md")).unwrap();
-        assert!(verifier_text.contains("Implicit dependencies & packaging audit"));
-        assert!(verifier_text.contains("maxTurns: 15"));
-
-        let exclude = git_dir.join("info").join("exclude");
-        assert!(exclude.exists());
-        let text = std::fs::read_to_string(&exclude).unwrap();
-        assert!(text.contains(".claude/agents/"));
-
-        // Running again is idempotent and doesn't duplicate lines in exclude
-        let _ = write_imc_agents(&root).unwrap();
-        let text2 = std::fs::read_to_string(&exclude).unwrap();
-        assert_eq!(text2.matches(".claude/agents/").count(), 1);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn imc_rule_md_mentions_subagent_harness() {
-        let rule = imc_rule_md();
-        assert!(rule.contains("Autonomous Subagent Harness"));
-        assert!(rule.contains("imc-scout"));
-        assert!(rule.contains("imc-planner"));
-        assert!(rule.contains("imc-builder"));
-        assert!(rule.contains("imc-verifier"));
-    }
 
     #[test]
     fn write_claude_settings_adds_permissions_allow() {

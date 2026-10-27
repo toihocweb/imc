@@ -685,21 +685,6 @@ def suite_claude(root, data):
 
     check("F5 the rule does not mention MCP", no_mcp_in_rule)
 
-    def writes_agents_and_excludes():
-        run_imc(["setup", "--no-proxy"], root, data)
-        agents_dir = root / ".claude" / "agents"
-        for name in ["imc-scout.md", "imc-planner.md", "imc-builder.md", "imc-verifier.md"]:
-            f = agents_dir / name
-            assert f.exists(), f"missing agent {name}"
-            content = f.read_text()
-            assert "name: " in content and "description: " in content, content[:100]
-        exclude = root / ".git" / "info" / "exclude"
-        if exclude.exists():
-            assert ".claude/agents/" in exclude.read_text()
-        return "4 harness subagents written and git excluded"
-
-    check("F6 setup writes 4 harness subagents into .claude/agents", writes_agents_and_excludes)
-
 
 # -- G. config -----------------------------------------------------------------
 def suite_config():
