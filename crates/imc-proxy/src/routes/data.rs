@@ -577,6 +577,51 @@ async fn compression_list(Query(q): Query<HashMap<String, String>>) -> Response 
     Json(json!(out)).into_response()
 }
 
+async fn compression_delete(Query(q): Query<HashMap<String, String>>) -> Response {
+    let db = crate::compression::context::ccr_db_path();
+    let mut store = match crate::compression::ccr_store::CcrStore::open(&db) {
+        Ok(s) => s,
+        Err(e) => return error(format!("{e:#}")),
+    };
+    if let Some(id) = q.get("id") {
+        return match store.delete(id) {
+            Ok(n) => Json(json!({ "deleted": n })).into_response(),
+            Err(e) => error(format!("{e:#}")),
+        };
+    }
+    if let Some(days_str) = q.get("days") {
+        if let Ok(days) = days_str.parse::<i64>() {
+            return match store.prune_older_than_days(days) {
+                Ok(n) => Json(json!({ "deleted": n })).into_response(),
+                Err(e) => error(format!("{e:#}")),
+            };
+        }
+    }
+    if let Some(hours_str) = q.get("hours") {
+        if let Ok(hours) = hours_str.parse::<i64>() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            return match store.prune_before(now - hours * 3600) {
+                Ok(n) => Json(json!({ "deleted": n })).into_response(),
+                Err(e) => error(format!("{e:#}")),
+            };
+        }
+    }
+    if as_bool(q.get("all")) {
+        return match store.clear() {
+            Ok(n) => Json(json!({ "deleted": n })).into_response(),
+            Err(e) => error(format!("{e:#}")),
+        };
+    }
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "specify id, days, hours, or all=true" })),
+    )
+        .into_response()
+}
+
 
 // ---------------------------------------------------------------------------
 // GET /api/config/test
@@ -822,7 +867,7 @@ pub fn router() -> Router {
         .route("/api/models", get(models))
         .route("/api/model-map", get(model_map_get).post(model_map_post).delete(model_map_delete))
         .route("/api/compression/stats", get(compression_stats))
-        .route("/api/compression", get(compression_list))
+        .route("/api/compression", get(compression_list).delete(compression_delete))
         .route("/api/compress", post(compress))
         .route("/api/captures", get(captures_get).post(captures_post))
 }
@@ -931,6 +976,22 @@ mod tests {
                 axum::http::Request::builder()
                     .method("DELETE")
                     .uri("/api/memory")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn compression_delete_without_params_is_bad_request() {
+        let app = router();
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/api/compression")
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )

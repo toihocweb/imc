@@ -170,6 +170,21 @@ impl CcrStore {
             - days * 86_400;
         self.prune_before(cutoff)
     }
+
+    /// Delete a single record by id.
+    pub fn delete(&mut self, id: &str) -> Result<usize> {
+        let n = self.conn.execute(
+            "DELETE FROM ccr_originals WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(n)
+    }
+
+    /// Clear all stored originals.
+    pub fn clear(&mut self) -> Result<usize> {
+        let n = self.conn.execute("DELETE FROM ccr_originals", [])?;
+        Ok(n)
+    }
 }
 
 #[derive(Debug, Clone)]

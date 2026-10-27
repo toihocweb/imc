@@ -22,9 +22,6 @@ import {
   Filter,
   Sparkles,
   Database,
-  Layers,
-  FileDiff,
-  Terminal,
   AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -36,7 +33,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useProject } from "@/components/project-context";
-import { formatNumber, formatBytes } from "@/lib/format";
+import { formatNumber, formatBytes, formatTimestamp } from "@/lib/format";
 
 export type WorkbenchTab = "search" | "trace" | "compression" | "memory";
 
@@ -106,68 +103,6 @@ interface MemoryEntry {
 const MEM_TYPES = ["work_fact", "work_task", "work_method", "work_artifact", "business_rule", "note"];
 const CATEGORIES = ["note", "rule", "convention", "work_fact"];
 
-const PRESETS = [
-  {
-    name: "Cargo Build Log",
-    icon: Terminal,
-    text: `Compiling serde v1.0.210
-Compiling tokio v1.40.0
-Compiling axum v0.7.5
-error[E0425]: cannot find value \`undefined_variable\` in this scope
-  --> src/main.rs:18:5
-   |
-18 |     undefined_variable.run();
-   |     ^^^^^^^^^^^^^^^^^^ not found in this scope
-For more information about this error, try \`rustc --explain E0425\`.
-error: could not compile \`my_project\` (bin \`my_project\`) due to 1 previous error`,
-  },
-  {
-    name: "Git Diff",
-    icon: FileDiff,
-    text: `diff --git a/src/auth.ts b/src/auth.ts
-index e69de29..d95f3ad 100644
---- a/src/auth.ts
-+++ b/src/auth.ts
-@@ -10,6 +10,8 @@ export async function verifySession(token: string) {
-     if (!token) return null;
-+    const decoded = jwt.verify(token, SECRET);
-+    return decoded;
--    return false;
- }`,
-  },
-  {
-    name: "JSON Array",
-    icon: Layers,
-    text: JSON.stringify(
-      Array.from({ length: 45 }, (_, i) => ({
-        id: i + 1,
-        title: `Task item ${i + 1}`,
-        status: i === 7 ? "error_failed" : "success",
-        timestamp: "2026-10-21T10:00:00Z",
-      })),
-      null,
-      2
-    ),
-  },
-  {
-    name: "TypeScript Code",
-    icon: FileCode,
-    text: `// Service initialization helper
-export function initService() {
-    const baseUrl = \`https://api.internal/v1\`;
-    const wsUrl = \`wss://stream.internal/live\`;
-    return { baseUrl, wsUrl };
-}
-
-// Service initialization helper
-export function initService() {
-    const baseUrl = \`https://api.internal/v1\`;
-    const wsUrl = \`wss://stream.internal/live\`;
-    return { baseUrl, wsUrl };
-}`,
-  },
-];
-
 export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -196,12 +131,9 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
   const [copiedTraceId, setCopiedTraceId] = useState<string | null>(null);
 
   // Compression State
-  const [compText, setCompText] = useState("");
-  const [compOutput, setCompOutput] = useState("");
   const [ccrStats, setCcrStats] = useState<CcrStats | null>(null);
   const [ccrList, setCcrList] = useState<CcrEntry[]>([]);
-  const [compLoading, setCompLoading] = useState(false);
-  const [compError, setCompError] = useState<string | null>(null);
+  const [ccrDeleting, setCcrDeleting] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<CcrEntry | null>(null);
   const [copiedKind, setCopiedKind] = useState<string | null>(null);
 
@@ -290,36 +222,31 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
     try {
       const [s, l] = await Promise.all([
         fetch(`/api/compression/stats?root=${encodeURIComponent(root)}`).then((x) => x.json()),
-        fetch(`/api/compression?root=${encodeURIComponent(root)}&limit=30`).then((x) => x.json()),
+        fetch(`/api/compression?root=${encodeURIComponent(root)}&limit=50`).then((x) => x.json()),
       ]);
       if (!s.error) setCcrStats(s);
       setCcrList(Array.isArray(l) ? l : []);
     } catch (err: any) {
-      setCompError(err.message);
+      console.error(err);
     }
   };
 
-  const handleCompress = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!compText.trim() || !selectedPath) return;
-    setCompLoading(true);
-    setCompError(null);
+  const handleDeleteCcr = async (params: { all?: boolean; days?: number; id?: string }) => {
+    if (!selectedPath) return;
+    if (params.all && !confirm("Delete ALL stored originals?")) return;
+    if (params.days && !confirm(`Delete stored originals older than ${params.days} days?`)) return;
+    setCcrDeleting(true);
     try {
-      const res = await fetch("/api/compress", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: compText, root: selectedPath }),
-      });
-      const data = await res.json();
-      if (data.error) setCompError(data.error);
-      else {
-        setCompOutput(data.compressed || "");
-        refreshCcr(selectedPath);
-      }
+      const q = new URLSearchParams();
+      if (params.all) q.set("all", "true");
+      if (params.days) q.set("days", String(params.days));
+      if (params.id) q.set("id", params.id);
+      await fetch(`/api/compression?${q.toString()}`, { method: "DELETE" });
+      await refreshCcr(selectedPath);
     } catch (err: any) {
-      setCompError(err.message);
+      console.error(err);
     } finally {
-      setCompLoading(false);
+      setCcrDeleting(false);
     }
   };
 
@@ -867,113 +794,60 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
 
           <Card className="border-border/80 shadow-xs">
             <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
-              <CardTitle className="text-sm font-semibold flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-primary" /> Live Compression Simulator
-                </span>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] text-muted-foreground hidden sm:inline mr-1">Load preset:</span>
-                  {PRESETS.map((preset) => {
-                    const Icon = preset.icon;
-                    return (
-                      <button
-                        key={preset.name}
-                        type="button"
-                        onClick={() => {
-                          setCompText(preset.text);
-                          setCompOutput("");
-                        }}
-                        className="inline-flex items-center gap-1 rounded bg-muted px-2 py-1 text-[11px] font-medium text-foreground hover:bg-accent transition-colors cursor-pointer"
-                      >
-                        <Icon className="h-3 w-3 text-primary" />
-                        <span>{preset.name}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-5">
-              <form onSubmit={handleCompress} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span className="font-medium">Raw Payload Input</span>
-                      <span className="font-mono">{formatNumber(compText.length)} chars</span>
-                    </div>
-                    <Textarea
-                      placeholder="Paste build logs, git diffs, JSON arrays, or code here..."
-                      value={compText}
-                      onChange={(e) => setCompText(e.target.value)}
-                      rows={8}
-                      className="font-mono text-xs leading-relaxed"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span className="font-medium">Compressed Output (Simulated)</span>
-                      {compOutput && (
-                        <span className="font-mono text-emerald-500 font-semibold">
-                          {formatNumber(compOutput.length)} chars ({Math.max(0, Math.round((1 - compOutput.length / compText.length) * 100))}% saved)
-                        </span>
-                      )}
-                    </div>
-                    <div className="relative rounded-lg border border-border bg-background/80 p-3 h-[196px] overflow-auto scroll-thin font-mono text-xs leading-relaxed text-foreground/90">
-                      {compOutput ? (
-                        <pre className="whitespace-pre-wrap">{compOutput}</pre>
-                      ) : (
-                        <span className="text-muted-foreground/60 italic text-xs">
-                          Run compression to preview the result and token reduction...
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between pt-1">
-                  <Button type="submit" disabled={compLoading || !compText.trim()} className="px-5 text-xs font-semibold cursor-pointer">
-                    {compLoading ? "Compressing..." : "Compress Payload"}
-                  </Button>
-                  {compOutput && (
-                    <button
-                      type="button"
-                      onClick={() => copyToClipboard(compOutput, "live")}
-                      className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                    >
-                      {copiedKind === "live" ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                      <span>Copy compressed output</span>
-                    </button>
-                  )}
-                </div>
-              </form>
-            </CardContent>
-          </Card>
-
-          <Card className="border-border/80 shadow-xs">
-            <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
-              <CardTitle className="text-sm font-semibold flex items-center justify-between">
-                <span className="flex items-center gap-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
                   <Database className="h-4 w-4 text-primary" /> Stored Originals ({formatNumber(ccrList.length)})
-                </span>
-                {ccrStats && (
-                  <span className="text-xs text-muted-foreground font-mono">
-                    Storage: {formatBytes(ccrStats.db_bytes)}
-                  </span>
-                )}
-              </CardTitle>
+                  {ccrStats && (
+                    <span className="text-xs text-muted-foreground font-mono font-normal ml-1">
+                      ({formatBytes(ccrStats.db_bytes)})
+                    </span>
+                  )}
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={ccrDeleting || ccrList.length === 0}
+                    onClick={() => handleDeleteCcr({ days: 7 })}
+                    className="h-7 px-2.5 text-[11px] font-medium text-muted-foreground hover:text-foreground cursor-pointer"
+                    title="Delete records older than 7 days"
+                  >
+                    Prune &gt;7d
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={ccrDeleting || ccrList.length === 0}
+                    onClick={() => handleDeleteCcr({ days: 1 })}
+                    className="h-7 px-2.5 text-[11px] font-medium text-muted-foreground hover:text-foreground cursor-pointer"
+                    title="Delete records older than 1 day"
+                  >
+                    Prune &gt;1d
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={ccrDeleting || ccrList.length === 0}
+                    onClick={() => handleDeleteCcr({ all: true })}
+                    className="h-7 px-2.5 text-[11px] font-medium cursor-pointer"
+                    title="Delete all stored originals"
+                  >
+                    Clear All
+                  </Button>
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="p-0 overflow-x-auto scroll-thin">
               <Table>
                 <TableHeader>
                   <TableRow className="text-xs">
-                    <TableHead className="w-32">Handle ID</TableHead>
+                    <TableHead className="w-28">Handle ID</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead className="text-right">Original</TableHead>
                     <TableHead className="text-right">Compressed</TableHead>
                     <TableHead className="text-right">Reduction</TableHead>
                     <TableHead className="text-right">Recorded</TableHead>
-                    <TableHead className="w-16 text-center">Detail</TableHead>
+                    <TableHead className="w-20 text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody className="text-xs">
@@ -1001,19 +875,31 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
                           <TableCell className="text-right font-mono font-semibold text-emerald-500">
                             {reduction}
                           </TableCell>
-                          <TableCell className="text-right text-muted-foreground text-[11px] font-mono">
-                            {e.created_at ? new Date(e.created_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}
+                          <TableCell className="text-right text-muted-foreground text-[11px] font-mono whitespace-nowrap">
+                            {formatTimestamp(e.created_at)}
                           </TableCell>
                           <TableCell className="text-center">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground cursor-pointer"
-                              title="View Details"
-                              onClick={() => setSelectedRecord(e)}
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                            </Button>
+                            <div className="flex items-center justify-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground cursor-pointer"
+                                title="View Details"
+                                onClick={() => setSelectedRecord(e)}
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={ccrDeleting}
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive cursor-pointer"
+                                title="Delete record"
+                                onClick={() => handleDeleteCcr({ id: e.id })}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       );
