@@ -14,7 +14,5 @@ scripts/repo_guard.local.*
 usage.json
 node_modules/
 .next/
-/web-dashboard/out/*
-!/web-dashboard/out/.gitkeep
 dist/
 .DS_Store
