@@ -14,3 +14,4 @@ tree-sitter-rust.workspace = true
 tree-sitter-go.workspace = true
 tree-sitter-java.workspace = true
 anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }

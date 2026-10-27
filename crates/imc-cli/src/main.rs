@@ -282,6 +282,9 @@ enum Command {
         /// Print only the outline of symbols.
         #[arg(long)]
         symbols: bool,
+        /// Print the AST interface skeleton (signatures + types, bodies folded to { ... }).
+        #[arg(long, short = 's')]
+        skeleton: bool,
         /// Print only one method/function/class by name.
         #[arg(long)]
         method: Option<String>,
@@ -1505,7 +1508,7 @@ fn main() -> Result<()> {
                 };
             }
         },
-        Command::Read { file, symbols, method, offset, limit, raw } => {
+        Command::Read { file, symbols, skeleton, method, offset, limit, raw } => {
             // The reader opens the path as given, which is cwd-relative like
             // Python (where the cwd is always inside the project). With an
             // explicit `-C <root>` the cwd may be elsewhere, and the instruction
@@ -1534,6 +1537,7 @@ fn main() -> Result<()> {
                     .as_deref()
                     .map(|m| &*Box::leak(m.to_string().into_boxed_str())),
                 symbols: *symbols,
+                skeleton: *skeleton,
             };
             // `--json read` must stay machine-readable (the global --json flag
             // promises JSON for every command).
@@ -1543,6 +1547,16 @@ fn main() -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("[imc read] Failed to read {}: {e}", path.display()))?;
                 let outline = imc_find::find::outline_symbols_struct(&text, path);
                 println!("{}", serde_json::to_string_pretty(&outline)?);
+                return Ok(());
+            }
+
+            if cli.json && *skeleton && !*raw {
+                let path = Path::new(&file);
+                let text = std::fs::read_to_string(path)
+                    .map_err(|e| anyhow::anyhow!("[imc read] Failed to read {}: {e}", path.display()))?;
+                let rel = path.to_string_lossy();
+                let lines = imc_parser::skeleton::generate_skeleton_lines(&rel, &text).unwrap_or_default();
+                println!("{}", serde_json::to_string_pretty(&lines)?);
                 return Ok(());
             }
 

@@ -4,6 +4,7 @@
 
 pub mod chunker;
 pub mod context;
+pub mod skeleton;
 
 use tree_sitter::{Node, Parser};
 

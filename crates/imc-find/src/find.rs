@@ -43,6 +43,7 @@ pub struct FindOptions {
     pub raw: bool,
     pub method: Option<&'static str>,
     pub symbols: bool,
+    pub skeleton: bool,
 }
 
 /// Port of `run_find`. Returns the string the caller should print.
@@ -74,6 +75,30 @@ pub fn run_find(file_path: &str, opts: FindOptions) -> Result<String> {
         } else {
             outline
         });
+    }
+
+    // ── Skeleton mode: AST interface skeleton with folded bodies ─────────────
+    if opts.skeleton {
+        let text = String::from_utf8_lossy(&raw_bytes);
+        let rel = path.to_string_lossy();
+        if let Some(mut lines) = imc_parser::skeleton::generate_skeleton_lines(&rel, &text) {
+            if let Some(offset) = opts.offset {
+                if offset < lines.len() {
+                    lines = lines.split_off(offset);
+                } else {
+                    lines.clear();
+                }
+            }
+            if let Some(limit) = opts.limit {
+                lines.truncate(limit);
+            }
+            let out: Vec<String> = lines
+                .iter()
+                .map(|l| format!("{}\t{}", l.line_number, l.content))
+                .collect();
+            return Ok(out.join("\n"));
+        }
+        return Ok(process_text(&raw_bytes, &path, opts.limit, opts.offset));
     }
 
     // ── Method mode: extract the named function/method via tree-sitter ───────
@@ -1269,5 +1294,17 @@ mod tests {
         std::fs::write(&p, src).unwrap();
         let out = extract_method(src, &p, "zzzz_missing");
         assert!(out.contains("not found"), "{out}");
+    }
+
+    #[test]
+    fn run_find_skeleton_folds_function_body() {
+        let p = write_temp("skel.rs", "pub fn calculate(a: i32) -> i32 {\n    let b = a * 2;\n    b + 1\n}\n");
+        let out = run_find(
+            p.to_str().unwrap(),
+            FindOptions { skeleton: true, ..Default::default() },
+        )
+        .unwrap();
+        assert!(out.contains("pub fn calculate(a: i32) -> i32 { ... }"), "{out}");
+        assert!(!out.contains("let b = a * 2;"), "{out}");
     }
 }

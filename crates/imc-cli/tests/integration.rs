@@ -561,7 +561,7 @@ fn trace_carries_the_definition_and_the_graph_verb_is_gone() {
 #[test]
 fn the_rule_names_every_read_variant() {
     let rule = imc_cli::claude::imc_rule_md();
-    for flag in ["--symbols", "--method", "--offset", "-l "] {
+    for flag in ["--symbols", "--skeleton", "--method", "--offset", "-l "] {
         assert!(rule.contains(flag), "the rule misses `imc read {flag}`");
     }
 }

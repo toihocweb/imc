@@ -43,7 +43,7 @@ NEVER start writing code, editing files, or running destructive commands on an a
 
 1. **Orient**: Start with `imc pack "<task or feature>"` to get an all-in-one bundle of code chunks, call-graph connections, and repo conventions under a token budget.
 2. **Find**: Use `imc search "<query>" --raw` for direct ranked code chunks (bypasses LLM summarization). Use `--concise` for a quick 1-line overview.
-3. **Inspect**: Never read whole files. Run `imc read <file> --symbols` to see the outline, then `imc read <file> --method <name>` to read only the target function/method body.
+3. **Inspect**: Never read whole files. Run `imc read <file> --skeleton` to view API types and signatures, or `imc read <file> --symbols` for an outline, then `imc read <file> --method <name>` to read only the target function/method body.
 4. **Impact check**: Before editing or deleting any function, run `imc trace <symbol> --callers --depth 3` to reveal the exact blast radius.
 5. **Routes & Components**: Trace HTTP routes via `imc trace "GET /api/path"`, or inspect full component architecture via `imc context <file>`.
 
@@ -55,6 +55,7 @@ NEVER start writing code, editing files, or running destructive commands on an a
 | find code by concept or keyword | `imc search "<query>" --raw` |
 | quick 1-line match preview | `imc search "<query>" --concise` |
 | see file outline / list of methods | `imc read <file> --symbols` |
+| see signatures & types without bodies (~90% token saving) | `imc read <file> --skeleton` |
 | read one function/method/class body | `imc read <file> --method <name>` |
 | see what calls it before you change it | `imc trace <symbol> --callers --depth 3` |
 | see what it calls (execution flow) | `imc trace <symbol>` |
@@ -83,6 +84,7 @@ Use this instead of stacking manual search, read, and context calls.
 - `--json` — machine-readable hits.
 
 **`imc read <file>`** — the token-optimised reader.
+- `--skeleton` — the interface skeleton: types, signatures, and docstrings with function bodies folded to `{ ... }`. Use this first to grasp APIs without spending tokens on implementation details.
 - `--symbols` — the outline. Start here.
 - `--method <name>` — one symbol's body. **Use the real name from `--symbols`, including any leading underscore** (`_blended_score`, not `blended_score`).
 - `--offset N -l 200` — a line range, for files without symbols or unindexed sections.
