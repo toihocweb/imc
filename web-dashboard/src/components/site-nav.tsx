@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Boxes,
   LayoutDashboard,
   Layers,
   Search,
@@ -39,6 +38,52 @@ function isActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
+function ImcBrandIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 512 512"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      aria-hidden="true"
+    >
+      <rect
+        x="18"
+        y="18"
+        width="476"
+        height="476"
+        rx="108"
+        className="fill-card stroke-primary/40"
+        strokeWidth="16"
+      />
+      <path
+        d="M 185 165 L 115 256 L 185 347"
+        className="stroke-cyan-400"
+        strokeWidth="42"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <rect
+        x="236"
+        y="165"
+        width="40"
+        height="182"
+        rx="20"
+        className="fill-foreground"
+      />
+      <circle cx="256" cy="120" r="26" className="fill-cyan-400" />
+      <circle cx="256" cy="392" r="26" className="fill-primary" />
+      <path
+        d="M 327 165 L 397 256 L 327 347"
+        className="stroke-primary"
+        strokeWidth="42"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function SiteNav() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -61,8 +106,8 @@ export function SiteNav() {
             href="/"
             className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-accent/60"
           >
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary border border-primary/20">
-              <Boxes className="h-4 w-4" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg overflow-hidden shrink-0">
+              <ImcBrandIcon className="h-7 w-7" />
             </div>
             <div className="flex flex-col">
               <div className="flex items-center gap-1.5 leading-none">
