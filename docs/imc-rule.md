@@ -6,7 +6,7 @@ index, and a durable memory store. Prefer `imc` over blind Read/Grep.
 ## Critical: Understand & Clarify Before Coding (Clarification Gate)
 
 NEVER start writing code, editing files, or running destructive commands on an ambiguous or underspecified request. Follow this strict protocol before any implementation:
-1. **Investigate first**: Run `imc search "<query>" --raw` or `imc read <file> --symbols` to inspect existing code and architecture. Never ask questions that the codebase already answers.
+1. **Investigate first**: Run `imc search "<query>" --raw` or `imc read <file> --skeleton` (`-s`) to inspect existing code and architecture. Never ask questions that the codebase already answers.
 2. **Confirm understanding**: Present a concise 1-2 sentence summary of your technical understanding of the problem and desired outcome.
 3. **Ask clarifying questions**: If requirements, edge cases, error handling, or scope boundaries have any ambiguity, ask 1-3 direct, concrete questions (or provide options) and WAIT for confirmation before touching files.
 4. **Zero blind edits**: Do NOT call `Edit` or `Write` on the first turn of a new task without explicit confirmation or clear, unambiguous requirements.
@@ -57,9 +57,9 @@ Use this instead of stacking manual search, read, and context calls.
 - `--json` — machine-readable hits.
 
 **`imc read <file>`** — the token-optimised reader.
-- `--skeleton` — the interface skeleton: types, signatures, and docstrings with function bodies folded to `{ ... }`. Use this first to grasp APIs without spending tokens on implementation details.
-- `--symbols` — the outline. Start here.
-- `--method <name>` — one symbol's body. **Use the real name from `--symbols`, including any leading underscore** (`_blended_score`, not `blended_score`).
+- `--skeleton` (or `-s`) — **Primary reader**: types, structs, signatures, and docstrings with function bodies folded to `{ ... }` (~80-90% token saving). Always inspect files with `--skeleton` first before fetching individual bodies.
+- `--symbols` — quick outline for massive files (>1000 lines).
+- `--method <name>` — one symbol's body. **Use the real name from `--skeleton` or `--symbols`, including any leading underscore** (`_blended_score`, not `blended_score`).
 - `--offset N -l 200` — a line range, for files without symbols or unindexed sections.
 - `--json` — machine-readable.
 
@@ -86,7 +86,7 @@ When tool output is compressed with `[imc: ... full output is id <id>]`, run thi
 
 1. **Search before you edit.** Never invent an API, path, or line number.
 2. **Cite `path/to/file:L10-L25`** — and only a range you actually saw in an imc output.
-3. **No blind whole-file reads.** Outline with `imc read <file> --symbols` first, then fetch functions with `imc read <file> --method <name>`.
+3. **Never read whole files blindly.** Run `imc read <file> --skeleton` (`-s`) first to view all structs, types, interfaces, and function signatures with folded bodies. Only use `--symbols` for huge outlines (>1000 lines), then `imc read <file> --method <name>` to read specific function bodies.
 4. **Check blast radius before edits.** Run `imc trace <symbol> --callers` before modifying shared functions.
 5. **Ranked is not proven.** `imc trace` has no relevance floor: verify a hit before relying on it.
 6. **Empty means "not in the index"**, not "does not exist". Fall back to Read/Grep.
