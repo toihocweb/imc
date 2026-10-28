@@ -937,6 +937,114 @@ async fn usage_delete() -> Response {
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/connection/check
+// ---------------------------------------------------------------------------
+#[derive(serde::Deserialize)]
+struct ConnectionCheckPayload {
+    #[serde(default)]
+    secret: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    base_url: Option<String>,
+}
+
+async fn connection_check(Json(body): Json<ConnectionCheckPayload>) -> Response {
+    let key = body
+        .secret
+        .or(body.api_key)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    if key.is_empty() {
+        return bad_request("Secret / API key is required");
+    }
+
+    let base = body
+        .base_url
+        .map(|s| s.trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:6655".to_string());
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return error(format!("Failed to build client: {e}")),
+    };
+
+    let probes = [
+        format!("{base}/health"),
+        format!("{base}/v1/models"),
+        format!("{base}/models"),
+        format!("{base}/anthropic/v1/models"),
+        format!("{base}/"),
+    ];
+
+    let mut last_err = String::new();
+
+    for url in &probes {
+        let resp = client
+            .get(url)
+            .header("Authorization", format!("Bearer {key}"))
+            .header("x-api-key", &key)
+            .send()
+            .await;
+
+        match resp {
+            Ok(r) => {
+                let status = r.status().as_u16();
+                if status == 401 || status == 403 {
+                    return Json(json!({
+                        "ok": false,
+                        "status": status,
+                        "error": format!("Hyperspace tại cổng 6655 từ chối secret (HTTP {status} Unauthorized). Vui lòng kiểm tra lại API key."),
+                    }))
+                    .into_response();
+                }
+                if (200..300).contains(&status) {
+                    // Persist to imc settings
+                    let mut s = imc_core::settings::load();
+                    let _ = imc_core::settings::set(&mut s, "llm.api_key", &key);
+                    if s.llm
+                        .as_ref()
+                        .and_then(|l| l.base_url.as_ref())
+                        .map(|b| b.is_empty())
+                        .unwrap_or(true)
+                    {
+                        let _ = imc_core::settings::set(
+                            &mut s,
+                            "llm.base_url",
+                            &format!("{base}/anthropic"),
+                        );
+                    }
+                    let _ = imc_core::settings::save(&s);
+
+                    return Json(json!({
+                        "ok": true,
+                        "status": status,
+                        "endpoint": url,
+                        "message": "Kết nối Hyperspace thành công!",
+                    }))
+                    .into_response();
+                }
+                last_err = format!("HTTP {status} from {url}");
+            }
+            Err(e) => {
+                last_err = format!("{e}");
+            }
+        }
+    }
+
+    Json(json!({
+        "ok": false,
+        "error": format!("Không thể kết nối tới Hyperspace tại cổng 6655: {last_err}. Hãy đảm bảo tiến trình Hyperspace đang chạy trên port 6655."),
+    }))
+    .into_response()
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 pub fn router() -> Router {
@@ -956,6 +1064,7 @@ pub fn router() -> Router {
         .route("/api/compress", post(compress))
         .route("/api/captures", get(captures_get).post(captures_post))
         .route("/api/usage", get(usage_get).delete(usage_delete))
+        .route("/api/connection/check", post(connection_check))
 }
 
 #[cfg(test)]
@@ -1080,6 +1189,23 @@ mod tests {
                     .method("DELETE")
                     .uri("/api/compression")
                     .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn connection_check_without_secret_is_bad_request() {
+        let app = router();
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/connection/check")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from("{}"))
                     .unwrap(),
             )
             .await

@@ -5,6 +5,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ProjectProvider } from "@/components/project-context";
 import { SiteNav } from "@/components/site-nav";
 import { ConfigBanner } from "@/components/config-banner";
+import { ConnectionGate } from "@/components/connection-gate";
 
 export const metadata: Metadata = {
   title: "IMC",
@@ -42,12 +43,14 @@ export default function RootLayout({
       <body className="min-h-dvh bg-background text-foreground antialiased selection:bg-primary/20 selection:text-primary">
         <ThemeProvider>
           <ProjectProvider>
-            <SiteNav />
-            <ConfigBanner />
-            <main className="mx-auto w-full max-w-[1500px] px-4 pb-16 pt-[4.25rem] sm:px-6 lg:px-8">
-              {children}
-            </main>
-            <Toaster />
+            <ConnectionGate>
+              <SiteNav />
+              <ConfigBanner />
+              <main className="mx-auto w-full max-w-[1500px] px-4 pb-16 pt-[4.25rem] sm:px-6 lg:px-8">
+                {children}
+              </main>
+              <Toaster />
+            </ConnectionGate>
           </ProjectProvider>
         </ThemeProvider>
       </body>

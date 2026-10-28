@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useProject } from "@/components/project-context";
+import { useConnection } from "@/components/connection-gate";
 import { formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -89,6 +90,7 @@ export function SiteNav() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const { projects, selectedPath, setSelectedPath } = useProject();
+  const { isConnected, disconnect } = useConnection();
 
   useEffect(() => {
     setMobileOpen(false);
@@ -216,6 +218,24 @@ export function SiteNav() {
 
         {/* Right utilities */}
         <div className="flex items-center gap-2">
+          {isConnected && (
+            <div
+              className="hidden sm:flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-500"
+              title="Hyperspace Port 6655 Connected"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Hyperspace 6655</span>
+              <button
+                type="button"
+                onClick={disconnect}
+                className="ml-1 text-muted-foreground hover:text-destructive cursor-pointer"
+                title="Ngắt kết nối / Đổi secret"
+              >
+                &times;
+              </button>
+            </div>
+          )}
+
           <ThemeToggle />
 
           {/* Mobile hamburger */}
