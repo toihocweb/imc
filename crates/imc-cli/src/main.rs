@@ -435,6 +435,12 @@ enum CcrAction {
         #[arg(long)]
         kind: Option<String>,
     },
+    /// Delete one record by ID.
+    #[command(alias = "rm")]
+    Delete {
+        /// Record ID to delete.
+        id: String,
+    },
     /// Delete everything (the originals are gone, handles stop resolving).
     Clear,
     /// Drop records older than N days (default 7).
@@ -1294,10 +1300,10 @@ fn main() -> Result<()> {
                             .collect();
                         println!("{}", serde_json::to_string(&rows)?);
                     } else {
-                        println!("{:<18} {:<12} {:>8} {:>8} {:>7}", "id", "kind", "in", "out", "saved");
+                        println!("{:<18} {:<12} {:>8} {:>8} {:>7}  {:<19}", "id", "kind", "in", "out", "saved", "recorded");
                         for e in &entries {
                             println!(
-                                "{:<18} {:<12} {:>8} {:>8} {:>6.0}%",
+                                "{:<18} {:<12} {:>8} {:>8} {:>6.0}%  {:<19}",
                                 e.id,
                                 e.kind,
                                 e.orig_tokens,
@@ -1306,9 +1312,18 @@ fn main() -> Result<()> {
                                     (e.orig_tokens - e.comp_tokens) as f64 / e.orig_tokens as f64 * 100.0
                                 } else {
                                     0.0
-                                }
+                                },
+                                format_epoch_seconds(e.created_at)
                             );
                         }
+                    }
+                }
+                CcrAction::Delete { id } => {
+                    let n = store.delete(&id)?;
+                    if n > 0 {
+                        println!("deleted record {id}");
+                    } else {
+                        println!("record {id} not found");
                     }
                 }
                 CcrAction::Clear => {
@@ -2252,10 +2267,39 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+fn format_epoch_seconds(secs: i64) -> String {
+    if secs <= 0 {
+        return "—".to_string();
+    }
+    #[cfg(unix)]
+    unsafe {
+        let t = secs as libc::time_t;
+        let mut tm: libc::tm = std::mem::zeroed();
+        if !libc::localtime_r(&t, &mut tm).is_null() {
+            return format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                tm.tm_year + 1900,
+                tm.tm_mon + 1,
+                tm.tm_mday,
+                tm.tm_hour,
+                tm.tm_min,
+                tm.tm_sec
+            );
+        }
+    }
+    format!("{secs}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use imc_core::types::SearchHit;
+
+    #[test]
+    fn format_epoch_seconds_produces_date_time_string() {
+        let s = format_epoch_seconds(1730000000);
+        assert!(s.contains('-') && s.contains(':'), "must be YYYY-MM-DD HH:mm:ss format: {s}");
+    }
 
     fn mock_hit(score: f64, len: usize) -> SearchHit {
         SearchHit {

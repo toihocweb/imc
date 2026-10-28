@@ -846,7 +846,7 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
                     <TableHead className="text-right">Original</TableHead>
                     <TableHead className="text-right">Compressed</TableHead>
                     <TableHead className="text-right">Reduction</TableHead>
-                    <TableHead className="text-right">Recorded</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Recorded Date</TableHead>
                     <TableHead className="w-20 text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -1082,7 +1082,7 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
                 </div>
                 {selectedRecord.created_at ? (
                   <span className="text-xs text-muted-foreground font-mono">
-                    {new Date(selectedRecord.created_at * 1000).toLocaleString()}
+                    {formatTimestamp(selectedRecord.created_at)}
                   </span>
                 ) : null}
               </div>
