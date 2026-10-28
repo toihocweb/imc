@@ -211,7 +211,9 @@ async fn memory_list(Query(q): Query<HashMap<String, String>>) -> Response {
         Ok(s) => s,
         Err(e) => return error(format!("{e:#}")),
     };
-    match imc_memory::list(&store, as_usize(q.get("limit"), 50)) {
+    let limit = as_usize(q.get("limit"), 500);
+    let offset = as_usize(q.get("offset"), 0);
+    match imc_memory::list_paged(&store, limit, offset) {
         Ok(items) => Json(json!(items)).into_response(),
         Err(e) => error(format!("{e:#}")),
     }
@@ -764,7 +766,7 @@ async fn memory_stats(Query(q): Query<HashMap<String, String>>) -> Response {
         return Json(json!({
             "project": root.display().to_string(),
             "total": 0, "active": 0, "pending": 0, "used": 0,
-            "hit_rate": 0.0, "avg_importance": 0.0, "db_bytes": 0,
+            "hit_rate": 0.0, "avg_importance": 0.0, "db_bytes": 0, "total_bytes": 0,
         }))
         .into_response();
     }
@@ -781,6 +783,9 @@ async fn memory_stats(Query(q): Query<HashMap<String, String>>) -> Response {
     } else {
         0.0
     };
+    let total_bytes: usize = all.iter().map(|m| {
+        m.content.len() + m.paths.iter().map(|p| p.len()).sum::<usize>() + m.tags.iter().map(|t| t.len()).sum::<usize>()
+    }).sum();
     let db_bytes = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
     Json(json!({
         "project": root.display().to_string(),
@@ -791,6 +796,7 @@ async fn memory_stats(Query(q): Query<HashMap<String, String>>) -> Response {
         "hit_rate": if total > 0 { used as f64 / total as f64 } else { 0.0 },
         "avg_importance": avg_importance,
         "db_bytes": db_bytes,
+        "total_bytes": total_bytes,
     }))
     .into_response()
 }

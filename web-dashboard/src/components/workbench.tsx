@@ -100,6 +100,18 @@ interface MemoryEntry {
   source: string;
 }
 
+interface MemoryStats {
+  project: string;
+  total: number;
+  active: number;
+  pending: number;
+  used: number;
+  hit_rate: number;
+  avg_importance: number;
+  db_bytes: number;
+  total_bytes?: number;
+}
+
 const MEM_TYPES = ["work_fact", "work_task", "work_method", "work_artifact", "business_rule", "note"];
 const CATEGORIES = ["note", "rule", "convention", "work_fact"];
 
@@ -139,6 +151,9 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
 
   // Memory State
   const [memories, setMemories] = useState<MemoryEntry[]>([]);
+  const [memStats, setMemStats] = useState<MemoryStats | null>(null);
+  const [memPage, setMemPage] = useState(1);
+  const MEM_PAGE_SIZE = 10;
   const [memContent, setMemContent] = useState("");
   const [memCategory, setMemCategory] = useState("rule");
   const [memType, setMemType] = useState("business_rule");
@@ -254,9 +269,12 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
   const loadMemories = async (root: string) => {
     if (!root) return;
     try {
-      const res = await fetch(`/api/memory?root=${encodeURIComponent(root)}`);
-      const data = await res.json();
-      setMemories(Array.isArray(data) ? data : []);
+      const [listRes, statsRes] = await Promise.all([
+        fetch(`/api/memory?root=${encodeURIComponent(root)}&limit=1000`).then((res) => res.json()),
+        fetch(`/api/memory/stats?root=${encodeURIComponent(root)}`).then((res) => res.json()),
+      ]);
+      setMemories(Array.isArray(listRes) ? listRes : []);
+      if (!statsRes.error) setMemStats(statsRes);
     } catch (err: any) {
       setMemError(err.message);
     }
@@ -282,6 +300,7 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
       const data = await res.json();
       if (data.success) {
         setMemContent("");
+        setMemPage(1);
         loadMemories(selectedPath);
       } else {
         setMemError(data.error || "Failed to record memory");
@@ -354,6 +373,12 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
     }
     return true;
   });
+
+  const filteredMemories = memories.filter((m) => memFilter === "all" || m.mem_type === memFilter);
+  const totalMemPages = Math.max(1, Math.ceil(filteredMemories.length / MEM_PAGE_SIZE));
+  const currentMemPage = Math.min(memPage, totalMemPages);
+  const pagedMemories = filteredMemories.slice((currentMemPage - 1) * MEM_PAGE_SIZE, currentMemPage * MEM_PAGE_SIZE);
+  const totalMemorySize = (memStats?.total_bytes ?? 0) > 0 ? (memStats?.total_bytes ?? 0) : (memStats?.db_bytes ?? 0);
 
   const renderTraceTree = (node: TraceNode, depth = 0): React.ReactNode => {
     const kids = [...(node.callees || []), ...(node.callers || [])];
@@ -969,99 +994,145 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
             </Card>
           )}
 
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-            <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border bg-card p-1 text-xs">
-              <Filter className="h-3.5 w-3.5 text-muted-foreground ml-1.5 mr-0.5" />
-              {[
-                { id: "all", label: "All Types" },
-                { id: "business_rule", label: "Business Rules" },
-                { id: "work_fact", label: "Work Facts" },
-                { id: "work_method", label: "Work Methods" },
-                { id: "note", label: "Notes" },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setMemFilter(tab.id)}
-                  className={`rounded-md px-2.5 py-1 font-medium transition-colors cursor-pointer ${
-                    memFilter === tab.id
-                      ? "bg-primary/15 text-primary font-semibold"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="text-xs text-muted-foreground font-mono">
-              {formatNumber(memories.filter((m) => memFilter === "all" || m.mem_type === memFilter).length)} memories
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            {memories
-              .filter((m) => memFilter === "all" || m.mem_type === memFilter)
-              .map((m) => (
-                <div
-                  key={m.id}
-                  className="glow-card group rounded-xl border border-border/80 bg-card p-4 transition-all hover:bg-card/90 flex items-start justify-between gap-4"
-                >
-                  <div className="space-y-2 flex-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="secondary" className="font-mono text-[11px] font-semibold">
-                        {m.mem_type}
-                      </Badge>
-                      <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                        {m.category}
-                      </Badge>
-                      {m.scene && (
-                        <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                          scene: {m.scene}
-                        </Badge>
-                      )}
-                      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                        <Flame className="h-3 w-3 text-amber-500" />
-                        used {formatNumber(m.use_count)}×
-                      </span>
-                      <span className="text-[11px] text-muted-foreground font-mono">
-                        · imp {m.importance.toFixed(2)}
-                      </span>
-                      <span className="text-[11px] text-muted-foreground ml-auto font-mono">
-                        #{m.id}
-                      </span>
-                    </div>
-
-                    <div className="text-sm text-foreground leading-relaxed break-words font-medium">
-                      {m.content}
-                    </div>
-
-                    {m.paths.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px] text-muted-foreground font-mono">
-                        <FileCode className="h-3 w-3 shrink-0" />
-                        {m.paths.map((p) => (
-                          <span key={p} className="rounded bg-muted px-1.5 py-0.5 truncate max-w-xs">
-                            {p}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 shrink-0 cursor-pointer"
-                    title={`Delete memory #${m.id}`}
-                    aria-label={`Delete memory #${m.id}`}
-                    disabled={deletingMemId === m.id}
-                    onClick={() => handleDeleteMemory(m.id)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+          <Card className="border-border/80 shadow-xs">
+            <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <Brain className="h-4 w-4 text-primary" /> Stored Memories ({formatNumber(memStats?.total ?? memories.length)})
+                  {totalMemorySize > 0 && (
+                    <span className="text-xs text-muted-foreground font-mono font-normal ml-1">
+                      ({formatBytes(totalMemorySize)})
+                    </span>
+                  )}
+                </CardTitle>
+                <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border bg-card p-1 text-xs">
+                  <Filter className="h-3.5 w-3.5 text-muted-foreground ml-1.5 mr-0.5" />
+                  {[
+                    { id: "all", label: "All Types" },
+                    { id: "business_rule", label: "Business Rules" },
+                    { id: "work_fact", label: "Work Facts" },
+                    { id: "work_method", label: "Work Methods" },
+                    { id: "note", label: "Notes" },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => {
+                        setMemFilter(tab.id);
+                        setMemPage(1);
+                      }}
+                      className={`rounded-md px-2.5 py-1 font-medium transition-colors cursor-pointer ${
+                        memFilter === tab.id
+                          ? "bg-primary/15 text-primary font-semibold"
+                          : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
                 </div>
-              ))}
-          </div>
+              </div>
+            </CardHeader>
+            <CardContent className="p-4 space-y-3">
+              {filteredMemories.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-border p-8 text-center text-xs text-muted-foreground">
+                  No durable memories recorded yet for this filter.
+                </div>
+              ) : (
+                pagedMemories.map((m) => (
+                  <div
+                    key={m.id}
+                    className="glow-card group rounded-xl border border-border/80 bg-card p-4 transition-all hover:bg-card/90 flex items-start justify-between gap-4"
+                  >
+                    <div className="space-y-2 flex-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="secondary" className="font-mono text-[11px] font-semibold">
+                          {m.mem_type}
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                          {m.category}
+                        </Badge>
+                        {m.scene && (
+                          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                            scene: {m.scene}
+                          </Badge>
+                        )}
+                        <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <Flame className="h-3 w-3 text-amber-500" />
+                          used {formatNumber(m.use_count)}×
+                        </span>
+                        <span className="text-[11px] text-muted-foreground font-mono">
+                          · imp {m.importance.toFixed(2)}
+                        </span>
+                        <span className="text-[11px] text-muted-foreground ml-auto font-mono">
+                          #{m.id}
+                        </span>
+                      </div>
+
+                      <div className="text-sm text-foreground leading-relaxed break-words font-medium">
+                        {m.content}
+                      </div>
+
+                      {m.paths.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px] text-muted-foreground font-mono">
+                          <FileCode className="h-3 w-3 shrink-0" />
+                          {m.paths.map((p) => (
+                            <span key={p} className="rounded bg-muted px-1.5 py-0.5 truncate max-w-xs">
+                              {p}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 shrink-0 cursor-pointer"
+                      title={`Delete memory #${m.id}`}
+                      aria-label={`Delete memory #${m.id}`}
+                      disabled={deletingMemId === m.id}
+                      onClick={() => handleDeleteMemory(m.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))
+              )}
+
+              {totalMemPages > 1 && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-border/60 text-xs text-muted-foreground">
+                  <span className="font-mono text-[11px]">
+                    Showing {Math.min((currentMemPage - 1) * MEM_PAGE_SIZE + 1, filteredMemories.length)}–
+                    {Math.min(currentMemPage * MEM_PAGE_SIZE, filteredMemories.length)} of {formatNumber(filteredMemories.length)} memories
+                  </span>
+                  <div className="flex items-center gap-2 self-end sm:self-auto">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={currentMemPage <= 1}
+                      onClick={() => setMemPage((p) => Math.max(1, p - 1))}
+                      className="h-7 px-2.5 text-xs cursor-pointer"
+                    >
+                      Previous
+                    </Button>
+                    <span className="font-mono text-xs px-2">
+                      {currentMemPage} / {totalMemPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={currentMemPage >= totalMemPages}
+                      onClick={() => setMemPage((p) => Math.min(totalMemPages, p + 1))}
+                      className="h-7 px-2.5 text-xs cursor-pointer"
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 

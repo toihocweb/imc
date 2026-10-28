@@ -482,12 +482,16 @@ pub fn promote_pending(store: &Store, query: &str) -> Result<usize> {
 }
 
 pub fn list(store: &Store, limit: usize) -> Result<Vec<Memory>> {
+    list_paged(store, limit, 0)
+}
+
+pub fn list_paged(store: &Store, limit: usize, offset: usize) -> Result<Vec<Memory>> {
     ensure_schema(store)?;
     let mut stmt = store.conn.prepare(
         "SELECT id, content, mem_type, scene, category, paths, tags, importance, use_count, created_at, last_used, source, state
-         FROM memories ORDER BY importance DESC, created_at DESC LIMIT ?1",
+         FROM memories ORDER BY importance DESC, created_at DESC LIMIT ?1 OFFSET ?2",
     )?;
-    let rows = stmt.query_map(params![limit as i64], row_to_memory)?;
+    let rows = stmt.query_map(params![limit as i64, offset as i64], row_to_memory)?;
     Ok(rows.flatten().collect())
 }
 
