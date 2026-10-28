@@ -16,3 +16,7 @@ clean-update:
     cargo build --release -j 2 -p imc-cli
     ./target/release/imc install
     rm -rf target/release/incremental
+
+# Tao ban release GitHub qua scripts/release-macos.sh
+release *ARGS:
+    ./scripts/release-macos.sh {{ ARGS }}
