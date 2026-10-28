@@ -886,8 +886,16 @@ async fn usage_get() -> Response {
     for r in &records {
         let model = r.get("model").and_then(Value::as_str).unwrap_or("unknown");
         let u = r.get("usage").unwrap_or(&Value::Null);
-        let inp = u.get("input_tokens").and_then(Value::as_i64).unwrap_or(0);
-        let out = u.get("output_tokens").and_then(Value::as_i64).unwrap_or(0);
+        let inp = u
+            .get("input_tokens")
+            .or_else(|| u.get("prompt_tokens"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let out = u
+            .get("output_tokens")
+            .or_else(|| u.get("completion_tokens"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
         let cr = u.get("cache_read_input_tokens").and_then(Value::as_i64).unwrap_or(0);
         let cc = u.get("cache_creation_input_tokens").and_then(Value::as_i64).unwrap_or(0);
 
@@ -999,7 +1007,7 @@ async fn connection_check(Json(body): Json<ConnectionCheckPayload>) -> Response 
                     return Json(json!({
                         "ok": false,
                         "status": status,
-                        "error": format!("Hyperspace tại cổng 6655 từ chối secret (HTTP {status} Unauthorized). Vui lòng kiểm tra lại API key."),
+                        "error": format!("Hyperspace on port 6655 rejected secret (HTTP {status} Unauthorized). Please verify your API key."),
                     }))
                     .into_response();
                 }
@@ -1025,7 +1033,7 @@ async fn connection_check(Json(body): Json<ConnectionCheckPayload>) -> Response 
                         "ok": true,
                         "status": status,
                         "endpoint": url,
-                        "message": "Kết nối Hyperspace thành công!",
+                        "message": "Hyperspace connection verified successfully!",
                     }))
                     .into_response();
                 }
@@ -1039,7 +1047,7 @@ async fn connection_check(Json(body): Json<ConnectionCheckPayload>) -> Response 
 
     Json(json!({
         "ok": false,
-        "error": format!("Không thể kết nối tới Hyperspace tại cổng 6655: {last_err}. Hãy đảm bảo tiến trình Hyperspace đang chạy trên port 6655."),
+        "error": format!("Could not connect to Hyperspace on port 6655: {last_err}. Please ensure Hyperspace is running on port 6655."),
     }))
     .into_response()
 }

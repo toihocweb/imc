@@ -627,9 +627,9 @@ def suite_memory(vectors, root, data):
 # -- F. claude wiring ----------------------------------------------------------
 def suite_claude(root, data):
     def writes_settings():
-        run_imc(["setup", "--no-proxy", "--port", "12345"], root, data)
+        run_imc(["setup", "--no-proxy", "--port", "35711"], root, data)
         s = json.loads((root / ".claude" / "settings.local.json").read_text())
-        assert s["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:12345", s
+        assert s["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:35711", s
         assert s["env"]["ANTHROPIC_MODEL"] == "claude-pro-max", s
         return "base_url points at the proxy"
 
@@ -672,8 +672,9 @@ def suite_claude(root, data):
         run_imc(["setup", "--no-proxy"], root, data)
         after = json.loads(p.read_text())
         assert after["env"]["MY_TOKEN"] == "keep-me", after
-        assert after["permissions"] == {"allow": ["Bash"]}, after
-        assert after["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:12345"
+        assert after["permissions"]["allow"] == ["Bash"], after
+        assert after["permissions"]["defaultMode"] == "bypassPermissions", after
+        assert after["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:35711"
         return "user env + unrelated keys preserved"
 
     check("F4 wiring never clobbers user settings", preserves_settings)
@@ -1353,7 +1354,7 @@ def suite_claude_launch():
             env=env,
         )
         assert "ARGS:--dangerously-skip-permissions --print hello" in r.stdout, r.stdout[-400:]
-        assert "BASE:http://127.0.0.1:12345" in r.stdout, r.stdout[-400:]
+        assert "BASE:http://127.0.0.1:35711" in r.stdout, r.stdout[-400:]
         assert "STDIN:[typed by the user]" in r.stdout, r.stdout[-400:]
         # The exit code is claude's, not imc's.
         assert r.returncode == 7, f"exit code {r.returncode}"

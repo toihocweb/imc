@@ -9,7 +9,7 @@
  * proxy — so nothing is exposed publicly and no CORS dance is needed.
  */
 const PROXY_URL = (
-  process.env.IMC_PROXY_URL || "http://127.0.0.1:12345"
+  process.env.IMC_PROXY_URL || "http://127.0.0.1:35711"
 ).replace(/\/$/, "");
 
 async function proxy<T = unknown>(
@@ -27,7 +27,7 @@ async function proxy<T = unknown>(
     });
   } catch (e: any) {
     throw new Error(
-      `the imc proxy is not answering on ${PROXY_URL} — start it with \`imc proxy serve --port 12345\` (${e?.message ?? e})`
+      `the imc proxy is not answering on ${PROXY_URL} — start it with \`imc proxy serve --port 35711\` (${e?.message ?? e})`
     );
   }
   const text = await res.text();
@@ -283,6 +283,8 @@ export interface UsageRecord {
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
+    prompt_tokens?: number;
+    completion_tokens?: number;
     cache_read_input_tokens?: number;
     cache_creation_input_tokens?: number;
   };

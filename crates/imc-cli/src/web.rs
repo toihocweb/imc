@@ -246,9 +246,9 @@ fn start(port: u16) -> Result<String> {
     }
 
     // 2. Start the proxy in the background. The proxy serves the embedded web dashboard
-    //    on port 4789 and 12345 with zero external dependencies (no Node.js required).
+    //    on port 4789 and 35711 with zero external dependencies (no Node.js required).
     let cfg = imc_core::config::Config::default();
-    if let Ok(v) = crate::claude::start_proxy(&cfg, 12345) {
+    if let Ok(v) = crate::claude::start_proxy(&cfg, 35711) {
         if wait_up(port, Duration::from_secs(5)) {
             let pid = v.get("pid").and_then(|p| p.as_i64()).unwrap_or(0);
             return Ok(format!("embedded dashboard via proxy (pid {pid})"));

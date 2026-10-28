@@ -15,7 +15,7 @@ pub mod sanitize;
 // writes is byte-for-byte the one the proxy reads.
 pub use imc_proxy_types;
 
-pub const DEFAULT_PORT: u16 = 12345;
+pub const DEFAULT_PORT: u16 = 35711;
 
 /// Run the proxy (blocking). `port` 0 = DEFAULT_PORT.
 pub fn run(port: u16) -> anyhow::Result<()> {

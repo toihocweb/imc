@@ -69,9 +69,14 @@ pub async fn log_usage(
         .get("cache_creation_input_tokens")
         .and_then(Value::as_i64)
         .unwrap_or(0);
-    let input_tok = usage_data.get("input_tokens").and_then(Value::as_i64).unwrap_or(0);
+    let input_tok = usage_data
+        .get("input_tokens")
+        .or_else(|| usage_data.get("prompt_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     let output_tok = usage_data
         .get("output_tokens")
+        .or_else(|| usage_data.get("completion_tokens"))
         .and_then(Value::as_i64)
         .unwrap_or(0);
     // The hit rate is the instrument for prompt-shape regressions: when the

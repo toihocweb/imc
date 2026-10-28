@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Button } from "@/components/ui/button";
 import { useProject } from "@/components/project-context";
 import { useConnection } from "@/components/connection-gate";
 import { formatNumber } from "@/lib/format";
@@ -229,7 +230,7 @@ export function SiteNav() {
                 type="button"
                 onClick={disconnect}
                 className="ml-1 text-muted-foreground hover:text-destructive cursor-pointer"
-                title="Ngắt kết nối / Đổi secret"
+                title="Disconnect / Change secret"
               >
                 &times;
               </button>
@@ -239,15 +240,16 @@ export function SiteNav() {
           <ThemeToggle />
 
           {/* Mobile hamburger */}
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="icon"
             onClick={() => setMobileOpen((v) => !v)}
             aria-expanded={mobileOpen}
             aria-label="Toggle navigation"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-input hover:bg-accent md:hidden"
+            className="h-8 w-8 shrink-0 cursor-pointer md:hidden"
           >
             {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
-          </button>
+          </Button>
         </div>
       </div>
 

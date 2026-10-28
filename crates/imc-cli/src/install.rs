@@ -178,8 +178,8 @@ pub fn run(bin_dir: Option<PathBuf>, with_dashboard: bool) -> Result<Vec<String>
     let cfg = imc_core::config::Config::default();
     if crate::claude::proxy_is_running(&cfg) {
         let _ = crate::claude::stop_proxy(&cfg);
-        let _ = crate::claude::start_proxy(&cfg, 12345);
-        log.push("proxy   → restarted (port 12345)".to_string());
+        let _ = crate::claude::start_proxy(&cfg, 35711);
+        log.push("proxy   → restarted (port 35711)".to_string());
     }
 
     Ok(log)

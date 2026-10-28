@@ -36,7 +36,7 @@ export function ConnectionGate({ children }: { children: React.ReactNode }) {
 
   const verifyConnection = async (keyToTest: string): Promise<boolean> => {
     if (!keyToTest.trim()) {
-      setErrorMsg("Vui lòng nhập API key / secret.");
+      setErrorMsg("Please enter your API key / secret.");
       return false;
     }
     setChecking(true);
@@ -51,16 +51,16 @@ export function ConnectionGate({ children }: { children: React.ReactNode }) {
       const data = await res.json();
       if (res.ok && data.ok) {
         localStorage.setItem("imc_hyperspace_secret", keyToTest.trim());
-        setSuccessMsg(data.message || "Kết nối thành công!");
+        setSuccessMsg(data.message || "Connected successfully!");
         setIsConnected(true);
         return true;
       } else {
-        setErrorMsg(data.error || "Kết nối không thành công. Vui lòng kiểm tra lại tiến trình trên port 6655 và API key.");
+        setErrorMsg(data.error || "Connection failed. Please ensure Hyperspace is running on port 6655 and your API key is valid.");
         setIsConnected(false);
         return false;
       }
     } catch (err: any) {
-      setErrorMsg(`Lỗi mạng hoặc không thể gọi proxy: ${err?.message ?? err}`);
+      setErrorMsg(`Network error or proxy unreachable: ${err?.message ?? err}`);
       setIsConnected(false);
       return false;
     } finally {
@@ -101,7 +101,7 @@ export function ConnectionGate({ children }: { children: React.ReactNode }) {
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3 text-muted-foreground text-xs">
           <Loader2 className="h-6 w-6 animate-spin text-primary" />
-          <span>Đang nạp bảng điều khiển...</span>
+          <span>Loading dashboard...</span>
         </div>
       </div>
     );
@@ -119,11 +119,11 @@ export function ConnectionGate({ children }: { children: React.ReactNode }) {
               <ShieldCheck className="h-6 w-6" />
             </div>
             <CardTitle className="text-xl font-bold tracking-tight text-foreground">
-              Xác thực kết nối Hyperspace
+              Hyperspace Connection Gate
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-              Mặc định kết nối Hyperspace tại cổng 6655 (<code className="font-mono text-[11px] text-foreground">localhost:6655</code>).
-              Vui lòng nhập API key / secret để kiểm tra kết nối trước khi vào Dashboard.
+              Default connection targets Hyperspace on port 6655 (<code className="font-mono text-[11px] text-foreground">localhost:6655</code>).
+              Enter your API key / secret to verify connection before accessing the dashboard.
             </p>
           </CardHeader>
 
@@ -141,7 +141,7 @@ export function ConnectionGate({ children }: { children: React.ReactNode }) {
                 <div className="relative">
                   <Input
                     type={showSecret ? "text" : "password"}
-                    placeholder="Nhập secret / API key..."
+                    placeholder="Enter secret / API key..."
                     value={secret}
                     onChange={(e) => setSecret(e.target.value)}
                     disabled={checking}
@@ -152,7 +152,7 @@ export function ConnectionGate({ children }: { children: React.ReactNode }) {
                     type="button"
                     onClick={() => setShowSecret(!showSecret)}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors cursor-pointer p-1"
-                    title={showSecret ? "Ẩn" : "Hiện"}
+                    title={showSecret ? "Hide" : "Show"}
                   >
                     {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
@@ -181,11 +181,11 @@ export function ConnectionGate({ children }: { children: React.ReactNode }) {
                 {checking ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Đang kiểm tra kết nối...</span>
+                    <span>Verifying connection...</span>
                   </>
                 ) : (
                   <>
-                    <span>Kiểm tra kết nối & Vào Dashboard</span>
+                    <span>Verify Connection & Enter Dashboard</span>
                     <ArrowRight className="h-4 w-4" />
                   </>
                 )}

@@ -44,7 +44,7 @@ export default function Home() {
   } | null>(null);
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [usagePage, setUsagePage] = useState(1);
-  const USAGE_PAGE_SIZE = 10;
+  const [usagePageSize, setUsagePageSize] = useState(10);
 
   const refreshUsage = async () => {
     try {
@@ -193,12 +193,12 @@ export default function Home() {
           <CardContent className="space-y-3.5 text-xs text-muted-foreground">
             <div className="flex items-center justify-between border-b border-border/50 pb-2">
               <span>Reverse Proxy</span>
-              <span className="font-mono text-foreground font-medium">http://127.0.0.1:12345</span>
+              <span className="font-mono text-foreground font-medium">http://127.0.0.1:35711</span>
             </div>
             <div className="flex items-center justify-between border-b border-border/50 pb-2">
-              <span>LLM Endpoint</span>
+              <span>Upstream Engine</span>
               <span className="font-mono text-foreground font-medium truncate max-w-[160px]">
-                {cfg?.model || "default"}
+                Hyperspace (6655)
               </span>
             </div>
             <div className="flex items-center justify-between border-b border-border/50 pb-2">
@@ -209,7 +209,7 @@ export default function Home() {
                 </span>
               ) : (
                 <span className="flex items-center gap-1 text-amber-500 font-medium">
-                  <AlertTriangle className="h-3 w-3" /> Optional (raw mode)
+                  <AlertTriangle className="h-3 w-3" /> Needs Secret
                 </span>
               )}
             </div>
@@ -394,76 +394,108 @@ export default function Home() {
                       <TableHead className="w-40">Timestamp</TableHead>
                       <TableHead>Model</TableHead>
                       <TableHead>Endpoint</TableHead>
-                      <TableHead className="text-right">Input</TableHead>
+                      <TableHead className="text-right">Total Input</TableHead>
+                      <TableHead className="text-right">Fresh</TableHead>
+                      <TableHead className="text-right">Cache Hit</TableHead>
                       <TableHead className="text-right">Output</TableHead>
-                      <TableHead className="text-right">Cache Read</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody className="text-xs">
                     {usage.records
-                      .slice((usagePage - 1) * USAGE_PAGE_SIZE, usagePage * USAGE_PAGE_SIZE)
-                      .map((r, idx) => (
-                        <TableRow key={idx}>
-                          <TableCell className="font-mono text-muted-foreground whitespace-nowrap">
-                            {formatTimestamp(r.timestamp)}
-                          </TableCell>
-                          <TableCell className="font-medium">
-                            <Badge variant="outline" className="font-mono text-[10px]">
-                              {r.model}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="font-mono text-muted-foreground text-[11px] truncate max-w-[200px]">
-                            {r.endpoint}
-                          </TableCell>
-                          <TableCell className="text-right font-mono font-medium">
-                            {formatNumber(r.usage?.input_tokens ?? 0)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono font-medium">
-                            {formatNumber(r.usage?.output_tokens ?? 0)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-emerald-500 font-medium">
-                            {formatNumber(r.usage?.cache_read_input_tokens ?? 0)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      .slice((usagePage - 1) * usagePageSize, usagePage * usagePageSize)
+                      .map((r, idx) => {
+                        const freshIn = r.usage?.input_tokens ?? r.usage?.prompt_tokens ?? 0;
+                        const cachedIn = r.usage?.cache_read_input_tokens ?? 0;
+                        const totalIn = freshIn + cachedIn;
+                        const outTok = r.usage?.output_tokens ?? r.usage?.completion_tokens ?? 0;
+
+                        return (
+                          <TableRow key={idx}>
+                            <TableCell className="font-mono text-muted-foreground whitespace-nowrap">
+                              {formatTimestamp(r.timestamp)}
+                            </TableCell>
+                            <TableCell className="font-medium">
+                              <Badge variant="outline" className="font-mono text-[10px]">
+                                {r.model}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="font-mono text-muted-foreground text-[11px] truncate max-w-[180px]">
+                              {r.endpoint}
+                            </TableCell>
+                            <TableCell className="text-right font-mono font-medium">
+                              {formatNumber(totalIn)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-muted-foreground">
+                              {formatNumber(freshIn)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-emerald-500 font-medium">
+                              {formatNumber(cachedIn)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono font-medium">
+                              {formatNumber(outTok)}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                   </TableBody>
                 </Table>
               </div>
 
               {/* Pagination */}
-              {Math.ceil(usage.records.length / USAGE_PAGE_SIZE) > 1 && (
-                <div className="flex items-center justify-between p-3 border-t border-border/60 text-xs text-muted-foreground">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 border-t border-border/60 text-xs text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-3">
                   <span className="font-mono text-[11px]">
-                    Showing {(usagePage - 1) * USAGE_PAGE_SIZE + 1}–
-                    {Math.min(usagePage * USAGE_PAGE_SIZE, usage.records.length)} of {usage.records.length}
+                    Showing {usage.records.length === 0 ? 0 : (usagePage - 1) * usagePageSize + 1}–
+                    {Math.min(usagePage * usagePageSize, usage.records.length)} of {usage.records.length} records
                   </span>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={usagePage <= 1}
-                      onClick={() => setUsagePage((p) => Math.max(1, p - 1))}
-                      className="h-7 px-2.5 text-xs cursor-pointer"
-                    >
-                      Previous
-                    </Button>
-                    <span className="font-mono text-xs px-1">
-                      {usagePage} / {Math.ceil(usage.records.length / USAGE_PAGE_SIZE)}
-                    </span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={usagePage >= Math.ceil(usage.records.length / USAGE_PAGE_SIZE)}
-                      onClick={() =>
-                        setUsagePage((p) => Math.min(Math.ceil(usage.records.length / USAGE_PAGE_SIZE), p + 1))
-                      }
-                      className="h-7 px-2.5 text-xs cursor-pointer"
-                    >
-                      Next
-                    </Button>
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span>Page size:</span>
+                    {[10, 25, 50].map((size) => (
+                      <button
+                        key={size}
+                        type="button"
+                        onClick={() => {
+                          setUsagePageSize(size);
+                          setUsagePage(1);
+                        }}
+                        className={`rounded px-1.5 py-0.5 font-mono cursor-pointer transition-colors ${
+                          usagePageSize === size
+                            ? "bg-primary text-primary-foreground font-semibold"
+                            : "bg-muted hover:bg-accent text-foreground"
+                        }`}
+                      >
+                        {size}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              )}
+
+                <div className="flex items-center gap-2 self-end sm:self-auto">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={usagePage <= 1}
+                    onClick={() => setUsagePage((p) => Math.max(1, p - 1))}
+                    className="h-7 px-2.5 text-xs cursor-pointer"
+                  >
+                    Previous
+                  </Button>
+                  <span className="font-mono text-xs px-1">
+                    {usagePage} / {Math.max(1, Math.ceil(usage.records.length / usagePageSize))}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={usagePage >= Math.max(1, Math.ceil(usage.records.length / usagePageSize))}
+                    onClick={() =>
+                      setUsagePage((p) => Math.min(Math.ceil(usage.records.length / usagePageSize), p + 1))
+                    }
+                    className="h-7 px-2.5 text-xs cursor-pointer"
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
         ) : (

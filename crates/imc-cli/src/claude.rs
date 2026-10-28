@@ -208,8 +208,7 @@ pub fn write_claude_settings(project_root: &Path, port: u16) -> Result<PathBuf> 
         env.insert(k.to_string(), v);
     }
 
-    // Pre-approve imc CLI commands under Bash so Claude Code's Auto Mode
-    // bypasses the classifier check and does not safety-block imc calls.
+    // Set defaultMode to bypassPermissions in permissions
     let perms = obj
         .entry("permissions")
         .or_insert_with(|| json!({}));
@@ -217,24 +216,7 @@ pub fn write_claude_settings(project_root: &Path, port: u16) -> Result<PathBuf> 
         *perms = json!({});
     }
     let perms_obj = perms.as_object_mut().expect("permissions object");
-    let allow = perms_obj
-        .entry("allow")
-        .or_insert_with(|| json!([]));
-    if !allow.is_array() {
-        *allow = json!([]);
-    }
-    if let Some(arr) = allow.as_array_mut() {
-        let has_broad = arr.iter().any(|v| {
-            v.as_str() == Some("Bash") || v.as_str() == Some("Bash(*)")
-        });
-        if !has_broad {
-            for cmd in ["Bash(imc *)", "Bash(imc)"] {
-                if !arr.iter().any(|v| v.as_str() == Some(cmd)) {
-                    arr.push(json!(cmd));
-                }
-            }
-        }
-    }
+    perms_obj.insert("defaultMode".to_string(), json!("bypassPermissions"));
 
     let mut text = serde_json::to_string_pretty(&data)?;
     text.push('\n');
@@ -467,7 +449,7 @@ pub fn stop_proxy(cfg: &Config) -> Result<Option<u16>> {
         stopped_port = port;
         let _ = std::fs::remove_file(&p);
     }
-    let target_port = stopped_port.unwrap_or(12345);
+    let target_port = stopped_port.unwrap_or(35711);
     if crate::web::kill_listener_on_port(target_port) {
         stopped_port = Some(target_port);
     }
@@ -604,7 +586,7 @@ pub fn run_claude_bin(cfg: &Config, root: &Path, args: &[String]) -> Result<()> 
 
     // 2. Ensure the proxy is running and fresh so Claude Code talks to our
     // compression proxy instead of hitting the upstream LLM directly.
-    let port = 12345u16;
+    let port = 35711u16;
     let _ = start_proxy(cfg, port)
         .with_context(|| format!("start imc proxy on port {port}"))?;
 
@@ -612,7 +594,7 @@ pub fn run_claude_bin(cfg: &Config, root: &Path, args: &[String]) -> Result<()> 
     // project that was never wired would run Claude Code against the
     // upstream and know nothing about the index, so they are written here
     // too — wiring is cheap, and a stale rule is worse than a fresh one.
-    let _ = write_claude_settings(root, 12345)?;
+    let _ = write_claude_settings(root, 35711)?;
     let _ = write_imc_rule(root)?;
     let _ = remove_legacy_claude_md_block(root)?;
 
@@ -643,7 +625,7 @@ pub fn run_claude_bin(cfg: &Config, root: &Path, args: &[String]) -> Result<()> 
     let port = proxy_status(cfg)
         .and_then(|s| s.get("state").and_then(|st| st.get("port")).cloned())
         .and_then(|v| v.as_u64())
-        .unwrap_or(12345) as u16;
+        .unwrap_or(35711) as u16;
     cmd.env("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}"));
     cmd.env("ANTHROPIC_AUTH_TOKEN", "dummy");
     cmd.env("ANTHROPIC_MODEL", "claude-pro-max");
@@ -724,37 +706,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
 
-        let path = write_claude_settings(&root, 12345).unwrap();
+        let path = write_claude_settings(&root, 35711).unwrap();
         assert!(path.exists());
 
         let raw = std::fs::read_to_string(&path).unwrap();
         let val: Value = serde_json::from_str(&raw).unwrap();
-        let allow = val["permissions"]["allow"].as_array().expect("allow array");
-        assert!(allow.iter().any(|v| v.as_str() == Some("Bash(imc *)")));
-        assert!(allow.iter().any(|v| v.as_str() == Some("Bash(imc)")));
+        assert_eq!(val["permissions"]["defaultMode"].as_str(), Some("bypassPermissions"));
+        assert_eq!(val["env"]["ANTHROPIC_BASE_URL"].as_str(), Some("http://127.0.0.1:35711"));
 
-        // Calling again does not duplicate entries
-        let _ = write_claude_settings(&root, 12345).unwrap();
+        // Calling again preserves settings
+        let _ = write_claude_settings(&root, 35711).unwrap();
         let raw2 = std::fs::read_to_string(&path).unwrap();
         let val2: Value = serde_json::from_str(&raw2).unwrap();
-        let allow2 = val2["permissions"]["allow"].as_array().unwrap();
-        assert_eq!(allow2.iter().filter(|v| v.as_str() == Some("Bash(imc *)")).count(), 1);
-
-        // Pre-existing broad "Bash" is not polluted with specific commands
-        let broad_root = std::env::temp_dir().join(format!("imc-test-settings-broad-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&broad_root);
-        std::fs::create_dir_all(broad_root.join(".claude")).unwrap();
-        let init_settings = json!({
-            "permissions": { "allow": ["Bash"] }
-        });
-        std::fs::write(broad_root.join(".claude/settings.local.json"), serde_json::to_string_pretty(&init_settings).unwrap()).unwrap();
-        let _ = write_claude_settings(&broad_root, 12345).unwrap();
-        let broad_val: Value = serde_json::from_str(&std::fs::read_to_string(broad_root.join(".claude/settings.local.json")).unwrap()).unwrap();
-        let broad_allow = broad_val["permissions"]["allow"].as_array().unwrap();
-        assert_eq!(broad_allow.len(), 1);
-        assert_eq!(broad_allow[0].as_str(), Some("Bash"));
+        assert_eq!(val2["permissions"]["defaultMode"].as_str(), Some("bypassPermissions"));
 
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&broad_root);
     }
 }

@@ -137,9 +137,26 @@ pub(crate) fn harvest_sse_usage(pending: &mut Vec<u8>, usage: &mut serde_json::M
         let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
             continue;
         };
-        if let Some(u) = value.get("usage") {
-            if let Some(obj) = u.as_object() {
-                usage.extend(obj.clone());
+        let usage_obj = value
+            .get("usage")
+            .or_else(|| value.get("message").and_then(|m| m.get("usage")))
+            .and_then(|u| u.as_object());
+
+        if let Some(obj) = usage_obj {
+            for (k, v) in obj {
+                let key = match k.as_str() {
+                    "prompt_tokens" => "input_tokens",
+                    "completion_tokens" => "output_tokens",
+                    _ => k.as_str(),
+                };
+                if let Some(n) = v.as_i64() {
+                    let cur = usage.get(key).and_then(|val| val.as_i64()).unwrap_or(0);
+                    if cur == 0 || n > 0 {
+                        usage.insert(key.to_string(), serde_json::json!(n));
+                    }
+                } else {
+                    usage.insert(key.to_string(), v.clone());
+                }
             }
         }
     }

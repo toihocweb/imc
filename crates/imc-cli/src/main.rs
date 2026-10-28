@@ -256,8 +256,8 @@ enum Command {
     Setup {
         #[arg(long, short = 'f')]
         force: bool,
-        /// Proxy port (default 12345).
-        #[arg(long, default_value_t = 12345)]
+        /// Proxy port (default 35711).
+        #[arg(long, default_value_t = 35711)]
         port: u16,
         /// Wire the project without starting the proxy.
         #[arg(long)]
@@ -841,7 +841,7 @@ fn main() -> Result<()> {
     let Some(cmd) = &cli.command else {
         // Bare `imc`: the whole setup in one command — the proxy that
         // Claude Code talks to, and the dashboard to drive everything else.
-        let proxy_port: u16 = 12345;
+        let proxy_port: u16 = 35711;
         let web_port: u16 = 4789;
         if cli.json {
             let proxy = match imc_cli::claude::start_proxy(&cfg, proxy_port) {
@@ -2052,8 +2052,8 @@ saved to {}", st::path().display());
                                 );
                                 if imc_cli::claude::proxy_is_running(&cfg) {
                                     let _ = imc_cli::claude::stop_proxy(&cfg);
-                                    let _ = imc_cli::claude::start_proxy(&cfg, 12345);
-                                    println!("restarted proxy with the new binary (port 12345)");
+                                    let _ = imc_cli::claude::start_proxy(&cfg, 35711);
+                                    println!("restarted proxy with the new binary (port 35711)");
                                 }
                             }
                             Err(e) => eprintln!("update failed: {e:#}"),

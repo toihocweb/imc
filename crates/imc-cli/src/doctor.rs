@@ -65,10 +65,10 @@ without it imc guesses a default model that most endpoints do not serve"
 
     // 5. Proxy running
     if super::claude::proxy_is_running(cfg) {
-        ok.push("imc proxy: running on http://127.0.0.1:12345".to_string());
+        ok.push("imc proxy: running on http://127.0.0.1:35711".to_string());
     } else {
         issues.push(
-            "imc proxy not running — run `imc proxy serve --port 12345` or `imc setup`"
+            "imc proxy not running — run `imc proxy serve --port 35711` or `imc setup`"
                 .to_string(),
         );
     }
