@@ -17,10 +17,17 @@ export function formatPercent(ratio: number | undefined | null): string {
   return `${(ratio * 100).toFixed(1)}%`;
 }
 
-export function formatTimestamp(val: number | undefined | null): string {
-  if (!val || val <= 0) return "—";
-  const d = new Date(val * 1000);
-  if (isNaN(d.getTime())) return "—";
+export function formatTimestamp(val: number | string | undefined | null): string {
+  if (!val) return "—";
+  let d: Date;
+  if (typeof val === "string") {
+    d = new Date(val);
+  } else if (val <= 0) {
+    return "—";
+  } else {
+    d = new Date(val * 1000);
+  }
+  if (isNaN(d.getTime())) return typeof val === "string" ? val : "—";
   const pad = (n: number) => String(n).padStart(2, "0");
   const y = d.getFullYear();
   const m = pad(d.getMonth() + 1);

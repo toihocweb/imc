@@ -13,23 +13,43 @@ use tokio::sync::Mutex;
 use crate::atomic_file::write_file_atomically;
 use crate::logger::create_handler_logger;
 
-/// Port of `usage_logger.USAGE_LOG_FILE` — `Path.cwd() / "usage.json"`.
+/// Where `usage.json` is stored. Stored in IMC root directory (`~/.indexmycode-rs/usage.json`),
+/// or overridden via `IMC_USAGE_FILE`.
 pub fn usage_log_file() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
+    if let Ok(p) = std::env::var("IMC_USAGE_FILE") {
+        if !p.trim().is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    imc_core::config::Config::default()
+        .data_dir
         .join("usage.json")
 }
 
 static LOCK: Mutex<()> = Mutex::const_new(());
 
-fn read_records(path: &Path) -> Vec<Value> {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    if content.trim().is_empty() {
-        return Vec::new();
+pub fn read_records(path: &Path) -> Vec<Value> {
+    if let Ok(content) = std::fs::read_to_string(path) {
+        if !content.trim().is_empty() {
+            if let Ok(records) = serde_json::from_str::<Vec<Value>>(&content) {
+                return records;
+            }
+        }
     }
-    serde_json::from_str::<Vec<Value>>(&content).unwrap_or_default()
+    // Fallback: check legacy cwd/usage.json if path does not exist
+    if let Ok(cwd) = std::env::current_dir() {
+        let legacy = cwd.join("usage.json");
+        if legacy != path && legacy.exists() {
+            if let Ok(content) = std::fs::read_to_string(&legacy) {
+                if !content.trim().is_empty() {
+                    if let Ok(records) = serde_json::from_str::<Vec<Value>>(&content) {
+                        return records;
+                    }
+                }
+            }
+        }
+    }
+    Vec::new()
 }
 
 /// Port of `usage_logger.log_usage`.

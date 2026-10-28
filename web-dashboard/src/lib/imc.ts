@@ -276,6 +276,46 @@ export interface ModelList {
   embedding_models?: string[];
 }
 
+export interface UsageRecord {
+  timestamp: string;
+  model: string;
+  endpoint: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
+  copilot_usage?: any;
+}
+
+export interface ModelUsageSummary {
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+}
+
+export interface UsageData {
+  file: string;
+  total_requests: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_creation_tokens: number;
+  cache_hit_rate: number;
+  by_model: Record<string, ModelUsageSummary>;
+  records: UsageRecord[];
+}
+
+export async function getUsage(): Promise<UsageData> {
+  return proxy<UsageData>("/api/usage");
+}
+
+export async function clearUsage(): Promise<void> {
+  await fetch("/api/usage", { method: "DELETE" });
+}
+
 /**
  * Ask the configured endpoint which models it serves (`GET {base_url}/models`).
  * The key stays in the config file — the CLI sends it, the browser never sees it.

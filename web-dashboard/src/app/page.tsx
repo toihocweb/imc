@@ -20,11 +20,16 @@ import {
   AlertTriangle,
   ExternalLink,
   Sparkles,
+  BarChart,
+  Trash2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useProject } from "@/components/project-context";
-import { formatNumber } from "@/lib/format";
+import { formatNumber, formatTimestamp, formatPercent } from "@/lib/format";
+import { UsageData } from "@/lib/imc";
 
 export default function Home() {
   const router = useRouter();
@@ -37,6 +42,25 @@ export default function Home() {
     complete: boolean;
     missing: string[];
   } | null>(null);
+  const [usage, setUsage] = useState<UsageData | null>(null);
+  const [usagePage, setUsagePage] = useState(1);
+  const USAGE_PAGE_SIZE = 10;
+
+  const refreshUsage = async () => {
+    try {
+      const res = await fetch("/api/usage");
+      const data = await res.json();
+      if (data && !data.error) setUsage(data);
+    } catch {}
+  };
+
+  const handleClearUsage = async () => {
+    try {
+      await fetch("/api/usage", { method: "DELETE" });
+      setUsagePage(1);
+      refreshUsage();
+    } catch {}
+  };
 
   useEffect(() => {
     fetch("/api/config")
@@ -45,6 +69,7 @@ export default function Home() {
         if (d && !d.error) setCfg(d);
       })
       .catch(() => {});
+    refreshUsage();
   }, []);
 
   const totals = projects.reduce(
@@ -255,6 +280,199 @@ export default function Home() {
             );
           })}
         </div>
+      </div>
+
+      {/* Token Usage & Traffic Analysis */}
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold tracking-tight text-foreground flex items-center gap-2">
+              <BarChart className="h-5 w-5 text-primary" /> Token Usage & Traffic
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Total prompt tokens, generation tokens, and prompt cache hit rate tracked in IMC root.
+            </p>
+          </div>
+          {usage && usage.total_requests > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClearUsage}
+              className="h-8 px-3 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 self-start sm:self-auto cursor-pointer"
+            >
+              <Trash2 className="h-3.5 w-3.5 mr-1" /> Clear Usage Log
+            </Button>
+          )}
+        </div>
+
+        {/* Usage KPI Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Card className="border-border/80 glow-card">
+            <CardContent className="p-4 flex flex-col justify-between">
+              <span className="text-xs text-muted-foreground font-medium">Total Requests</span>
+              <div className="pt-2">
+                <div className="font-mono text-xl sm:text-2xl font-bold text-foreground">
+                  {formatNumber(usage?.total_requests ?? 0)}
+                </div>
+                <div className="text-[11px] text-muted-foreground">LLM interactions</div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/80 glow-card">
+            <CardContent className="p-4 flex flex-col justify-between">
+              <span className="text-xs text-muted-foreground font-medium">Input Tokens</span>
+              <div className="pt-2">
+                <div className="font-mono text-xl sm:text-2xl font-bold text-foreground">
+                  {formatNumber(usage?.total_input_tokens ?? 0)}
+                </div>
+                <div className="text-[11px] text-muted-foreground">Uncached prompt tokens</div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/80 glow-card">
+            <CardContent className="p-4 flex flex-col justify-between">
+              <span className="text-xs text-muted-foreground font-medium">Output Tokens</span>
+              <div className="pt-2">
+                <div className="font-mono text-xl sm:text-2xl font-bold text-foreground">
+                  {formatNumber(usage?.total_output_tokens ?? 0)}
+                </div>
+                <div className="text-[11px] text-muted-foreground">Generated tokens</div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/80 glow-card">
+            <CardContent className="p-4 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground font-medium">Prompt Cache</span>
+                <span className="text-[10px] font-semibold text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                  {formatPercent(usage?.cache_hit_rate ?? 0)} hit
+                </span>
+              </div>
+              <div className="pt-2">
+                <div className="font-mono text-xl sm:text-2xl font-bold text-emerald-500">
+                  {formatNumber(usage?.total_cache_read_tokens ?? 0)}
+                </div>
+                <div className="text-[11px] text-muted-foreground">Tokens served from cache (0.1×)</div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Model Breakdown & Recent Requests */}
+        {usage && usage.total_requests > 0 ? (
+          <Card className="border-border/80 shadow-xs overflow-hidden">
+            <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <CardTitle className="text-sm font-semibold">Recent Requests & Breakdown</CardTitle>
+                <span className="text-xs font-normal font-mono text-muted-foreground">
+                  {usage.records.length} records logged
+                </span>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {/* Models summary badges */}
+              {Object.keys(usage.by_model).length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 p-3 border-b border-border/40 bg-card/60 text-xs">
+                  <span className="text-muted-foreground text-[11px] font-medium mr-1">Models:</span>
+                  {Object.entries(usage.by_model).map(([model, stats]) => (
+                    <Badge key={model} variant="secondary" className="font-mono text-[11px] py-1 px-2.5">
+                      <span className="font-semibold">{model}</span>: {formatNumber(stats.requests)} reqs (
+                      {formatNumber(stats.input_tokens + stats.output_tokens)} tok)
+                    </Badge>
+                  ))}
+                </div>
+              )}
+
+              {/* Table */}
+              <div className="overflow-x-auto scroll-thin max-h-[380px]">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="text-xs">
+                      <TableHead className="w-40">Timestamp</TableHead>
+                      <TableHead>Model</TableHead>
+                      <TableHead>Endpoint</TableHead>
+                      <TableHead className="text-right">Input</TableHead>
+                      <TableHead className="text-right">Output</TableHead>
+                      <TableHead className="text-right">Cache Read</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody className="text-xs">
+                    {usage.records
+                      .slice((usagePage - 1) * USAGE_PAGE_SIZE, usagePage * USAGE_PAGE_SIZE)
+                      .map((r, idx) => (
+                        <TableRow key={idx}>
+                          <TableCell className="font-mono text-muted-foreground whitespace-nowrap">
+                            {formatTimestamp(r.timestamp)}
+                          </TableCell>
+                          <TableCell className="font-medium">
+                            <Badge variant="outline" className="font-mono text-[10px]">
+                              {r.model}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="font-mono text-muted-foreground text-[11px] truncate max-w-[200px]">
+                            {r.endpoint}
+                          </TableCell>
+                          <TableCell className="text-right font-mono font-medium">
+                            {formatNumber(r.usage?.input_tokens ?? 0)}
+                          </TableCell>
+                          <TableCell className="text-right font-mono font-medium">
+                            {formatNumber(r.usage?.output_tokens ?? 0)}
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-emerald-500 font-medium">
+                            {formatNumber(r.usage?.cache_read_input_tokens ?? 0)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Pagination */}
+              {Math.ceil(usage.records.length / USAGE_PAGE_SIZE) > 1 && (
+                <div className="flex items-center justify-between p-3 border-t border-border/60 text-xs text-muted-foreground">
+                  <span className="font-mono text-[11px]">
+                    Showing {(usagePage - 1) * USAGE_PAGE_SIZE + 1}–
+                    {Math.min(usagePage * USAGE_PAGE_SIZE, usage.records.length)} of {usage.records.length}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={usagePage <= 1}
+                      onClick={() => setUsagePage((p) => Math.max(1, p - 1))}
+                      className="h-7 px-2.5 text-xs cursor-pointer"
+                    >
+                      Previous
+                    </Button>
+                    <span className="font-mono text-xs px-1">
+                      {usagePage} / {Math.ceil(usage.records.length / USAGE_PAGE_SIZE)}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={usagePage >= Math.ceil(usage.records.length / USAGE_PAGE_SIZE)}
+                      onClick={() =>
+                        setUsagePage((p) => Math.min(Math.ceil(usage.records.length / USAGE_PAGE_SIZE), p + 1))
+                      }
+                      className="h-7 px-2.5 text-xs cursor-pointer"
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="border-dashed p-6 text-center">
+            <p className="text-xs text-muted-foreground">
+              No proxy token usage recorded yet. Calls made through the IMC proxy will appear here.
+            </p>
+          </Card>
+        )}
       </div>
 
       {/* Indexed Repositories */}

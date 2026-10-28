@@ -8,7 +8,7 @@
 //! Every handler is read-mostly and answers JSON. Secrets are masked exactly
 //! as the CLI masks them: the browser never sees a key.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use axum::extract::Query;
@@ -862,6 +862,81 @@ async fn model_map_delete(Json(payload): Json<ModelMapRmPayload>) -> Response {
 }
 
 // ---------------------------------------------------------------------------
+// GET|DELETE /api/usage
+// ---------------------------------------------------------------------------
+async fn usage_get() -> Response {
+    let file = imc_proxy_types::usage_logger::usage_log_file();
+    let records = imc_proxy_types::usage_logger::read_records(&file);
+
+    let mut total_input: i64 = 0;
+    let mut total_output: i64 = 0;
+    let mut total_cache_read: i64 = 0;
+    let mut total_cache_creation: i64 = 0;
+
+    #[derive(serde::Serialize, Default)]
+    struct ModelStats {
+        requests: usize,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_tokens: i64,
+    }
+
+    let mut by_model: BTreeMap<String, ModelStats> = BTreeMap::new();
+
+    for r in &records {
+        let model = r.get("model").and_then(Value::as_str).unwrap_or("unknown");
+        let u = r.get("usage").unwrap_or(&Value::Null);
+        let inp = u.get("input_tokens").and_then(Value::as_i64).unwrap_or(0);
+        let out = u.get("output_tokens").and_then(Value::as_i64).unwrap_or(0);
+        let cr = u.get("cache_read_input_tokens").and_then(Value::as_i64).unwrap_or(0);
+        let cc = u.get("cache_creation_input_tokens").and_then(Value::as_i64).unwrap_or(0);
+
+        total_input += inp;
+        total_output += out;
+        total_cache_read += cr;
+        total_cache_creation += cc;
+
+        let entry = by_model.entry(model.to_string()).or_default();
+        entry.requests += 1;
+        entry.input_tokens += inp;
+        entry.output_tokens += out;
+        entry.cache_read_tokens += cr;
+    }
+
+    let total_cacheable = total_input + total_cache_read + total_cache_creation;
+    let hit_rate = if total_cacheable > 0 {
+        total_cache_read as f64 / total_cacheable as f64
+    } else {
+        0.0
+    };
+
+    let count = records.len();
+    let mut reversed = records;
+    reversed.reverse();
+
+    Json(json!({
+        "file": file.display().to_string(),
+        "total_requests": count,
+        "total_input_tokens": total_input,
+        "total_output_tokens": total_output,
+        "total_cache_read_tokens": total_cache_read,
+        "total_cache_creation_tokens": total_cache_creation,
+        "cache_hit_rate": hit_rate,
+        "by_model": by_model,
+        "records": reversed,
+    }))
+    .into_response()
+}
+
+async fn usage_delete() -> Response {
+    let file = imc_proxy_types::usage_logger::usage_log_file();
+    if let Err(e) = imc_proxy_types::atomic_file::write_file_atomically(&file.to_string_lossy(), "[]\n") {
+        return error(format!("failed to clear usage: {e}"));
+    }
+    Json(json!({ "cleared": true })).into_response()
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 pub fn router() -> Router {
@@ -880,6 +955,7 @@ pub fn router() -> Router {
         .route("/api/compression", get(compression_list).delete(compression_delete))
         .route("/api/compress", post(compress))
         .route("/api/captures", get(captures_get).post(captures_post))
+        .route("/api/usage", get(usage_get).delete(usage_delete))
 }
 
 #[cfg(test)]
@@ -943,6 +1019,7 @@ mod tests {
             "/api/captures",
             "/api/compression/stats",
             "/api/compression",
+            "/api/usage",
         ] {
             let response = app
                 .clone()
