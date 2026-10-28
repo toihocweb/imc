@@ -158,6 +158,9 @@ impl CcrStore {
             "DELETE FROM ccr_originals WHERE created_at < ?1",
             params![before_ts],
         )?;
+        if n > 0 {
+            let _ = self.conn.execute("VACUUM", []);
+        }
         Ok(n)
     }
 
@@ -180,9 +183,10 @@ impl CcrStore {
         Ok(n)
     }
 
-    /// Clear all stored originals.
+    /// Clear all stored originals and reclaim disk space via VACUUM.
     pub fn clear(&mut self) -> Result<usize> {
         let n = self.conn.execute("DELETE FROM ccr_originals", [])?;
+        let _ = self.conn.execute("VACUUM", []);
         Ok(n)
     }
 }
@@ -262,5 +266,23 @@ mod tests {
         assert_eq!(pruned, 1);
         assert!(store.get("old_id").unwrap().is_none(), "records older than 7 days must be pruned");
         assert!(store.get(&fresh_id).unwrap().is_some(), "recent records must be preserved");
+    }
+
+    #[test]
+    fn clear_vacuums_database() {
+        let db = tmp_db("clear-vacuum");
+        let mut store = CcrStore::open(&db).unwrap();
+        for i in 0..100 {
+            let big = format!("content_{i}_{}", "x".repeat(5000));
+            store.store("test", &big, "c", 100, 10).unwrap();
+        }
+        let _ = store.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        let size_before = std::fs::metadata(&db).unwrap().len();
+        assert!(size_before > 100_000, "db should grow with records: {size_before}");
+        let n = store.clear().unwrap();
+        assert_eq!(n, 100);
+        let _ = store.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        let size_after = std::fs::metadata(&db).unwrap().len();
+        assert!(size_after < size_before, "db must shrink after clear+vacuum: before={size_before}, after={size_after}");
     }
 }

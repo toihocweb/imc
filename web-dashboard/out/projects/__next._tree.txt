@@ -1,4 +1,4 @@
-:HL["/_next/static/chunks/2mu-qms-lyl5m.css","style"]
+:HL["/_next/static/chunks/0zi8vlxbhilmx.css","style"]
 2:[["children",{"s":"__PAGE__","h":160}]]
 1:[["children",{"s":"projects","h":96,"c":"$Q2"}]]
-0:{"b":"HOGQ_CKKmcAeIzpzqp-CI","t":{"t":{"s":"","h":80,"c":"$Q1"}}}
+0:{"b":"LAWvGiluJCPqilPIsE_av","t":{"t":{"s":"","h":80,"c":"$Q1"}}}

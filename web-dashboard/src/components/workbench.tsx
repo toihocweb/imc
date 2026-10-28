@@ -796,8 +796,8 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
             <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <Database className="h-4 w-4 text-primary" /> Stored Originals ({formatNumber(ccrList.length)})
-                  {ccrStats && (
+                  <Database className="h-4 w-4 text-primary" /> Stored Originals ({formatNumber(ccrStats?.records ?? ccrList.length)})
+                  {ccrStats && ccrStats.db_bytes > 0 && (
                     <span className="text-xs text-muted-foreground font-mono font-normal ml-1">
                       ({formatBytes(ccrStats.db_bytes)})
                     </span>
@@ -807,9 +807,9 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={ccrDeleting || ccrList.length === 0}
+                    disabled={ccrDeleting || (ccrList.length === 0 && (ccrStats?.records ?? 0) === 0)}
                     onClick={() => handleDeleteCcr({ days: 7 })}
-                    className="h-7 px-2.5 text-[11px] font-medium text-muted-foreground hover:text-foreground cursor-pointer"
+                    className="h-7 px-2.5 text-[11px] font-medium text-muted-foreground hover:text-foreground cursor-pointer disabled:opacity-40"
                     title="Delete records older than 7 days"
                   >
                     Prune &gt;7d
@@ -817,9 +817,9 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={ccrDeleting || ccrList.length === 0}
+                    disabled={ccrDeleting || (ccrList.length === 0 && (ccrStats?.records ?? 0) === 0)}
                     onClick={() => handleDeleteCcr({ days: 1 })}
-                    className="h-7 px-2.5 text-[11px] font-medium text-muted-foreground hover:text-foreground cursor-pointer"
+                    className="h-7 px-2.5 text-[11px] font-medium text-muted-foreground hover:text-foreground cursor-pointer disabled:opacity-40"
                     title="Delete records older than 1 day"
                   >
                     Prune &gt;1d
@@ -827,9 +827,9 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
                   <Button
                     variant="destructive"
                     size="sm"
-                    disabled={ccrDeleting || ccrList.length === 0}
+                    disabled={ccrDeleting || (ccrList.length === 0 && (ccrStats?.records ?? 0) === 0)}
                     onClick={() => handleDeleteCcr({ all: true })}
-                    className="h-7 px-2.5 text-[11px] font-medium cursor-pointer"
+                    className="h-7 px-2.5 text-[11px] font-medium cursor-pointer disabled:opacity-40 disabled:bg-muted disabled:text-muted-foreground disabled:border-border"
                     title="Delete all stored originals"
                   >
                     Clear All
@@ -854,7 +854,7 @@ export function Workbench({ initialTab = "search" }: { initialTab?: WorkbenchTab
                   {ccrList.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
-                        No CCR records stored for this repository yet.
+                        No compression records stored yet.
                       </TableCell>
                     </TableRow>
                   ) : (

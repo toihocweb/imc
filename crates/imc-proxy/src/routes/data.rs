@@ -508,7 +508,11 @@ async fn compression_stats() -> Response {
     } else {
         1.0
     };
-    let size = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
+    let mut size = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
+    if entries.is_empty() && size > 65536 {
+        let _ = store.conn.execute("VACUUM", []);
+        size = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
+    }
     Json(json!({
         "db": db.display().to_string(),
         "records": entries.len(),
@@ -516,7 +520,7 @@ async fn compression_stats() -> Response {
         "compressed_tokens": total_comp,
         "saved_tokens": total_orig - total_comp,
         "compression_ratio": ratio,
-        "db_bytes": size,
+        "db_bytes": if entries.is_empty() { 0 } else { size },
     }))
     .into_response()
 }
