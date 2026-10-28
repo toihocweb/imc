@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rayon::prelude::*;
 
 use crate::hash::hash_file;
 
@@ -203,28 +204,29 @@ pub fn build_manifest(root: &std::path::Path, max_bytes: u64, extra: &[String]) 
         })
         .build();
 
-    let mut out = Vec::new();
-    for entry in walker {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        if !entry.file_type().is_some_and(|t| t.is_file()) {
-            continue;
-        }
-        let path = entry.path();
-        if !is_indexable_file(path, max_bytes) || looks_binary(path) {
-            continue;
-        }
-        let Ok(hash) = hash_file(path) else { continue };
-        let Ok(rel) = path.strip_prefix(root) else { continue };
-        out.push(FileEntry {
-            path: path.to_path_buf(),
-            rel: rel.to_string_lossy().replace('\\', "/"),
-            hash,
-            size: entry.metadata().map(|m| m.len()).unwrap_or(0),
-        });
-    }
+    let entries: Vec<_> = walker
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+        .collect();
+
+    let mut out: Vec<FileEntry> = entries
+        .into_par_iter()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !is_indexable_file(path, max_bytes) || looks_binary(path) {
+                return None;
+            }
+            let hash = hash_file(path).ok()?;
+            let rel = path.strip_prefix(root).ok()?;
+            Some(FileEntry {
+                path: path.to_path_buf(),
+                rel: rel.to_string_lossy().replace('\\', "/"),
+                hash,
+                size: entry.metadata().map(|m| m.len()).unwrap_or(0),
+            })
+        })
+        .collect();
+
     out.sort_by(|a, b| a.rel.cmp(&b.rel));
     Ok(out)
 }

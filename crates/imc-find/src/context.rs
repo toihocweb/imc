@@ -25,7 +25,6 @@ use imc_core::store::Store;
 use imc_support::endpoints::EndpointBridge;
 use regex::Regex;
 use serde_json::Value;
-use walkdir::WalkDir;
 
 // ─── Feature context ─────────────────────────────────────────────────────────
 
@@ -881,17 +880,24 @@ pub fn find_related_tests(root_dir: &Path, source_file: &Path) -> Vec<String> {
         if !sd.is_dir() {
             continue;
         }
-        for entry in WalkDir::new(&sd)
-            .into_iter()
+        let walker = ignore::WalkBuilder::new(&sd)
+            .git_ignore(true)
+            .git_exclude(true)
+            .hidden(true)
             .filter_entry(|e| {
-                e.file_name()
-                    .to_str()
-                    .map(|n| !matches!(n, "node_modules" | ".git" | "venv" | "dist" | "build" | "target"))
-                    .unwrap_or(true)
+                let name = e.file_name().to_string_lossy();
+                if e.depth() == 0 {
+                    return true;
+                }
+                if e.file_type().is_some_and(|t| t.is_dir()) {
+                    !matches!(name.as_ref(), "node_modules" | ".git" | "venv" | "dist" | "build" | "target")
+                } else {
+                    true
+                }
             })
-            .flatten()
-        {
-            if !entry.file_type().is_file() {
+            .build();
+        for entry in walker.flatten() {
+            if !entry.file_type().is_some_and(|t| t.is_file()) {
                 continue;
             }
             let fname = entry.file_name().to_str().unwrap_or("");
@@ -1015,13 +1021,14 @@ pub fn locate_target_file(target: &str, root_dir: &Path) -> Option<PathBuf> {
         .unwrap_or("")
         .to_lowercase();
 
+    let all_files = walk_project(root_dir, &ignored);
     let mut candidates: Vec<PathBuf> = Vec::new();
     if !target_name.is_empty() {
-        for entry in walk_project(root_dir, &ignored) {
+        for entry in &all_files {
             if let Some(fname) = entry.file_name().and_then(|n| n.to_str()) {
                 let f_lower = fname.to_lowercase();
                 if f_lower == target_name || f_lower.starts_with(&format!("{target_name}.")) {
-                    candidates.push(entry);
+                    candidates.push(entry.clone());
                     if candidates.len() >= 5 {
                         break;
                     }
@@ -1057,7 +1064,7 @@ pub fn locate_target_file(target: &str, root_dir: &Path) -> Option<PathBuf> {
 
     if !q_words.is_empty() {
         let mut keyword_cands: Vec<(i32, PathBuf)> = Vec::new();
-        for entry in walk_project(root_dir, &ignored) {
+        for entry in &all_files {
             let ext = ext_lower(&entry);
             if !matches!(ext.as_str(), ".tsx" | ".jsx" | ".ts" | ".js" | ".py" | ".java" | ".go") {
                 continue;
@@ -1095,7 +1102,7 @@ pub fn locate_target_file(target: &str, root_dir: &Path) -> Option<PathBuf> {
                 score += 40;
             }
             if score >= 50 {
-                keyword_cands.push((score, entry));
+                keyword_cands.push((score, entry.clone()));
             }
         }
         if !keyword_cands.is_empty() {
@@ -1124,22 +1131,26 @@ fn expand_tilde(target: &str) -> PathBuf {
 /// Walk a project directory, skipping ignored and dot-directories.
 fn walk_project(root_dir: &Path, ignored: &[&str]) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    for entry in WalkDir::new(root_dir)
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_str().unwrap_or("");
+    let ignored_owned: Vec<String> = ignored.iter().map(|s| s.to_string()).collect();
+    let walker = ignore::WalkBuilder::new(root_dir)
+        .git_ignore(true)
+        .git_exclude(true)
+        .hidden(true)
+        .filter_entry(move |e| {
+            let name = e.file_name().to_string_lossy();
             if e.depth() == 0 {
                 return true;
             }
-            if e.file_type().is_dir() {
-                !ignored.contains(&name) && !name.starts_with('.')
+            if e.file_type().is_some_and(|t| t.is_dir()) {
+                !ignored_owned.iter().any(|ig| ig == name.as_ref())
             } else {
                 true
             }
         })
-        .flatten()
-    {
-        if entry.file_type().is_file() {
+        .build();
+
+    for entry in walker.flatten() {
+        if entry.file_type().is_some_and(|t| t.is_file()) {
             files.push(entry.path().to_path_buf());
         }
     }

@@ -1113,6 +1113,7 @@ dependencies = [
  "dirs",
  "ignore",
  "md-5",
+ "rayon",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1137,10 +1138,12 @@ name = "imc-find"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "ignore",
  "imc-core",
  "imc-parser",
  "imc-search",
  "imc-support",
+ "memchr",
  "regex",
  "serde",
  "serde_json",

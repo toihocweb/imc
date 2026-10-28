@@ -14,3 +14,4 @@ ignore = "0.4"
 md-5.workspace = true
 dirs.workspace = true
 serde_yaml.workspace = true
+rayon.workspace = true

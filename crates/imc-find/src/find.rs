@@ -803,6 +803,14 @@ pub fn extract_method(text: &str, path: &Path, method: &str) -> String {
 }
 
 fn fallback_decl_block(text: &str, path: &Path, target: &str) -> Option<String> {
+    if target.is_empty() {
+        return None;
+    }
+    // SIMD literal fast-path: bail out in microseconds if target is not in the file
+    if memchr::memmem::find(text.as_bytes(), target.as_bytes()).is_none() {
+        return None;
+    }
+
     let pattern = Regex::new(&format!(
         r"(?:(?:public|private|protected|static|final|native|synchronized|abstract|default|async|export)\s+)*(?:[\w<>\[\],\s]+\s+)?\b{}\b\s*[\(=]",
         regex::escape(target)
