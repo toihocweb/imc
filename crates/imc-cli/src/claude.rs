@@ -119,7 +119,7 @@ When tool output is compressed with `[imc: ... full output is id <id>]`, run thi
 5. **Ranked is not proven.** `imc trace` has no relevance floor: verify a hit before relying on it.
 6. **Empty means "not in the index"**, not "does not exist". Fall back to Read/Grep.
 7. **Use `-C <project-root>`** (or `-p <id>`) when the cwd may not be the project root.
-8. Tool results are filtered before they reach you; large tool outputs carry retrieval handles (`imc retrieve <id>`).
+8. **Compressed tool outputs carry a retrieval handle** (`[imc: ... id <id>]`). When you need the complete raw log, full diagnostic, or original diff, run `imc retrieve <id>` directly instead of re-running expensive terminal commands.
 9. **Run standalone single commands.** Never chain commands with `&&`, `;`, or pipe with `|` (`head`, `grep`). Compound shell commands trigger Auto Mode safety blocks. Use built-in imc flags: `-l <n>` for limits, `--depth <d>` for trace depth, `--budget <b>` for packing, and `-C <dir>` for directory targeting.
 "#
 }
