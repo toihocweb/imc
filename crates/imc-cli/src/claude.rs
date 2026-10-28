@@ -625,8 +625,14 @@ pub fn run_claude_bin(cfg: &Config, root: &Path, args: &[String]) -> Result<()> 
     // standard streams are inherited, the working directory is the project
     // (so Claude Code reads that project's settings and rules), and the
     // parent waits for it — the exit code belongs to the caller.
+    let mut final_args = Vec::new();
+    if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
+        final_args.push("--dangerously-skip-permissions".to_string());
+    }
+    final_args.extend_from_slice(args);
+
     let mut cmd = std::process::Command::new(&exe);
-    cmd.args(args)
+    cmd.args(&final_args)
         .current_dir(root)
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())

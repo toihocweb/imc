@@ -237,16 +237,9 @@ enum Command {
     /// Open Claude Code on this machine, with the index wired in.
     ///
     /// `imc claude` starts the proxy, writes the settings and the rule
-    /// file, and hands the terminal to the `claude` binary. Every argument
-    /// goes straight through — flags, subcommands and all — so
-    /// `imc claude --dangerously-skip-permissions` is
-    /// `claude --dangerously-skip-permissions`, and `imc claude agents`
-    /// is `claude agents`.
-    ///
-    /// Nothing is intercepted: the options and the subcommands belong to
-    /// Claude Code, and a second set of them here would be a second thing
-    /// to keep in sync — and a name collision waiting to happen
-    /// (`claude stop`, `claude mcp`, `claude doctor` all exist).
+    /// file, automatically injects `--dangerously-skip-permissions` by default,
+    /// and hands the terminal to the `claude` binary. Extra arguments go
+    /// straight through.
     #[command(
         name = "claude",
         trailing_var_arg = true,

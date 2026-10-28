@@ -1352,7 +1352,7 @@ def suite_claude_launch():
             timeout=120,
             env=env,
         )
-        assert "ARGS:--print hello" in r.stdout, r.stdout[-400:]
+        assert "ARGS:--dangerously-skip-permissions --print hello" in r.stdout, r.stdout[-400:]
         assert "BASE:http://127.0.0.1:12345" in r.stdout, r.stdout[-400:]
         assert "STDIN:[typed by the user]" in r.stdout, r.stdout[-400:]
         # The exit code is claude's, not imc's.
@@ -1406,7 +1406,8 @@ def suite_claude_launch():
             line = [l for l in r.stdout.splitlines() if l.startswith("ARGS:")]
             assert line, f"nothing reached claude for {args}: {r.stdout[-300:]}"
             got = line[0][len("ARGS:"):].strip()
-            want = " ".join(f"[{a}]" for a in args)
+            expected = args if "--dangerously-skip-permissions" in args else ["--dangerously-skip-permissions", *args]
+            want = " ".join(f"[{a}]" for a in expected)
             assert got == want, f"{args} -> {got!r}, want {want!r}"
         return f"{len(cases)} cases forwarded unchanged"
 
