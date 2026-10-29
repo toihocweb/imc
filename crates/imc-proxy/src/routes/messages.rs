@@ -463,18 +463,6 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
     let copilot_ok = crate::github::is_copilot_configured();
     let hyperspace_available = !crate::hyperspace::load_hyperspace_config().base_url.is_empty();
 
-    let model_lower = model.to_lowercase();
-    let has_tools = payload.tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
-    let requires_responses = model_lower.contains("sol")
-        || model_lower.contains("astra")
-        || model_lower.contains("gpt-6.1")
-        || model_lower.contains("gpt-6-");
-
-    if requires_responses || (decision.responses && has_tools) {
-        log.info(&format!("[Proxy] Model {model} using Responses API (/responses)"));
-        return responses_response(payload, injection, decision.hyperspace).await;
-    }
-
     let target = match decision.target {
         RouteTarget::CopilotResponses | RouteTarget::CopilotMessages
             if !copilot_ok && hyperspace_available && explicit_provider.as_deref() != Some("copilot") =>
@@ -525,7 +513,7 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
         }
 
         RouteTarget::CopilotResponses => {
-            return responses_response(payload, injection, decision.hyperspace).await;
+            return responses_response(payload, injection).await;
         }
 
         RouteTarget::CopilotMessages => {
@@ -755,44 +743,36 @@ pub fn chat_completions_to_anthropic(data: &Value, model: &str) -> Value {
 async fn responses_response(
     payload: AnthropicMessagesPayload,
     injection: InjectionOutcome,
-    is_hyperspace_target: bool,
 ) -> Response {
     let log = create_handler_logger("main");
     let model = payload.model.clone();
     let wants_stream = payload.stream.unwrap_or(false);
     let responses_payload = translate_to_responses(&payload);
 
-    let copilot_ok = crate::github::is_copilot_configured();
-    let is_hyperspace = is_hyperspace_target || crate::hyperspace::is_hyperspace_model(&model);
-    let hyperspace_available = !crate::hyperspace::load_hyperspace_config().base_url.is_empty();
-
-    let upstream = if is_hyperspace && hyperspace_available {
-        match crate::hyperspace::call_hyperspace_responses(&responses_payload).await {
-            Ok(r) => r,
-            Err(e) => return error_response(502, &format!("Hyperspace responses failed: {e:#}")),
-        }
-    } else if !is_hyperspace && copilot_ok {
-        match create_responses(&token_provider(), &responses_payload).await {
-            Ok(r) => r,
-            Err(e) => {
-                log.warning(&format!("[Proxy] Copilot Responses API failed ({e:#}), trying Hyperspace responses..."));
-                if hyperspace_available {
-                    match crate::hyperspace::call_hyperspace_responses(&responses_payload).await {
-                        Ok(r) => r,
-                        Err(he) => return error_response(502, &format!("Hyperspace responses failed: {he:#}")),
+    let upstream = match create_responses(&token_provider(), &responses_payload).await {
+        Ok(r) => r,
+        Err(e) => {
+            log.warning(&format!("[Proxy] Responses API setup failed ({e:#}), trying Hyperspace fallback..."));
+            if !crate::hyperspace::load_hyperspace_config().base_url.is_empty() {
+                match call_hyperspace(&payload, None).await {
+                    Ok(resp) if resp.status().as_u16() == 200 => {
+                        return hyperspace_response(resp, &payload, injection).await;
                     }
-                } else {
-                    return error_response(503, &format!("Copilot is optional and not configured: {e:#}"));
+                    Ok(resp) => {
+                        let status = resp.status().as_u16();
+                        let headers = crate::providers::provider_proxy::strip_response_headers(
+                            resp.headers().clone(),
+                        );
+                        let bytes = resp.bytes().await.unwrap_or_default();
+                        return build_response(status, headers, Body::from(bytes));
+                    }
+                    Err(he) => {
+                        log.error(&format!("[Proxy] Hyperspace fallback failed: {he:#}"));
+                    }
                 }
             }
+            return error_response(503, &format!("Copilot is optional and not configured: {e:#}"));
         }
-    } else if hyperspace_available {
-        match crate::hyperspace::call_hyperspace_responses(&responses_payload).await {
-            Ok(r) => r,
-            Err(e) => return error_response(502, &format!("Hyperspace responses failed: {e:#}")),
-        }
-    } else {
-        return error_response(503, "Neither Copilot nor Hyperspace is configured for Responses API");
     };
     if upstream.status().as_u16() != 200 {
         let status = upstream.status().as_u16();

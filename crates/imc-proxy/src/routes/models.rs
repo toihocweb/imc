@@ -82,7 +82,6 @@ pub async fn fetch_models() -> axum::response::Response {
         "gpt-4o",
         "gpt-4.1",
         "gpt-5",
-        "gpt-6.1-sol",
         "gemini-3.8-flash",
     ];
     for id in standard_models {

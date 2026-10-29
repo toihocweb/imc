@@ -186,16 +186,10 @@ pub fn decide_route(
         }
     }
 
-    let m_lower = mapped_model.to_lowercase();
-    let is_gemini = m_lower.contains("gemini");
-    let is_frontier_reasoning = m_lower.contains("sol")
-        || m_lower.contains("astra")
-        || m_lower.contains("terra")
-        || m_lower.contains("luna");
-
+    let is_gemini = mapped_model.to_lowercase().contains("gemini");
     let hyperspace = explicit_provider == Some("hyperspace")
         || (explicit_provider != Some("copilot")
-            && (is_hyperspace || is_gemini || is_frontier_reasoning || mapped_model.starts_with("anthropic--")));
+            && (is_hyperspace || is_gemini || mapped_model.starts_with("anthropic--")));
     if hyperspace {
         return RouteDecision {
             target: RouteTarget::Hyperspace,
@@ -282,8 +276,7 @@ pub async fn forward_provider_chat_completions(
     let base = provider_config.base_url.clone().unwrap_or_default();
     let url = resolve_provider_request_url(&base, "", "/v1/chat/completions");
     let headers = build_provider_upstream_headers(provider_config, request_headers);
-    let mut body = dump(payload)?;
-    crate::hyperspace::adjust_reasoning_effort_for_tools(&mut body, &payload.model);
+    let body = dump(payload)?;
     client(60)?
         .post(&url)
         .headers(header_map_from_btree(&headers))

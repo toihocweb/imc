@@ -14,8 +14,6 @@ use imc_proxy_copilot::chat_completions::sanitize_message_content;
 use imc_proxy_copilot::non_stream_translation::translate_to_openai;
 use imc_proxy_types::logger::create_handler_logger;
 use imc_proxy_types::types::anthropic::AnthropicMessagesPayload;
-use imc_proxy_types::types::responses::ResponsesPayload;
-use serde_json::Value;
 
 /// Port of the `_hyperspace_models` module-global set.
 fn model_registry() -> &'static RwLock<HashSet<String>> {
@@ -58,12 +56,7 @@ pub fn register_hyperspace_models(model_ids: &[String]) {
 /// Port of `is_hyperspace_model`.
 pub fn is_hyperspace_model(model_id: &str) -> bool {
     let lower = model_id.to_lowercase();
-    if lower.contains("gemini")
-        || lower.contains("sol")
-        || lower.contains("astra")
-        || lower.contains("terra")
-        || lower.contains("luna")
-    {
+    if lower.contains("gemini") {
         return true;
     }
     let suffix = format!("/{lower}");
@@ -92,33 +85,10 @@ pub fn resolve_hyperspace_model(model: &str) -> String {
         return model.to_string();
     }
 
-    let mut lower = model.to_lowercase();
-    if lower == "gpt-sol-6.1" || lower == "gpt-sol-6" {
-        lower = "gpt-6.1-sol".to_string();
-    }
-
-    // Try preferred / verified active prefixes first
-    const PREFERRED_PREFIXES: &[&str] = &[
-        "thanhnhan9023/",
-        "mainnewnol/",
-        "support1/",
-        "dat1009zx/",
-        "levuphong2909/",
-        "ngovutuananh/",
-        "hotrovlg/",
-        "cuzem3/",
-        "dungcsnd113/",
-    ];
-    for pref in PREFERRED_PREFIXES {
-        let candidate = format!("{pref}{lower}");
-        if reg.contains(&candidate) {
-            return candidate;
-        }
-    }
-
+    let lower = model.to_lowercase();
     let suffix = format!("/{lower}");
 
-    // Look for exact suffix match (e.g. ".../gemini-3.8-flash-high" or ".../gpt-6.1-sol")
+    // Look for exact suffix match (e.g. ".../gemini-3.8-flash-high")
     if let Some(matched) = reg.iter().find(|m| m.to_lowercase().ends_with(&suffix)) {
         return matched.clone();
     }
@@ -160,35 +130,6 @@ pub fn install_model_mapping_hook() {
     imc_proxy_types::model_mapping::set_hyperspace_model_check(is_hyperspace_model);
 }
 
-/// Adjusts reasoning_effort for reasoning models on /chat/completions.
-/// Defaults to "high" for reasoning models when unspecified or set to "none".
-pub fn adjust_reasoning_effort_for_tools(body: &mut Value, model: &str) {
-    let model_lower = model.to_lowercase();
-    let is_reasoning_model = model_lower.contains("sol")
-        || model_lower.contains("luna")
-        || model_lower.contains("astra")
-        || model_lower.contains("terra")
-        || model_lower.contains("gpt-6")
-        || model_lower.contains("gpt-5")
-        || model_lower.starts_with("o1")
-        || model_lower.starts_with("o3")
-        || model_lower.starts_with("o4")
-        || model_lower.contains("reasoning")
-        || model_lower.contains("thinking");
-
-    if is_reasoning_model {
-        if let Some(obj) = body.as_object_mut() {
-            let is_none_or_missing = match obj.get("reasoning_effort") {
-                None => true,
-                Some(v) => v.as_str() == Some("none"),
-            };
-            if is_none_or_missing {
-                obj.insert("reasoning_effort".to_string(), serde_json::json!("high"));
-            }
-        }
-    }
-}
-
 /// Port of `call_hyperspace`.
 ///
 /// Returns the raw upstream response **unread** so the caller can forward SSE
@@ -213,7 +154,6 @@ pub async fn call_hyperspace(
     // Guard: OpenAI-compatible endpoints reject `content: null` unless the
     // message is an assistant turn carrying tool calls.
     sanitize_message_content(&mut openai_data);
-    adjust_reasoning_effort_for_tools(&mut openai_data, &payload.model);
 
     let url = format!("{}/chat/completions", cfg.base_url);
     let client = reqwest::Client::builder()
@@ -230,58 +170,6 @@ pub async fn call_hyperspace(
         .context("build hyperspace request")?;
 
     let response = client.execute(request).await.context("post hyperspace")?;
-    Ok(response)
-}
-
-/// Sends an OpenAI Responses request to `{base_url}/responses`.
-pub async fn call_hyperspace_responses(
-    payload: &ResponsesPayload,
-) -> Result<reqwest::Response> {
-    let cfg = load_hyperspace_config();
-    if cfg.base_url.is_empty() {
-        anyhow::bail!("Hyperspace base_url not configured in ~/.indexer_config.yaml");
-    }
-
-    let mut body = serde_json::to_value(payload).context("serialize responses payload")?;
-    let model = payload.model.clone();
-    let resolved_model = resolve_hyperspace_model(&model);
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert("model".to_string(), serde_json::json!(resolved_model));
-
-        let m_lower = resolved_model.to_lowercase();
-        let is_reasoning_model = m_lower.contains("sol")
-            || m_lower.contains("luna")
-            || m_lower.contains("astra")
-            || m_lower.contains("terra")
-            || m_lower.contains("gpt-6")
-            || m_lower.contains("gpt-5")
-            || m_lower.starts_with("o1")
-            || m_lower.starts_with("o3")
-            || m_lower.starts_with("o4");
-
-        if is_reasoning_model {
-            if obj.get("reasoning").is_none() {
-                obj.insert("reasoning".to_string(), serde_json::json!({"effort": "high"}));
-            }
-            obj.insert("temperature".to_string(), serde_json::json!(1.0));
-        }
-    }
-
-    let url = format!("{}/responses", cfg.base_url);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .context("build http client")?;
-
-    let request = client
-        .post(&url)
-        .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {}", cfg.api_key))
-        .json(&body)
-        .build()
-        .context("build hyperspace responses request")?;
-
-    let response = client.execute(request).await.context("post hyperspace responses")?;
     Ok(response)
 }
 
@@ -358,39 +246,6 @@ mod tests {
             let err = call_hyperspace(&payload, None).await.unwrap_err();
             assert!(err.to_string().contains("base_url not configured"));
         }
-    }
-
-    #[test]
-    fn adjust_reasoning_effort_for_tools_sets_high_on_reasoning_model() {
-        let mut body = serde_json::json!({
-            "model": "gpt-6.1-sol",
-            "messages": [{"role": "user", "content": "hello"}],
-            "tools": [{"type": "function", "function": {"name": "test"}}]
-        });
-        adjust_reasoning_effort_for_tools(&mut body, "gpt-6.1-sol");
-        assert_eq!(body.get("reasoning_effort").and_then(|v| v.as_str()), Some("high"));
-    }
-
-    #[test]
-    fn adjust_reasoning_effort_for_tools_overwrites_none_with_high() {
-        let mut body = serde_json::json!({
-            "model": "gpt-6.1-sol",
-            "messages": [{"role": "user", "content": "hello"}],
-            "reasoning_effort": "none"
-        });
-        adjust_reasoning_effort_for_tools(&mut body, "gpt-6.1-sol");
-        assert_eq!(body.get("reasoning_effort").and_then(|v| v.as_str()), Some("high"));
-    }
-
-    #[test]
-    fn adjust_reasoning_effort_for_tools_leaves_non_reasoning_model_alone() {
-        let mut body = serde_json::json!({
-            "model": "claude-3-5-sonnet",
-            "messages": [{"role": "user", "content": "hello"}],
-            "tools": [{"type": "function", "function": {"name": "test"}}]
-        });
-        adjust_reasoning_effort_for_tools(&mut body, "claude-3-5-sonnet");
-        assert!(body.get("reasoning_effort").is_none());
     }
 
     #[test]
