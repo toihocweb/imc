@@ -26,6 +26,8 @@ pub fn usage_log_file() -> PathBuf {
         .join("usage.json")
 }
 
+pub const MAX_USAGE_RECORDS: usize = 1000;
+
 static LOCK: Mutex<()> = Mutex::const_new(());
 
 pub fn read_records(path: &Path) -> Vec<Value> {
@@ -116,6 +118,10 @@ pub async fn log_usage(
     });
     let mut records = read_records(&usage_log_file());
     records.push(record);
+    if records.len() > MAX_USAGE_RECORDS {
+        let drain_count = records.len() - MAX_USAGE_RECORDS;
+        records.drain(0..drain_count);
+    }
     let payload = serde_json::to_string_pretty(&records)?;
     let path = usage_log_file();
     write_file_atomically(&path.to_string_lossy(), &payload)?;

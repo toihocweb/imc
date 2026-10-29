@@ -14,7 +14,7 @@ interface Mappings {
   mappings: Record<string, string>;
 }
 
-type ProviderType = "hyperspace" | "copilot" | "custom";
+type ProviderType = "hyperspace" | "copilot";
 
 const COMMON_CLIENT_MODELS = [
   "claude-3-5-sonnet-20241022",
@@ -30,16 +30,13 @@ const COMMON_CLIENT_MODELS = [
 ];
 
 function parseProvider(value: string): { provider: ProviderType; model: string } {
-  if (value.startsWith("hyperspace:")) {
-    return { provider: "hyperspace", model: value.slice("hyperspace:".length) };
-  }
   if (value.startsWith("copilot:")) {
     return { provider: "copilot", model: value.slice("copilot:".length) };
   }
-  if (value.startsWith("anthropic--")) {
-    return { provider: "hyperspace", model: value };
+  if (value.startsWith("hyperspace:")) {
+    return { provider: "hyperspace", model: value.slice("hyperspace:".length) };
   }
-  return { provider: "custom", model: value };
+  return { provider: "hyperspace", model: value };
 }
 
 export default function ModelMapPage() {
@@ -116,10 +113,8 @@ export default function ModelMapPage() {
     if (!modelId) return;
     if (provider === "hyperspace") {
       setTo(`hyperspace:${modelId}`);
-    } else if (provider === "copilot") {
-      setTo(`copilot:${modelId}`);
     } else {
-      setTo(modelId);
+      setTo(`copilot:${modelId}`);
     }
   };
 
@@ -128,10 +123,8 @@ export default function ModelMapPage() {
     if (!modelId) return;
     if (provider === "hyperspace") {
       setEditTo(`hyperspace:${modelId}`);
-    } else if (provider === "copilot") {
-      setEditTo(`copilot:${modelId}`);
     } else {
-      setEditTo(modelId);
+      setEditTo(`copilot:${modelId}`);
     }
   };
 
@@ -319,7 +312,12 @@ export default function ModelMapPage() {
                   <div className="flex items-center rounded-md border border-border/80 p-0.5 bg-muted/40 text-[11px]">
                     <button
                       type="button"
-                      onClick={() => setSelectedProvider("hyperspace")}
+                      onClick={() => {
+                        setSelectedProvider("hyperspace");
+                        if (to.startsWith("copilot:")) {
+                          setTo(hyperspaceModels[0] ? `hyperspace:${hyperspaceModels[0]}` : "");
+                        }
+                      }}
                       className={`px-2 py-0.5 rounded transition-all cursor-pointer flex items-center gap-1 ${
                         selectedProvider === "hyperspace"
                           ? "bg-card text-foreground font-semibold shadow-xs"
@@ -331,7 +329,12 @@ export default function ModelMapPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSelectedProvider("copilot")}
+                      onClick={() => {
+                        setSelectedProvider("copilot");
+                        if (to.startsWith("hyperspace:")) {
+                          setTo(copilotModels[0] ? `copilot:${copilotModels[0]}` : "");
+                        }
+                      }}
                       className={`px-2 py-0.5 rounded transition-all cursor-pointer flex items-center gap-1 ${
                         selectedProvider === "copilot"
                           ? "bg-card text-foreground font-semibold shadow-xs"
@@ -341,17 +344,6 @@ export default function ModelMapPage() {
                       <Bot className="h-3 w-3 text-blue-500" />
                       Copilot ({copilotModels.length})
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedProvider("custom")}
-                      className={`px-2 py-0.5 rounded transition-all cursor-pointer ${
-                        selectedProvider === "custom"
-                          ? "bg-card text-foreground font-semibold shadow-xs"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      Custom
-                    </button>
                   </div>
                 </div>
 
@@ -359,9 +351,9 @@ export default function ModelMapPage() {
                 {selectedProvider === "hyperspace" && (
                   <select
                     aria-label="Select Hyperspace Model"
+                    value={to.startsWith("hyperspace:") ? to.slice("hyperspace:".length) : ""}
                     onChange={(e) => handleDropdownSelect(e.target.value, "hyperspace")}
-                    defaultValue=""
-                    className="h-8 w-full rounded-md border border-border bg-card px-2.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                    className="h-9 w-full rounded-md border border-border bg-card px-2.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
                   >
                     <option value="" disabled>
                       -- Select Hyperspace Model ({hyperspaceModels.length} available) --
@@ -377,9 +369,9 @@ export default function ModelMapPage() {
                 {selectedProvider === "copilot" && (
                   <select
                     aria-label="Select Copilot Model"
+                    value={to.startsWith("copilot:") ? to.slice("copilot:".length) : ""}
                     onChange={(e) => handleDropdownSelect(e.target.value, "copilot")}
-                    defaultValue=""
-                    className="h-8 w-full rounded-md border border-border bg-card px-2.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                    className="h-9 w-full rounded-md border border-border bg-card px-2.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
                   >
                     <option value="" disabled>
                       -- Select Copilot Model ({copilotModels.length} available) --
@@ -391,17 +383,6 @@ export default function ModelMapPage() {
                     ))}
                   </select>
                 )}
-
-                {/* Editable Model Input */}
-                <Input
-                  placeholder="e.g. hyperspace:anthropic--claude-4.6-sonnet or copilot:gpt-4o"
-                  value={to}
-                  onChange={(e) => setTo(e.target.value)}
-                  className="font-mono text-xs"
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  Pick from the dropdown above or freely edit/modify the model string.
-                </p>
               </div>
             </div>
 
@@ -457,27 +438,34 @@ export default function ModelMapPage() {
                             placeholder="Requested model"
                           />
                         </TableCell>
-                        <TableCell className="align-top py-3 space-y-2">
+                        <TableCell className="align-top py-3">
                           {/* Mini provider selector for inline editing */}
                           <div className="flex items-center gap-1.5 text-[11px]">
                             <select
                               aria-label="Edit Provider Source"
                               value={editProvider}
-                              onChange={(e) => setEditProvider(e.target.value as ProviderType)}
-                              className="h-7 rounded border border-border bg-card px-2 text-xs font-medium cursor-pointer"
+                              onChange={(e) => {
+                                const prov = e.target.value as ProviderType;
+                                setEditProvider(prov);
+                                if (prov === "hyperspace" && hyperspaceModels[0]) {
+                                  setEditTo(`hyperspace:${hyperspaceModels[0]}`);
+                                } else if (prov === "copilot" && copilotModels[0]) {
+                                  setEditTo(`copilot:${copilotModels[0]}`);
+                                }
+                              }}
+                              className="h-8 rounded border border-border bg-card px-2 text-xs font-medium cursor-pointer"
                             >
                               <option value="hyperspace">⚡ Hyperspace</option>
                               <option value="copilot">🤖 Copilot</option>
-                              <option value="custom">Custom</option>
                             </select>
 
                             {/* Dropdown for inline editing */}
                             {editProvider === "hyperspace" && (
                               <select
                                 aria-label="Select Hyperspace Model for editing"
+                                value={editTo.startsWith("hyperspace:") ? editTo.slice("hyperspace:".length) : ""}
                                 onChange={(e) => handleEditDropdownSelect(e.target.value, "hyperspace")}
-                                defaultValue=""
-                                className="h-7 flex-1 rounded border border-border bg-card px-2 text-xs font-mono cursor-pointer"
+                                className="h-8 flex-1 rounded border border-border bg-card px-2 text-xs font-mono cursor-pointer"
                               >
                                 <option value="" disabled>-- Pick Hyperspace Model --</option>
                                 {hyperspaceModels.map((m) => (
@@ -489,9 +477,9 @@ export default function ModelMapPage() {
                             {editProvider === "copilot" && (
                               <select
                                 aria-label="Select Copilot Model for editing"
+                                value={editTo.startsWith("copilot:") ? editTo.slice("copilot:".length) : ""}
                                 onChange={(e) => handleEditDropdownSelect(e.target.value, "copilot")}
-                                defaultValue=""
-                                className="h-7 flex-1 rounded border border-border bg-card px-2 text-xs font-mono cursor-pointer"
+                                className="h-8 flex-1 rounded border border-border bg-card px-2 text-xs font-mono cursor-pointer"
                               >
                                 <option value="" disabled>-- Pick Copilot Model --</option>
                                 {copilotModels.map((m) => (
@@ -500,13 +488,6 @@ export default function ModelMapPage() {
                               </select>
                             )}
                           </div>
-
-                          <Input
-                            value={editTo}
-                            onChange={(e) => setEditTo(e.target.value)}
-                            className="h-8 font-mono text-xs"
-                            placeholder="Upstream target model"
-                          />
                         </TableCell>
                         <TableCell className="align-top py-3 text-right">
                           <div className="flex items-center justify-end gap-1">

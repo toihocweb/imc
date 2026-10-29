@@ -921,6 +921,9 @@ async fn usage_get() -> Response {
     let count = records.len();
     let mut reversed = records;
     reversed.reverse();
+    if reversed.len() > imc_proxy_types::usage_logger::MAX_USAGE_RECORDS {
+        reversed.truncate(imc_proxy_types::usage_logger::MAX_USAGE_RECORDS);
+    }
 
     Json(json!({
         "file": file.display().to_string(),
