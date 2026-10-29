@@ -1,5 +1,9 @@
 # imc
 
+<p align="center">
+  <img src="web-dashboard/public/imc-logo.svg" width="120" alt="imc logo" />
+</p>
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2021?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Release](https://img.shields.io/github/v/release/toihocweb/imc?label=release)](https://github.com/toihocweb/imc/releases/latest)

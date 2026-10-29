@@ -167,9 +167,9 @@ ensure_config() {
         cat > "$CONFIG_FILE" <<'EOF'
 # imc configuration — edit with `imc config set ...`
 llm:
-  base_url: https://api.xah.io/v1
+  base_url: http://localhost:6655/litellm/v1
   api_key: ""
-  model: claude-haiku-4.5
+  model: claude-sonnet-4-6
 embedding:
   model: text-embedding-3-small
 EOF
