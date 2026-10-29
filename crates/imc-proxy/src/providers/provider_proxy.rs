@@ -275,7 +275,8 @@ pub async fn forward_provider_chat_completions(
     let base = provider_config.base_url.clone().unwrap_or_default();
     let url = resolve_provider_request_url(&base, "", "/v1/chat/completions");
     let headers = build_provider_upstream_headers(provider_config, request_headers);
-    let body = dump(payload)?;
+    let mut body = dump(payload)?;
+    crate::hyperspace::adjust_reasoning_effort_for_tools(&mut body, &payload.model);
     client(60)?
         .post(&url)
         .headers(header_map_from_btree(&headers))

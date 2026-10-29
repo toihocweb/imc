@@ -45,6 +45,24 @@ pub async fn proxy_chat_completions(
     let model = payload.model.clone();
     let wants_stream = payload.stream.unwrap_or(false);
 
+    let has_tools = payload.tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
+    let model_lower = model.to_lowercase();
+    let is_reasoning_model = model_lower.contains("sol")
+        || model_lower.contains("luna")
+        || model_lower.contains("astra")
+        || model_lower.contains("terra")
+        || model_lower.contains("gpt-6")
+        || model_lower.contains("gpt-5")
+        || model_lower.starts_with("o1")
+        || model_lower.starts_with("o3")
+        || model_lower.starts_with("o4")
+        || model_lower.contains("reasoning")
+        || model_lower.contains("thinking");
+
+    if has_tools && is_reasoning_model && payload.reasoning_effort.is_none() {
+        payload.reasoning_effort = Some("none".to_string());
+    }
+
     // A model mapped to `provider:<id>` with that provider configured is a
     // straight passthrough to that upstream.
     if let Some(provider_id) = get_mapped_provider(&model) {

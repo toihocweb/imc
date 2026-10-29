@@ -14,6 +14,7 @@ use imc_proxy_copilot::chat_completions::sanitize_message_content;
 use imc_proxy_copilot::non_stream_translation::translate_to_openai;
 use imc_proxy_types::logger::create_handler_logger;
 use imc_proxy_types::types::anthropic::AnthropicMessagesPayload;
+use serde_json::Value;
 
 /// Port of the `_hyperspace_models` module-global set.
 fn model_registry() -> &'static RwLock<HashSet<String>> {
@@ -78,6 +79,40 @@ pub fn install_model_mapping_hook() {
     imc_proxy_types::model_mapping::set_hyperspace_model_check(is_hyperspace_model);
 }
 
+/// Adjusts reasoning_effort for function tools on /chat/completions.
+/// OpenAI / Azure endpoints reject function tools when reasoning_effort is active.
+/// If the model is a reasoning model and tools are present, set reasoning_effort to "none".
+pub fn adjust_reasoning_effort_for_tools(body: &mut Value, model: &str) {
+    let has_tools = body
+        .get("tools")
+        .and_then(|t| t.as_array())
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+
+    if !has_tools {
+        return;
+    }
+
+    let model_lower = model.to_lowercase();
+    let is_reasoning_model = model_lower.contains("sol")
+        || model_lower.contains("luna")
+        || model_lower.contains("astra")
+        || model_lower.contains("terra")
+        || model_lower.contains("gpt-6")
+        || model_lower.contains("gpt-5")
+        || model_lower.starts_with("o1")
+        || model_lower.starts_with("o3")
+        || model_lower.starts_with("o4")
+        || model_lower.contains("reasoning")
+        || model_lower.contains("thinking");
+
+    if is_reasoning_model && body.get("reasoning_effort").is_none() {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("reasoning_effort".to_string(), serde_json::json!("none"));
+        }
+    }
+}
+
 /// Port of `call_hyperspace`.
 ///
 /// Returns the raw upstream response **unread** so the caller can forward SSE
@@ -98,6 +133,7 @@ pub async fn call_hyperspace(
     // Guard: OpenAI-compatible endpoints reject `content: null` unless the
     // message is an assistant turn carrying tool calls.
     sanitize_message_content(&mut openai_data);
+    adjust_reasoning_effort_for_tools(&mut openai_data, &payload.model);
 
     let url = format!("{}/chat/completions", cfg.base_url);
     let client = reqwest::Client::builder()
@@ -190,5 +226,37 @@ mod tests {
             let err = call_hyperspace(&payload, None).await.unwrap_err();
             assert!(err.to_string().contains("base_url not configured"));
         }
+    }
+
+    #[test]
+    fn adjust_reasoning_effort_for_tools_sets_none_when_tools_present_on_reasoning_model() {
+        let mut body = serde_json::json!({
+            "model": "gpt-6.1-sol",
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": [{"type": "function", "function": {"name": "test"}}]
+        });
+        adjust_reasoning_effort_for_tools(&mut body, "gpt-6.1-sol");
+        assert_eq!(body.get("reasoning_effort").and_then(|v| v.as_str()), Some("none"));
+    }
+
+    #[test]
+    fn adjust_reasoning_effort_for_tools_leaves_alone_without_tools() {
+        let mut body = serde_json::json!({
+            "model": "gpt-6.1-sol",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        adjust_reasoning_effort_for_tools(&mut body, "gpt-6.1-sol");
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn adjust_reasoning_effort_for_tools_leaves_non_reasoning_model_alone() {
+        let mut body = serde_json::json!({
+            "model": "claude-3-5-sonnet",
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": [{"type": "function", "function": {"name": "test"}}]
+        });
+        adjust_reasoning_effort_for_tools(&mut body, "claude-3-5-sonnet");
+        assert!(body.get("reasoning_effort").is_none());
     }
 }
