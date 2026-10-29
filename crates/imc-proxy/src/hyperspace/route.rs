@@ -14,6 +14,7 @@ use imc_proxy_copilot::chat_completions::sanitize_message_content;
 use imc_proxy_copilot::non_stream_translation::translate_to_openai;
 use imc_proxy_types::logger::create_handler_logger;
 use imc_proxy_types::types::anthropic::AnthropicMessagesPayload;
+use imc_proxy_types::types::responses::ResponsesPayload;
 use serde_json::Value;
 
 /// Port of the `_hyperspace_models` module-global set.
@@ -90,6 +91,26 @@ pub fn resolve_hyperspace_model(model: &str) -> String {
     if lower == "gpt-sol-6.1" || lower == "gpt-sol-6" {
         lower = "gpt-6.1-sol".to_string();
     }
+
+    // Try preferred / verified active prefixes first
+    const PREFERRED_PREFIXES: &[&str] = &[
+        "thanhnhan9023/",
+        "mainnewnol/",
+        "support1/",
+        "dat1009zx/",
+        "levuphong2909/",
+        "ngovutuananh/",
+        "hotrovlg/",
+        "cuzem3/",
+        "dungcsnd113/",
+    ];
+    for pref in PREFERRED_PREFIXES {
+        let candidate = format!("{pref}{lower}");
+        if reg.contains(&candidate) {
+            return candidate;
+        }
+    }
+
     let suffix = format!("/{lower}");
 
     // Look for exact suffix match (e.g. ".../gemini-3.8-flash-high" or ".../gpt-6.1-sol")
@@ -204,6 +225,58 @@ pub async fn call_hyperspace(
         .context("build hyperspace request")?;
 
     let response = client.execute(request).await.context("post hyperspace")?;
+    Ok(response)
+}
+
+/// Sends an OpenAI Responses request to `{base_url}/responses`.
+pub async fn call_hyperspace_responses(
+    payload: &ResponsesPayload,
+) -> Result<reqwest::Response> {
+    let cfg = load_hyperspace_config();
+    if cfg.base_url.is_empty() {
+        anyhow::bail!("Hyperspace base_url not configured in ~/.indexer_config.yaml");
+    }
+
+    let mut body = serde_json::to_value(payload).context("serialize responses payload")?;
+    let model = payload.model.clone();
+    let resolved_model = resolve_hyperspace_model(&model);
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("model".to_string(), serde_json::json!(resolved_model));
+
+        let m_lower = resolved_model.to_lowercase();
+        let is_reasoning_model = m_lower.contains("sol")
+            || m_lower.contains("luna")
+            || m_lower.contains("astra")
+            || m_lower.contains("terra")
+            || m_lower.contains("gpt-6")
+            || m_lower.contains("gpt-5")
+            || m_lower.starts_with("o1")
+            || m_lower.starts_with("o3")
+            || m_lower.starts_with("o4");
+
+        if is_reasoning_model {
+            if obj.get("reasoning").is_none() {
+                obj.insert("reasoning".to_string(), serde_json::json!({"effort": "high"}));
+            }
+            obj.insert("temperature".to_string(), serde_json::json!(1.0));
+        }
+    }
+
+    let url = format!("{}/responses", cfg.base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .context("build http client")?;
+
+    let request = client
+        .post(&url)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", cfg.api_key))
+        .json(&body)
+        .build()
+        .context("build hyperspace responses request")?;
+
+    let response = client.execute(request).await.context("post hyperspace responses")?;
     Ok(response)
 }
 
