@@ -957,6 +957,35 @@ struct ConnectionCheckPayload {
     base_url: Option<String>,
 }
 
+async fn connection_check_get() -> Response {
+    let s = imc_core::settings::load();
+    let key = s
+        .llm
+        .as_ref()
+        .and_then(|l| l.api_key.as_ref())
+        .map(|k| k.trim().to_string())
+        .unwrap_or_default();
+
+    if key.is_empty() {
+        return Json(json!({
+            "ok": false,
+            "configured": false,
+            "error": "No API key configured in ~/.imc_config.yaml. Please enter your secret / API key.",
+        }))
+        .into_response();
+    }
+
+    let base = s
+        .llm
+        .as_ref()
+        .and_then(|l| l.base_url.as_ref())
+        .map(|b| b.trim_end_matches('/').to_string())
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:6655".to_string());
+
+    probe_hyperspace(&key, &base, true).await
+}
+
 async fn connection_check(Json(body): Json<ConnectionCheckPayload>) -> Response {
     let key = body
         .secret
@@ -974,6 +1003,10 @@ async fn connection_check(Json(body): Json<ConnectionCheckPayload>) -> Response 
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "http://127.0.0.1:6655".to_string());
 
+    probe_hyperspace(&key, &base, false).await
+}
+
+async fn probe_hyperspace(key: &str, base: &str, from_config: bool) -> Response {
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
@@ -996,7 +1029,7 @@ async fn connection_check(Json(body): Json<ConnectionCheckPayload>) -> Response 
         let resp = client
             .get(url)
             .header("Authorization", format!("Bearer {key}"))
-            .header("x-api-key", &key)
+            .header("x-api-key", key)
             .send()
             .await;
 
@@ -1006,34 +1039,42 @@ async fn connection_check(Json(body): Json<ConnectionCheckPayload>) -> Response 
                 if status == 401 || status == 403 {
                     return Json(json!({
                         "ok": false,
+                        "configured": true,
                         "status": status,
                         "error": format!("Hyperspace on port 6655 rejected secret (HTTP {status} Unauthorized). Please verify your API key."),
                     }))
                     .into_response();
                 }
                 if (200..300).contains(&status) {
-                    // Persist to imc settings
-                    let mut s = imc_core::settings::load();
-                    let _ = imc_core::settings::set(&mut s, "llm.api_key", &key);
-                    if s.llm
-                        .as_ref()
-                        .and_then(|l| l.base_url.as_ref())
-                        .map(|b| b.is_empty())
-                        .unwrap_or(true)
-                    {
-                        let _ = imc_core::settings::set(
-                            &mut s,
-                            "llm.base_url",
-                            &format!("{base}/anthropic"),
-                        );
+                    if !from_config {
+                        // Persist to imc settings
+                        let mut s = imc_core::settings::load();
+                        let _ = imc_core::settings::set(&mut s, "llm.api_key", key);
+                        if s.llm
+                            .as_ref()
+                            .and_then(|l| l.base_url.as_ref())
+                            .map(|b| b.is_empty())
+                            .unwrap_or(true)
+                        {
+                            let _ = imc_core::settings::set(
+                                &mut s,
+                                "llm.base_url",
+                                &format!("{base}/anthropic"),
+                            );
+                        }
+                        let _ = imc_core::settings::save(&s);
                     }
-                    let _ = imc_core::settings::save(&s);
 
                     return Json(json!({
                         "ok": true,
+                        "configured": true,
                         "status": status,
                         "endpoint": url,
-                        "message": "Hyperspace connection verified successfully!",
+                        "message": if from_config {
+                            "Hyperspace connection verified successfully via server configuration!"
+                        } else {
+                            "Hyperspace connection verified successfully!"
+                        },
                     }))
                     .into_response();
                 }
@@ -1047,6 +1088,7 @@ async fn connection_check(Json(body): Json<ConnectionCheckPayload>) -> Response 
 
     Json(json!({
         "ok": false,
+        "configured": true,
         "error": format!("Could not connect to Hyperspace on port 6655: {last_err}. Please ensure Hyperspace is running on port 6655."),
     }))
     .into_response()
@@ -1072,7 +1114,7 @@ pub fn router() -> Router {
         .route("/api/compress", post(compress))
         .route("/api/captures", get(captures_get).post(captures_post))
         .route("/api/usage", get(usage_get).delete(usage_delete))
-        .route("/api/connection/check", post(connection_check))
+        .route("/api/connection/check", post(connection_check).get(connection_check_get))
 }
 
 #[cfg(test)]

@@ -43,6 +43,7 @@ export default function Home() {
     missing: string[];
   } | null>(null);
   const [usage, setUsage] = useState<UsageData | null>(null);
+  const [selectedModel, setSelectedModel] = useState<string>("all");
   const [usagePage, setUsagePage] = useState(1);
   const [usagePageSize, setUsagePageSize] = useState(10);
 
@@ -57,6 +58,7 @@ export default function Home() {
   const handleClearUsage = async () => {
     try {
       await fetch("/api/usage", { method: "DELETE" });
+      setSelectedModel("all");
       setUsagePage(1);
       refreshUsage();
     } catch {}
@@ -362,143 +364,202 @@ export default function Home() {
         </div>
 
         {/* Model Breakdown & Recent Requests */}
-        {usage && usage.total_requests > 0 ? (
-          <Card className="border-border/80 shadow-xs overflow-hidden">
-            <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <CardTitle className="text-sm font-semibold">Recent Requests & Breakdown</CardTitle>
-                <span className="text-xs font-normal font-mono text-muted-foreground">
-                  {usage.records.length} records logged
-                </span>
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              {/* Models summary badges */}
-              {Object.keys(usage.by_model).length > 0 && (
-                <div className="flex flex-wrap items-center gap-2 p-3 border-b border-border/40 bg-card/60 text-xs">
-                  <span className="text-muted-foreground text-[11px] font-medium mr-1">Models:</span>
-                  {Object.entries(usage.by_model).map(([model, stats]) => (
-                    <Badge key={model} variant="secondary" className="font-mono text-[11px] py-1 px-2.5">
-                      <span className="font-semibold">{model}</span>: {formatNumber(stats.requests)} reqs (
-                      {formatNumber(stats.input_tokens + stats.output_tokens)} tok)
-                    </Badge>
-                  ))}
-                </div>
-              )}
+        {usage && usage.total_requests > 0 ? (() => {
+          const filteredRecords =
+            selectedModel === "all"
+              ? usage.records
+              : usage.records.filter((r) => r.model === selectedModel);
+          const activeModelStats =
+            selectedModel !== "all" ? usage.by_model[selectedModel] : null;
+          const totalPages = Math.max(1, Math.ceil(filteredRecords.length / usagePageSize));
 
-              {/* Table */}
-              <div className="overflow-x-auto scroll-thin max-h-[380px]">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="text-xs">
-                      <TableHead className="w-40">Timestamp</TableHead>
-                      <TableHead>Model</TableHead>
-                      <TableHead>Endpoint</TableHead>
-                      <TableHead className="text-right">Total Input</TableHead>
-                      <TableHead className="text-right">Fresh</TableHead>
-                      <TableHead className="text-right">Cache Hit</TableHead>
-                      <TableHead className="text-right">Output</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody className="text-xs">
-                    {usage.records
-                      .slice((usagePage - 1) * usagePageSize, usagePage * usagePageSize)
-                      .map((r, idx) => {
-                        const freshIn = r.usage?.input_tokens ?? r.usage?.prompt_tokens ?? 0;
-                        const cachedIn = r.usage?.cache_read_input_tokens ?? 0;
-                        const totalIn = freshIn + cachedIn;
-                        const outTok = r.usage?.output_tokens ?? r.usage?.completion_tokens ?? 0;
-
-                        return (
-                          <TableRow key={idx}>
-                            <TableCell className="font-mono text-muted-foreground whitespace-nowrap">
-                              {formatTimestamp(r.timestamp)}
-                            </TableCell>
-                            <TableCell className="font-medium">
-                              <Badge variant="outline" className="font-mono text-[10px]">
-                                {r.model}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="font-mono text-muted-foreground text-[11px] truncate max-w-[180px]">
-                              {r.endpoint}
-                            </TableCell>
-                            <TableCell className="text-right font-mono font-medium">
-                              {formatNumber(totalIn)}
-                            </TableCell>
-                            <TableCell className="text-right font-mono text-muted-foreground">
-                              {formatNumber(freshIn)}
-                            </TableCell>
-                            <TableCell className="text-right font-mono text-emerald-500 font-medium">
-                              {formatNumber(cachedIn)}
-                            </TableCell>
-                            <TableCell className="text-right font-mono font-medium">
-                              {formatNumber(outTok)}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {/* Pagination */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 border-t border-border/60 text-xs text-muted-foreground">
-                <div className="flex flex-wrap items-center gap-3">
-                  <span className="font-mono text-[11px]">
-                    Showing {usage.records.length === 0 ? 0 : (usagePage - 1) * usagePageSize + 1}–
-                    {Math.min(usagePage * usagePageSize, usage.records.length)} of {usage.records.length} records
+          return (
+            <Card className="border-border/80 shadow-xs overflow-hidden">
+              <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <CardTitle className="text-sm font-semibold">Recent Requests & Breakdown</CardTitle>
+                  <span className="text-xs font-normal font-mono text-muted-foreground">
+                    {filteredRecords.length} of {usage.records.length} records
                   </span>
-                  <div className="flex items-center gap-1.5 text-[11px]">
-                    <span>Page size:</span>
-                    {[10, 25, 50].map((size) => (
-                      <button
-                        key={size}
-                        type="button"
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                {/* Model dropdown selector & stats */}
+                <div className="flex flex-wrap items-center justify-between gap-3 p-3 border-b border-border/40 bg-card/60 text-xs">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span className="text-muted-foreground text-[11px] font-medium">Model:</span>
+                    <select
+                      aria-label="Filter by model"
+                      value={selectedModel}
+                      onChange={(e) => {
+                        setSelectedModel(e.target.value);
+                        setUsagePage(1);
+                      }}
+                      className="h-8 max-w-[280px] truncate rounded-md border border-border/90 bg-background px-2.5 py-1 text-xs font-medium text-foreground shadow-xs transition-colors hover:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer font-mono"
+                    >
+                      <option value="all">
+                        All Models ({usage.total_requests} reqs, {formatNumber(usage.total_input_tokens + usage.total_output_tokens)} tok)
+                      </option>
+                      {Object.entries(usage.by_model).map(([model, stats]) => (
+                        <option key={model} value={model}>
+                          {model} ({formatNumber(stats.requests)} reqs, {formatNumber(stats.input_tokens + stats.output_tokens)} tok)
+                        </option>
+                      ))}
+                    </select>
+
+                    {selectedModel !== "all" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => {
-                          setUsagePageSize(size);
+                          setSelectedModel("all");
                           setUsagePage(1);
                         }}
-                        className={`rounded px-1.5 py-0.5 font-mono cursor-pointer transition-colors ${
-                          usagePageSize === size
-                            ? "bg-primary text-primary-foreground font-semibold"
-                            : "bg-muted hover:bg-accent text-foreground"
-                        }`}
+                        className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
                       >
-                        {size}
-                      </button>
-                    ))}
+                        Reset
+                      </Button>
+                    )}
                   </div>
+
+                  {activeModelStats && (
+                    <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
+                      <Badge variant="outline">
+                        Reqs: <span className="font-semibold ml-1">{formatNumber(activeModelStats.requests)}</span>
+                      </Badge>
+                      <Badge variant="outline">
+                        In: <span className="font-semibold ml-1">{formatNumber(activeModelStats.input_tokens)}</span>
+                      </Badge>
+                      <Badge variant="outline">
+                        Out: <span className="font-semibold ml-1">{formatNumber(activeModelStats.output_tokens)}</span>
+                      </Badge>
+                      <Badge variant="outline" className="text-emerald-500 border-emerald-500/30">
+                        Cache: <span className="font-semibold ml-1">{formatNumber(activeModelStats.cache_read_tokens)}</span>
+                      </Badge>
+                    </div>
+                  )}
                 </div>
 
-                <div className="flex items-center gap-2 self-end sm:self-auto">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={usagePage <= 1}
-                    onClick={() => setUsagePage((p) => Math.max(1, p - 1))}
-                    className="h-7 px-2.5 text-xs cursor-pointer"
-                  >
-                    Previous
-                  </Button>
-                  <span className="font-mono text-xs px-1">
-                    {usagePage} / {Math.max(1, Math.ceil(usage.records.length / usagePageSize))}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={usagePage >= Math.max(1, Math.ceil(usage.records.length / usagePageSize))}
-                    onClick={() =>
-                      setUsagePage((p) => Math.min(Math.ceil(usage.records.length / usagePageSize), p + 1))
-                    }
-                    className="h-7 px-2.5 text-xs cursor-pointer"
-                  >
-                    Next
-                  </Button>
+                {/* Table */}
+                <div className="overflow-x-auto scroll-thin max-h-[380px]">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="text-xs">
+                        <TableHead className="w-40">Timestamp</TableHead>
+                        <TableHead>Model</TableHead>
+                        <TableHead>Endpoint</TableHead>
+                        <TableHead className="text-right">Total Input</TableHead>
+                        <TableHead className="text-right">Fresh</TableHead>
+                        <TableHead className="text-right">Cache Hit</TableHead>
+                        <TableHead className="text-right">Output</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody className="text-xs">
+                      {filteredRecords.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                            No requests found for {selectedModel}.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        filteredRecords
+                          .slice((usagePage - 1) * usagePageSize, usagePage * usagePageSize)
+                          .map((r, idx) => {
+                            const freshIn = r.usage?.input_tokens ?? r.usage?.prompt_tokens ?? 0;
+                            const cachedIn = r.usage?.cache_read_input_tokens ?? 0;
+                            const totalIn = freshIn + cachedIn;
+                            const outTok = r.usage?.output_tokens ?? r.usage?.completion_tokens ?? 0;
+
+                            return (
+                              <TableRow key={idx}>
+                                <TableCell className="font-mono text-muted-foreground whitespace-nowrap">
+                                  {formatTimestamp(r.timestamp)}
+                                </TableCell>
+                                <TableCell className="font-medium">
+                                  <Badge variant="outline" className="font-mono text-[10px]">
+                                    {r.model}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="font-mono text-muted-foreground text-[11px] truncate max-w-[180px]">
+                                  {r.endpoint}
+                                </TableCell>
+                                <TableCell className="text-right font-mono font-medium">
+                                  {formatNumber(totalIn)}
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-muted-foreground">
+                                  {formatNumber(freshIn)}
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-emerald-500 font-medium">
+                                  {formatNumber(cachedIn)}
+                                </TableCell>
+                                <TableCell className="text-right font-mono font-medium">
+                                  {formatNumber(outTok)}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })
+                      )}
+                    </TableBody>
+                  </Table>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-        ) : (
+
+                {/* Pagination */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 border-t border-border/60 text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="font-mono text-[11px]">
+                      Showing {filteredRecords.length === 0 ? 0 : (usagePage - 1) * usagePageSize + 1}–
+                      {Math.min(usagePage * usagePageSize, filteredRecords.length)} of {filteredRecords.length} records
+                    </span>
+                    <div className="flex items-center gap-1.5 text-[11px]">
+                      <span>Page size:</span>
+                      {[10, 25, 50].map((size) => (
+                        <button
+                          key={size}
+                          type="button"
+                          onClick={() => {
+                            setUsagePageSize(size);
+                            setUsagePage(1);
+                          }}
+                          className={`rounded px-1.5 py-0.5 font-mono cursor-pointer transition-colors ${
+                            usagePageSize === size
+                              ? "bg-primary text-primary-foreground font-semibold"
+                              : "bg-muted hover:bg-accent text-foreground"
+                          }`}
+                        >
+                          {size}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-end sm:self-auto">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={usagePage <= 1}
+                      onClick={() => setUsagePage((p) => Math.max(1, p - 1))}
+                      className="h-7 px-2.5 text-xs cursor-pointer"
+                    >
+                      Previous
+                    </Button>
+                    <span className="font-mono text-xs px-1">
+                      {usagePage} / {totalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={usagePage >= totalPages}
+                      onClick={() => setUsagePage((p) => Math.min(totalPages, p + 1))}
+                      className="h-7 px-2.5 text-xs cursor-pointer"
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })() : (
           <Card className="border-dashed p-6 text-center">
             <p className="text-xs text-muted-foreground">
               No proxy token usage recorded yet. Calls made through the IMC proxy will appear here.

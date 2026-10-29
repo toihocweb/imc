@@ -27,6 +27,7 @@ export function useConnection() {
 
 export function ConnectionGate({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
+  const [initialChecking, setInitialChecking] = useState(true);
   const [isConnected, setIsConnected] = useState(false);
   const [secret, setSecret] = useState("");
   const [showSecret, setShowSecret] = useState(false);
@@ -70,12 +71,44 @@ export function ConnectionGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setMounted(true);
-    const saved = localStorage.getItem("imc_hyperspace_secret");
-    if (saved) {
-      setSecret(saved);
-      // Auto-verify with saved secret
-      verifyConnection(saved);
-    }
+
+    const checkInitialConnection = async () => {
+      setInitialChecking(true);
+      try {
+        // 1. Check server configuration first (config.yaml)
+        const res = await fetch("/api/connection/check");
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          setIsConnected(true);
+          setSuccessMsg(data.message || "Connected successfully via server configuration!");
+          return;
+        }
+
+        // 2. If server config has no valid connection, check localStorage fallback
+        const saved = localStorage.getItem("imc_hyperspace_secret");
+        if (saved) {
+          setSecret(saved);
+          const ok = await verifyConnection(saved);
+          if (ok) return;
+        }
+
+        // 3. If server reported a specific error with existing key, surface it
+        if (data.configured && data.error) {
+          setErrorMsg(data.error);
+        }
+      } catch (err: any) {
+        // Fallback to localStorage if GET endpoint error
+        const saved = localStorage.getItem("imc_hyperspace_secret");
+        if (saved) {
+          setSecret(saved);
+          verifyConnection(saved);
+        }
+      } finally {
+        setInitialChecking(false);
+      }
+    };
+
+    checkInitialConnection();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -96,12 +129,12 @@ export function ConnectionGate({ children }: { children: React.ReactNode }) {
     setErrorMsg(null);
   };
 
-  if (!mounted) {
+  if (!mounted || initialChecking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3 text-muted-foreground text-xs">
           <Loader2 className="h-6 w-6 animate-spin text-primary" />
-          <span>Loading dashboard...</span>
+          <span>Verifying Hyperspace connection...</span>
         </div>
       </div>
     );

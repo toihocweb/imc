@@ -21,11 +21,22 @@ export function formatTimestamp(val: number | string | undefined | null): string
   if (!val) return "—";
   let d: Date;
   if (typeof val === "string") {
-    d = new Date(val);
+    const trimmed = val.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const num = Number(trimmed);
+      d = new Date(num > 1e11 ? num : num * 1000);
+    } else {
+      const iso = trimmed.replace(" ", "T");
+      const withUtc = iso.endsWith("Z") || /[+-]\d{2}(:?\d{2})?$/.test(iso) ? iso : `${iso}Z`;
+      d = new Date(withUtc);
+      if (isNaN(d.getTime())) {
+        d = new Date(trimmed);
+      }
+    }
   } else if (val <= 0) {
     return "—";
   } else {
-    d = new Date(val * 1000);
+    d = new Date(val > 1e11 ? val : val * 1000);
   }
   if (isNaN(d.getTime())) return typeof val === "string" ? val : "—";
   const pad = (n: number) => String(n).padStart(2, "0");

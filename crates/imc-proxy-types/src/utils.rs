@@ -117,7 +117,7 @@ pub fn iso_format(ts_secs: f64) -> String {
         (secs_of_day % 3600) / 60,
         secs_of_day % 60,
     );
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}")
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
 }
 
 /// Port of `datetime.now().strftime("%Y-%m-%d %H:%M:%S")` — UTC.

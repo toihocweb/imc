@@ -146,7 +146,7 @@ export function SiteNav() {
           {/* Proxy status indicator */}
           <div className="hidden xl:flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-500">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Proxy :12345</span>
+            <span>Proxy :35711</span>
           </div>
         </div>
 
