@@ -13,7 +13,6 @@ import {
   FolderGit2,
   Settings,
   Sliders,
-  ChevronDown,
   Menu,
   X,
 } from "lucide-react";
@@ -28,9 +27,6 @@ const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/search", label: "Studio", icon: Layers },
   { href: "/projects", label: "Projects", icon: FolderGit2 },
-];
-
-const MORE_ITEMS = [
   { href: "/model-map", label: "Model Map", icon: Sliders },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
@@ -89,16 +85,12 @@ function ImcBrandIcon({ className }: { className?: string }) {
 export function SiteNav() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
   const { projects, selectedPath, setSelectedPath } = useProject();
   const { isConnected, disconnect } = useConnection();
 
   useEffect(() => {
     setMobileOpen(false);
-    setMoreOpen(false);
   }, [pathname]);
-
-  const isMoreActive = MORE_ITEMS.some((item) => isActive(pathname, item.href));
 
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-border/80 bg-background/85 backdrop-blur-md">
@@ -171,50 +163,6 @@ export function SiteNav() {
               </Link>
             );
           })}
-
-          {/* More dropdown */}
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setMoreOpen((v) => !v)}
-              className={cn(
-                "flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
-                isMoreActive
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
-              )}
-            >
-              <span>More</span>
-              <ChevronDown className="h-3 w-3 text-muted-foreground" />
-            </button>
-
-            {moreOpen && (
-              <div
-                className="absolute right-0 mt-1 w-44 rounded-lg border border-border bg-popover p-1 shadow-lg z-50 animate-in fade-in-50 zoom-in-95"
-                onMouseLeave={() => setMoreOpen(false)}
-              >
-                {MORE_ITEMS.map((item) => {
-                  const Icon = item.icon;
-                  const active = isActive(pathname, item.href);
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={cn(
-                        "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
-                        active
-                          ? "bg-accent text-foreground font-semibold"
-                          : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                      )}
-                    >
-                      <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span>{item.label}</span>
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         </nav>
 
         {/* Right utilities */}
@@ -276,7 +224,7 @@ export function SiteNav() {
           )}
 
           <div className="grid grid-cols-2 gap-1 mb-2">
-            {[...NAV_ITEMS, ...MORE_ITEMS].map((item) => {
+            {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const active = isActive(pathname, item.href);
               return (
