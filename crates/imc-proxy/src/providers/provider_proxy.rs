@@ -186,9 +186,10 @@ pub fn decide_route(
         }
     }
 
+    let is_gemini = mapped_model.to_lowercase().contains("gemini");
     let hyperspace = explicit_provider == Some("hyperspace")
         || (explicit_provider != Some("copilot")
-            && (is_hyperspace || mapped_model.starts_with("anthropic--")));
+            && (is_hyperspace || is_gemini || mapped_model.starts_with("anthropic--")));
     if hyperspace {
         return RouteDecision {
             target: RouteTarget::Hyperspace,
@@ -430,6 +431,8 @@ mod tests {
     fn hyperspace_registry_and_prefix_route_to_hyperspace() {
         let d = decide_route(None, "gemini-3.1-flash-lite", true, None);
         assert_eq!(d.target, RouteTarget::Hyperspace);
+        let d = decide_route(None, "gemini-3.8-flash", false, None);
+        assert_eq!(d.target, RouteTarget::Hyperspace, "gemini routes to hyperspace even when is_hyperspace is false");
         let d = decide_route(None, "anthropic--claude-3-5-sonnet", false, None);
         assert_eq!(d.target, RouteTarget::Hyperspace);
     }

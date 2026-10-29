@@ -45,7 +45,6 @@ pub async fn proxy_chat_completions(
     let model = payload.model.clone();
     let wants_stream = payload.stream.unwrap_or(false);
 
-    let has_tools = payload.tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
     let model_lower = model.to_lowercase();
     let is_reasoning_model = model_lower.contains("sol")
         || model_lower.contains("luna")
@@ -59,8 +58,8 @@ pub async fn proxy_chat_completions(
         || model_lower.contains("reasoning")
         || model_lower.contains("thinking");
 
-    if has_tools && is_reasoning_model && payload.reasoning_effort.is_none() {
-        payload.reasoning_effort = Some("none".to_string());
+    if is_reasoning_model && (payload.reasoning_effort.is_none() || payload.reasoning_effort.as_deref() == Some("none")) {
+        payload.reasoning_effort = Some("high".to_string());
     }
 
     // A model mapped to `provider:<id>` with that provider configured is a
@@ -89,7 +88,9 @@ pub async fn proxy_chat_completions(
                     if !hcfg.api_key.is_empty() {
                         req = req.header("authorization", format!("Bearer {}", hcfg.api_key));
                     }
-                    if let Ok(resp) = req.json(&payload).send().await {
+                    let mut hp_payload = payload.clone();
+                    hp_payload.model = crate::hyperspace::resolve_hyperspace_model(&hp_payload.model);
+                    if let Ok(resp) = req.json(&hp_payload).send().await {
                         return relay(resp, model, wants_stream, "/v1/chat/completions").await;
                     }
                 }

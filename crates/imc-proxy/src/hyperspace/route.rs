@@ -56,10 +56,65 @@ pub fn register_hyperspace_models(model_ids: &[String]) {
 
 /// Port of `is_hyperspace_model`.
 pub fn is_hyperspace_model(model_id: &str) -> bool {
+    let lower = model_id.to_lowercase();
+    if lower.contains("gemini") {
+        return true;
+    }
+    let suffix = format!("/{lower}");
     model_registry()
         .read()
-        .map(|r| r.contains(model_id))
+        .map(|r| {
+            r.contains(model_id)
+                || r.iter().any(|m| {
+                    let m_lower = m.to_lowercase();
+                    m_lower == lower || m_lower.ends_with(&suffix)
+                })
+        })
         .unwrap_or(false)
+}
+
+/// Resolves a requested model name against the Hyperspace registry.
+/// Supports bare model names (e.g. "gemini-3.8-flash-high" -> "cuzem3/gemini-3.8-flash-high")
+/// or aliases (e.g. "gemini", "gemini-flash" -> "gemini-3.8-flash").
+pub fn resolve_hyperspace_model(model: &str) -> String {
+    let reg = model_registry().read().ok();
+    let Some(reg) = reg else {
+        return model.to_string();
+    };
+
+    if reg.contains(model) {
+        return model.to_string();
+    }
+
+    let mut lower = model.to_lowercase();
+    if lower == "gpt-sol-6.1" || lower == "gpt-sol-6" {
+        lower = "gpt-6.1-sol".to_string();
+    }
+    let suffix = format!("/{lower}");
+
+    // Look for exact suffix match (e.g. ".../gemini-3.8-flash-high" or ".../gpt-6.1-sol")
+    if let Some(matched) = reg.iter().find(|m| m.to_lowercase().ends_with(&suffix)) {
+        return matched.clone();
+    }
+
+    // Common aliases for Gemini
+    if lower == "gemini" || lower == "gemini-flash" {
+        if let Some(m) = reg.iter().find(|m| *m == "gemini-3.8-flash") {
+            return m.clone();
+        }
+        if let Some(m) = reg.iter().find(|m| m.ends_with("/gemini-3.8-flash")) {
+            return m.clone();
+        }
+        if let Some(m) = reg.iter().find(|m| m.to_lowercase().contains("gemini") && m.to_lowercase().contains("flash")) {
+            return m.clone();
+        }
+    }
+
+    if lower != model.to_lowercase() {
+        return lower;
+    }
+
+    model.to_string()
 }
 
 /// Model ids known to Hyperspace (used by the models route + tests).
@@ -79,20 +134,9 @@ pub fn install_model_mapping_hook() {
     imc_proxy_types::model_mapping::set_hyperspace_model_check(is_hyperspace_model);
 }
 
-/// Adjusts reasoning_effort for function tools on /chat/completions.
-/// OpenAI / Azure endpoints reject function tools when reasoning_effort is active.
-/// If the model is a reasoning model and tools are present, set reasoning_effort to "none".
+/// Adjusts reasoning_effort for reasoning models on /chat/completions.
+/// Defaults to "high" for reasoning models when unspecified or set to "none".
 pub fn adjust_reasoning_effort_for_tools(body: &mut Value, model: &str) {
-    let has_tools = body
-        .get("tools")
-        .and_then(|t| t.as_array())
-        .map(|a| !a.is_empty())
-        .unwrap_or(false);
-
-    if !has_tools {
-        return;
-    }
-
     let model_lower = model.to_lowercase();
     let is_reasoning_model = model_lower.contains("sol")
         || model_lower.contains("luna")
@@ -106,9 +150,15 @@ pub fn adjust_reasoning_effort_for_tools(body: &mut Value, model: &str) {
         || model_lower.contains("reasoning")
         || model_lower.contains("thinking");
 
-    if is_reasoning_model && body.get("reasoning_effort").is_none() {
+    if is_reasoning_model {
         if let Some(obj) = body.as_object_mut() {
-            obj.insert("reasoning_effort".to_string(), serde_json::json!("none"));
+            let is_none_or_missing = match obj.get("reasoning_effort") {
+                None => true,
+                Some(v) => v.as_str() == Some("none"),
+            };
+            if is_none_or_missing {
+                obj.insert("reasoning_effort".to_string(), serde_json::json!("high"));
+            }
         }
     }
 }
@@ -126,7 +176,11 @@ pub async fn call_hyperspace(
         anyhow::bail!("Hyperspace base_url not configured in ~/.indexer_config.yaml");
     }
 
-    let openai_payload = translate_to_openai(payload);
+    let resolved_model = resolve_hyperspace_model(&payload.model);
+    let mut payload = payload.clone();
+    payload.model = resolved_model;
+
+    let openai_payload = translate_to_openai(&payload);
     let mut openai_data =
         serde_json::to_value(&openai_payload).context("serialize openai payload")?;
 
@@ -229,24 +283,25 @@ mod tests {
     }
 
     #[test]
-    fn adjust_reasoning_effort_for_tools_sets_none_when_tools_present_on_reasoning_model() {
+    fn adjust_reasoning_effort_for_tools_sets_high_on_reasoning_model() {
         let mut body = serde_json::json!({
             "model": "gpt-6.1-sol",
             "messages": [{"role": "user", "content": "hello"}],
             "tools": [{"type": "function", "function": {"name": "test"}}]
         });
         adjust_reasoning_effort_for_tools(&mut body, "gpt-6.1-sol");
-        assert_eq!(body.get("reasoning_effort").and_then(|v| v.as_str()), Some("none"));
+        assert_eq!(body.get("reasoning_effort").and_then(|v| v.as_str()), Some("high"));
     }
 
     #[test]
-    fn adjust_reasoning_effort_for_tools_leaves_alone_without_tools() {
+    fn adjust_reasoning_effort_for_tools_overwrites_none_with_high() {
         let mut body = serde_json::json!({
             "model": "gpt-6.1-sol",
-            "messages": [{"role": "user", "content": "hello"}]
+            "messages": [{"role": "user", "content": "hello"}],
+            "reasoning_effort": "none"
         });
         adjust_reasoning_effort_for_tools(&mut body, "gpt-6.1-sol");
-        assert!(body.get("reasoning_effort").is_none());
+        assert_eq!(body.get("reasoning_effort").and_then(|v| v.as_str()), Some("high"));
     }
 
     #[test]
@@ -258,5 +313,24 @@ mod tests {
         });
         adjust_reasoning_effort_for_tools(&mut body, "claude-3-5-sonnet");
         assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn gemini_models_are_treated_as_hyperspace_and_resolved() {
+        let before = registered_models();
+        register_hyperspace_models(&[
+            "gemini-3.8-flash".to_string(),
+            "cuzem3/gemini-3.8-flash-high".to_string(),
+        ]);
+
+        assert!(is_hyperspace_model("gemini"));
+        assert!(is_hyperspace_model("gemini-3.8-flash"));
+        assert!(is_hyperspace_model("gemini-3.8-flash-high"));
+
+        assert_eq!(resolve_hyperspace_model("gemini-3.8-flash"), "gemini-3.8-flash");
+        assert_eq!(resolve_hyperspace_model("gemini-3.8-flash-high"), "cuzem3/gemini-3.8-flash-high");
+        assert_eq!(resolve_hyperspace_model("gemini"), "gemini-3.8-flash");
+
+        register_hyperspace_models(&before);
     }
 }
