@@ -235,6 +235,7 @@ pub fn normalize_system(payload: &mut AnthropicMessagesPayload) {
 }
 
 pub const TERSE_RESPONSE_DIRECTIVE: &str = "\
+<system-reminder>
 <response-type>
 Ultra-terse communication protocol:
 1. Answer first. Pattern: [thing] [action] [reason]. [next step].
@@ -247,7 +248,8 @@ Ultra-terse communication protocol:
 8. Never perform terse: no \"terse mode on\", no \"me think\", no decorative tables or emoji.
 9. Clarification Gate: Never edit/write files on ambiguous asks. Investigate with imc first, state technical understanding, ask 1-3 targeted questions, wait for confirmation.
 10. IMC tool priority: Always prefer `imc search --raw`, `imc trace --callers`, `imc read --skeleton`, `imc pack` over blind Read/Grep.
-</response-type>";
+</response-type>
+</system-reminder>";
 
 /// Appends the terse response directive to a user message, migrating cache_control onto it.
 pub fn attach_terse_directive_to_message(msg: &mut AnthropicInputMessage) -> bool {

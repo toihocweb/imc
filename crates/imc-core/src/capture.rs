@@ -31,32 +31,80 @@ pub fn config_path() -> PathBuf {
     Config::default().data_dir.join("capture_config.json")
 }
 
+pub const CAPTURE_TIMEOUT_SECS: u64 = 5 * 60;
+
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 struct CaptureConfig {
     #[serde(default)]
     auto_capture: bool,
+    #[serde(default)]
+    expires_at: Option<u64>,
 }
 
-/// Is prompt capture on?
-pub fn is_enabled() -> bool {
+fn read_config() -> Option<CaptureConfig> {
     let path = config_path();
-    match std::fs::read_to_string(&path) {
-        Ok(s) => serde_json::from_str::<CaptureConfig>(&s)
-            .map(|c| c.auto_capture)
-            .unwrap_or(false),
-        Err(_) => false,
+    let s = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<CaptureConfig>(&s).ok()
+}
+
+/// Returns remaining seconds until auto-off if capture is currently active with an expiration.
+pub fn remaining_secs() -> Option<u64> {
+    let c = read_config()?;
+    if !c.auto_capture {
+        return None;
+    }
+    let exp = c.expires_at?;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if now >= exp {
+        None
+    } else {
+        Some(exp - now)
     }
 }
 
-/// Turn prompt capture on or off.
+/// Is prompt capture on? Automatically disables when expired.
+pub fn is_enabled() -> bool {
+    let Some(c) = read_config() else {
+        return false;
+    };
+    if !c.auto_capture {
+        return false;
+    }
+    if let Some(exp) = c.expires_at {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if now >= exp {
+            let _ = set_enabled(false);
+            return false;
+        }
+    }
+    true
+}
+
+/// Turn prompt capture on or off. When turning on, sets a 5-minute auto-off expiration.
 pub fn set_enabled(enabled: bool) -> Result<()> {
     let path = config_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create {}", parent.display()))?;
     }
+    let expires_at = if enabled {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Some(now + CAPTURE_TIMEOUT_SECS)
+    } else {
+        None
+    };
     let body = serde_json::to_string_pretty(&CaptureConfig {
         auto_capture: enabled,
+        expires_at,
     })?;
     std::fs::write(&path, body).with_context(|| format!("write {}", path.display()))?;
     Ok(())
@@ -233,10 +281,13 @@ pub fn clear_captures(project_root: Option<&Path>) -> usize {
 
 /// Small helper for callers that only want the summary.
 pub fn status(project_root: Option<&Path>) -> Value {
+    let enabled = is_enabled();
+    let remaining = if enabled { remaining_secs() } else { None };
     json!({
-        "enabled": is_enabled(),
+        "enabled": enabled,
         "captures": list_captures(project_root).len(),
         "dir": captures_dir(project_root).to_string_lossy(),
+        "remaining_secs": remaining,
     })
 }
 
@@ -304,5 +355,32 @@ mod tests {
         set_enabled(false).unwrap();
         std::env::remove_var("IMC_DATA_DIR");
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn auto_disables_after_expiration() {
+        let dir = std::env::temp_dir().join(format!("imc-cap-exp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("IMC_DATA_DIR", &dir);
+
+        set_enabled(true).unwrap();
+        assert!(is_enabled());
+        let rem = remaining_secs().unwrap();
+        assert!(rem > 0 && rem <= CAPTURE_TIMEOUT_SECS);
+
+        // Manually write an expired config
+        let path = config_path();
+        let expired_config = serde_json::to_string(&CaptureConfig {
+            auto_capture: true,
+            expires_at: Some(1),
+        }).unwrap();
+        std::fs::write(&path, expired_config).unwrap();
+
+        // Checking is_enabled() detects expiration, sets disabled, and returns false
+        assert!(!is_enabled());
+        assert_eq!(remaining_secs(), None);
+
+        std::env::remove_var("IMC_DATA_DIR");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

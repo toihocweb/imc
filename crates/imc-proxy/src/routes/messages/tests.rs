@@ -90,6 +90,7 @@ fn inject_terse_directive_appends_block_once() {
     let AnthropicUserContentBlock::Text(t) = &blocks[1] else {
         panic!("expected text block");
     };
+    assert!(t.text.contains("<system-reminder>"));
     assert!(t.text.contains("<response-type>"));
     assert!(t.text.contains("Ultra-terse communication protocol"));
 

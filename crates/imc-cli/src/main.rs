@@ -2079,10 +2079,16 @@ saved to {}", st::path().display());
                     if cli.json {
                         println!("{}", serde_json::to_string_pretty(&status)?);
                     } else {
-                        println!(
-                            "prompt capture: {}",
-                            if status["enabled"].as_bool().unwrap_or(false) { "on" } else { "off" }
-                        );
+                        let is_on = status["enabled"].as_bool().unwrap_or(false);
+                        if is_on {
+                            if let Some(rem) = status["remaining_secs"].as_u64() {
+                                println!("prompt capture: on ({rem}s remaining)");
+                            } else {
+                                println!("prompt capture: on");
+                            }
+                        } else {
+                            println!("prompt capture: off");
+                        }
                         println!(
                             "  stored: {} payload(s) in {}",
                             status["captures"].as_u64().unwrap_or(0),
@@ -2094,7 +2100,7 @@ saved to {}", st::path().display());
                     capture::set_enabled(true)?;
                     let _ = imc_cli::claude::ensure_git_exclude(&root, "captures/");
                     println!(
-                        "prompt capture: on (saving to {})",
+                        "prompt capture: on for 5m (saving to {})",
                         capture::captures_dir(project_root).display()
                     );
                 }
