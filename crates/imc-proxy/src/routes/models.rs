@@ -29,6 +29,9 @@ fn hyperspace_model_data() -> &'static Mutex<Vec<Value>> {
 
 /// Port of `services/copilot/get_models.py`.
 pub async fn get_models() -> Result<Value, String> {
+    if !crate::github::is_copilot_configured() {
+        return Ok(json!({"data": []}));
+    }
     ensure_copilot_token(&token_provider()).await.map_err(|e| format!("{e:#}"))?;
 
     let st = state();

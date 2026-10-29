@@ -15,7 +15,7 @@ pub mod poll_access_token;
 pub use get_copilot_token::{get_copilot_token, refresh_copilot_token};
 pub use get_copilot_usage::{get_copilot_account_type, get_copilot_usage, CopilotAccountType};
 pub use get_device_code::get_device_code;
-pub use get_oauth_token::get_oauth_token;
+pub use get_oauth_token::{get_oauth_token, is_copilot_configured};
 pub use get_user::get_github_user;
 pub use poll_access_token::poll_access_token;
 

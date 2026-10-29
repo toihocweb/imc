@@ -16,13 +16,18 @@ pub fn copilot_config_path() -> PathBuf {
         .join("apps.json")
 }
 
+/// Returns true if Copilot is configured locally or in state.
+pub fn is_copilot_configured() -> bool {
+    copilot_config_path().exists() || imc_proxy_types::state::state().github_token.is_some()
+}
+
 /// Port of `get_oauth_token`.
 pub fn get_oauth_token() -> Option<String> {
     let log = create_handler_logger("main");
     let config_path = copilot_config_path();
 
     if !config_path.exists() {
-        log.error(&format!("Copilot config not found at {}", config_path.display()));
+        log.info(&format!("Copilot config not found at {} (optional)", config_path.display()));
         return None;
     }
 

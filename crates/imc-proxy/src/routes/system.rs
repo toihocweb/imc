@@ -18,7 +18,11 @@ pub async fn health_check() -> Response {
 /// Port of `get_quota` — Copilot quota snapshots from the GitHub API.
 pub async fn get_quota() -> Response {
     let Some(gh_token) = get_oauth_token().or_else(|| state().github_token.clone()) else {
-        return json_response(&json!({"error": "No GitHub token found"}));
+        return json_response(&json!({
+            "copilot_configured": false,
+            "quota_reset_date": Value::Null,
+            "quota_snapshots": json!({})
+        }));
     };
 
     let mut auth_state = state();

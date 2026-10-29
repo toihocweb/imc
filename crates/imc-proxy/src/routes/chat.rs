@@ -62,8 +62,21 @@ pub async fn proxy_chat_completions(
     let upstream = match chat_completions(&token_provider(), &payload).await {
         Ok(r) => r,
         Err(e) => {
-            log.error(&format!("[Proxy] chat completions failed: {e:#}"));
-            return error_response(500, &format!("{e:#}"));
+            log.warning(&format!("[Proxy] chat completions failed ({e:#}), trying Hyperspace fallback..."));
+            let hcfg = crate::hyperspace::load_hyperspace_config();
+            if !hcfg.base_url.is_empty() {
+                let url = format!("{}/chat/completions", hcfg.base_url);
+                if let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(120)).build() {
+                    let mut req = client.post(&url).header("content-type", "application/json");
+                    if !hcfg.api_key.is_empty() {
+                        req = req.header("authorization", format!("Bearer {}", hcfg.api_key));
+                    }
+                    if let Ok(resp) = req.json(&payload).send().await {
+                        return relay(resp, model, wants_stream, "/v1/chat/completions").await;
+                    }
+                }
+            }
+            return error_response(503, &format!("Copilot is optional and not configured: {e:#}"));
         }
     };
 

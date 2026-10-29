@@ -519,7 +519,20 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
         explicit_provider.clone().unwrap_or_else(|| "None".to_string())
     ));
 
-    match decision.target {
+    let copilot_ok = crate::github::is_copilot_configured();
+    let hyperspace_available = !crate::hyperspace::load_hyperspace_config().base_url.is_empty();
+
+    let target = match decision.target {
+        RouteTarget::CopilotResponses | RouteTarget::CopilotMessages
+            if !copilot_ok && hyperspace_available && explicit_provider.as_deref() != Some("copilot") =>
+        {
+            log.info(&format!("[Proxy] Copilot not configured (optional), routing {model} to Hyperspace"));
+            RouteTarget::Hyperspace
+        }
+        t => t,
+    };
+
+    match target {
         RouteTarget::ProviderPassthrough(provider_id) => {
             let Some(cfg) = resolve_provider(&provider_id) else {
                 return error_response(502, &format!("provider '{provider_id}' is not configured"));
@@ -798,8 +811,26 @@ async fn responses_response(
     let upstream = match create_responses(&token_provider(), &responses_payload).await {
         Ok(r) => r,
         Err(e) => {
-            log.error(&format!("[Proxy] Responses API setup exception: {e:#}"));
-            return error_response(500, &format!("{e:#}"));
+            log.warning(&format!("[Proxy] Responses API setup failed ({e:#}), trying Hyperspace fallback..."));
+            if !crate::hyperspace::load_hyperspace_config().base_url.is_empty() {
+                match call_hyperspace(&payload, None).await {
+                    Ok(resp) if resp.status().as_u16() == 200 => {
+                        return hyperspace_response(resp, &payload, injection).await;
+                    }
+                    Ok(resp) => {
+                        let status = resp.status().as_u16();
+                        let headers = crate::providers::provider_proxy::strip_response_headers(
+                            resp.headers().clone(),
+                        );
+                        let bytes = resp.bytes().await.unwrap_or_default();
+                        return build_response(status, headers, Body::from(bytes));
+                    }
+                    Err(he) => {
+                        log.error(&format!("[Proxy] Hyperspace fallback failed: {he:#}"));
+                    }
+                }
+            }
+            return error_response(503, &format!("Copilot is optional and not configured: {e:#}"));
         }
     };
     if upstream.status().as_u16() != 200 {
@@ -906,8 +937,26 @@ async fn native_copilot_response(
     let upstream = match create_messages(&token_provider(), &payload, Some(&anthropic_beta)).await {
         Ok(r) => r,
         Err(e) => {
-            log.error(&format!("[Proxy] Native Anthropic upstream error: {e:#}"));
-            return error_response(500, &format!("{e:#}"));
+            log.warning(&format!("[Proxy] Copilot Native Anthropic error ({e:#}), trying Hyperspace fallback..."));
+            if !crate::hyperspace::load_hyperspace_config().base_url.is_empty() {
+                match call_hyperspace(&payload, Some(&anthropic_beta)).await {
+                    Ok(resp) if resp.status().as_u16() == 200 => {
+                        return hyperspace_response(resp, &payload, injection).await;
+                    }
+                    Ok(resp) => {
+                        let status = resp.status().as_u16();
+                        let headers = crate::providers::provider_proxy::strip_response_headers(
+                            resp.headers().clone(),
+                        );
+                        let bytes = resp.bytes().await.unwrap_or_default();
+                        return build_response(status, headers, Body::from(bytes));
+                    }
+                    Err(he) => {
+                        log.error(&format!("[Proxy] Hyperspace fallback failed: {he:#}"));
+                    }
+                }
+            }
+            return error_response(503, &format!("Copilot is optional and not configured: {e:#}"));
         }
     };
     if upstream.status().as_u16() != 200 {
