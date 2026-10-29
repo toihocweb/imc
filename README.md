@@ -1,14 +1,14 @@
-# imc
-
 <p align="center">
   <img src="web-dashboard/public/imc-logo.svg" width="120" alt="imc logo" />
+  <h1 align="center">imc</h1>
+  <p align="center">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+    <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2021?logo=rust&logoColor=white" alt="Rust" /></a>
+    <a href="https://github.com/toihocweb/imc/releases/latest"><img src="https://img.shields.io/github/v/release/toihocweb/imc?label=release" alt="Release" /></a>
+    <a href="https://github.com/toihocweb/imc/stargazers"><img src="https://img.shields.io/github/stars/toihocweb/imc?style=social" alt="Stars" /></a>
+    <a href="https://github.com/toihocweb/imc/releases"><img src="https://img.shields.io/github/downloads/toihocweb/imc/total?label=downloads" alt="Downloads" /></a>
+  </p>
 </p>
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-2021?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Release](https://img.shields.io/github/v/release/toihocweb/imc?label=release)](https://github.com/toihocweb/imc/releases/latest)
-[![Stars](https://img.shields.io/github/stars/toihocweb/imc?style=social)](https://github.com/toihocweb/imc/stargazers)
-[![Downloads](https://img.shields.io/github/downloads/toihocweb/imc/total?label=downloads)](https://github.com/toihocweb/imc/releases)
 
 **Code intelligence for coding agents.** `imc` indexes a repository with tree-sitter, keeps a
 call graph and a lexical/vector index over it, and answers the questions an agent actually
