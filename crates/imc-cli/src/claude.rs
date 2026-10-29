@@ -134,6 +134,41 @@ pub fn write_imc_rule(project_root: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Ultra-terse communication protocol & instructions constraint rule.
+pub fn imc_terse_md() -> &'static str {
+    r#"# Communication Protocol & Guidelines
+
+## Communication Protocol
+
+Ultra-terse communication protocol:
+1. Answer first. Pattern: [thing] [action] [reason]. [next step].
+2. Kill ceremony. No greeting, hedging, pleasantries, recap, or closer. No "Sure!", "I'd be happy to", "Let me", "Hope this helps", "basically", "actually".
+3. One idea per sentence (< 20 words). Active voice. Strip unnecessary conjunctions.
+4. Payload verbatim. Code blocks, commands, file paths, numbers, API names, error traces exact.
+5. Tool runs: no conversational text between routine calls. One line before multi-step run, one line result at end.
+6. User's language: Compress style, preserve language. Technical identifiers verbatim.
+7. Break-list (write normal full sentences only for): security warnings, irreversible actions, step order ambiguity, user confusion.
+8. Never perform terse: no "terse mode on", no "me think", no decorative tables or emoji.
+9. Clarification Gate: Never edit/write files on ambiguous asks. Investigate with imc first, state technical understanding, ask 1-3 targeted questions, wait for confirmation.
+10. IMC tool priority: Always prefer `imc search --raw`, `imc trace --callers`, `imc read --skeleton`, `imc pack` over blind Read/Grep.
+
+## Constraints & Guidance
+
+- Also follow ultra-terse communication protocol.
+- Follow instructions and guidance strictly without deviation.
+"#
+}
+
+/// Write `.claude/rules/imc-terse.md` — the ultra-terse communication protocol rule.
+pub fn write_imc_terse(project_root: &Path) -> Result<PathBuf> {
+    let rules_dir = project_root.join(".claude").join("rules");
+    std::fs::create_dir_all(&rules_dir)
+        .with_context(|| format!("create {}", rules_dir.display()))?;
+    let path = rules_dir.join("imc-terse.md");
+    std::fs::write(&path, imc_terse_md().to_string()).with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
 /// Ensure an entry exists in `.git/info/exclude` without duplicating lines.
 pub fn ensure_git_exclude(project_root: &Path, pattern: &str) -> Result<()> {
     let git_path = project_root.join(".git");
@@ -527,6 +562,8 @@ pub fn setup_and_start(
     log.push(format!("wrote {}", settings.display()));
     let rule = write_imc_rule(root)?;
     log.push(format!("wrote {}", rule.display()));
+    let terse = write_imc_terse(root)?;
+    log.push(format!("wrote {}", terse.display()));
     // An older setup wrote a block into CLAUDE.md. That block is a stale
     // second copy of the rule; leaving it there means the agent reads the
     // old instructions.
@@ -596,6 +633,7 @@ pub fn run_claude_bin(cfg: &Config, root: &Path, args: &[String]) -> Result<()> 
     // too — wiring is cheap, and a stale rule is worse than a fresh one.
     let _ = write_claude_settings(root, 35711)?;
     let _ = write_imc_rule(root)?;
+    let _ = write_imc_terse(root)?;
     let _ = remove_legacy_claude_md_block(root)?;
 
     let exe = which_claude_bin()?;

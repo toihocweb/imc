@@ -594,3 +594,18 @@ fn the_legacy_claude_md_block_is_removed() {
     assert_eq!(std::fs::read_to_string(&md).unwrap(), "# Untouched\n");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn the_terse_rule_contains_protocol_and_writes_to_disk() {
+    let terse = imc_cli::claude::imc_terse_md();
+    assert!(terse.contains("Ultra-terse communication protocol"));
+    assert!(terse.contains("Follow instructions and guidance strictly without deviation"));
+
+    let root = temp_root("terse_rule");
+    let path = imc_cli::claude::write_imc_terse(&root).unwrap();
+    assert!(path.is_file());
+    assert_eq!(path.file_name().unwrap(), "imc-terse.md");
+    let content = fs::read_to_string(&path).unwrap();
+    assert_eq!(content, terse);
+    let _ = fs::remove_dir_all(&root);
+}
