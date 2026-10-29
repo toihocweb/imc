@@ -66,24 +66,60 @@ fn normalize_system_keeps_existing_blocks() {
 
 #[test]
 fn inject_terse_directive_appends_block_once() {
-    let mut p = payload(vec![]);
+    let mut p = payload(vec![user_message("fix the bug")]);
     p.system = Some(StringOrBlocks::Blocks(vec![
         AnthropicTextBlock { r#type: "text".into(), text: "You are Claude Code".into(), cache_control: None },
     ]));
     inject_terse_directive(&mut p);
-    let Some(StringOrBlocks::Blocks(v)) = &p.system else {
-        panic!("expected blocks");
+
+    // p.system remains untouched
+    let Some(StringOrBlocks::Blocks(sys)) = &p.system else {
+        panic!("expected system blocks");
     };
-    assert_eq!(v.len(), 2);
-    assert!(v[1].text.contains("<response-style>"));
-    assert!(v[1].text.contains("Ultra-terse communication protocol"));
+    assert_eq!(sys.len(), 1);
+    assert!(!sys[0].text.contains("<response-type>"));
+
+    // p.messages[0] receives the directive
+    let AnthropicInputMessage::User(um) = &p.messages[0] else {
+        panic!("expected user message");
+    };
+    let StringOrBlocks::Blocks(blocks) = &um.content else {
+        panic!("expected blocks in user message");
+    };
+    assert_eq!(blocks.len(), 2);
+    let AnthropicUserContentBlock::Text(t) = &blocks[1] else {
+        panic!("expected text block");
+    };
+    assert!(t.text.contains("<response-type>"));
+    assert!(t.text.contains("Ultra-terse communication protocol"));
 
     // Running again does not duplicate the directive
     inject_terse_directive(&mut p);
-    let Some(StringOrBlocks::Blocks(v2)) = &p.system else {
+    let AnthropicInputMessage::User(um2) = &p.messages[0] else {
+        panic!("expected user message");
+    };
+    let StringOrBlocks::Blocks(blocks2) = &um2.content else {
         panic!("expected blocks");
     };
-    assert_eq!(v2.len(), 2);
+    assert_eq!(blocks2.len(), 2);
+}
+
+#[test]
+fn inject_terse_directive_handles_empty_messages() {
+    let mut p = payload(vec![]);
+    inject_terse_directive(&mut p);
+    assert_eq!(p.messages.len(), 1);
+    let AnthropicInputMessage::User(um) = &p.messages[0] else {
+        panic!("expected user message");
+    };
+    let StringOrBlocks::Blocks(blocks) = &um.content else {
+        panic!("expected blocks");
+    };
+    assert_eq!(blocks.len(), 1);
+    let AnthropicUserContentBlock::Text(t) = &blocks[0] else {
+        panic!("expected text block");
+    };
+    assert!(t.text.contains("<response-type>"));
 }
 
 // ── system_reminder assembly across the whole request ────────────────────────

@@ -38,8 +38,8 @@ use imc_proxy_types::atomic_file::write_file_atomically;
 use imc_proxy_types::logger::create_handler_logger;
 use imc_proxy_types::model_mapping::{apply_model_mapping, get_mapped_provider};
 use imc_proxy_types::types::anthropic::{
-    AnthropicMessagesPayload, AnthropicTextBlock, AnthropicToolEntry,
-    StringOrBlocks,
+    AnthropicInputMessage, AnthropicMessagesPayload, AnthropicTextBlock, AnthropicToolEntry,
+    AnthropicUserContentBlock, AnthropicUserMessage, StringOrBlocks,
 };
 use imc_proxy_types::types::chat_completions::ChatCompletionChunk;
 use imc_proxy_types::usage_logger::log_usage;
@@ -235,7 +235,7 @@ pub fn normalize_system(payload: &mut AnthropicMessagesPayload) {
 }
 
 pub const TERSE_RESPONSE_DIRECTIVE: &str = "\
-<response-style>
+<response-type>
 Ultra-terse communication protocol:
 1. Answer first. Pattern: [thing] [action] [reason]. [next step].
 2. Kill ceremony. No greeting, hedging, pleasantries, recap, or closer. No \"Sure!\", \"I'd be happy to\", \"Let me\", \"Hope this helps\", \"basically\", \"actually\".
@@ -247,47 +247,108 @@ Ultra-terse communication protocol:
 8. Never perform terse: no \"terse mode on\", no \"me think\", no decorative tables or emoji.
 9. Clarification Gate: Never edit/write files on ambiguous asks. Investigate with imc first, state technical understanding, ask 1-3 targeted questions, wait for confirmation.
 10. IMC tool priority: Always prefer `imc search --raw`, `imc trace --callers`, `imc read --skeleton`, `imc pack` over blind Read/Grep.
-</response-style>";
+</response-type>";
 
-/// Injects the terse response directive into payload.system as a distinct block.
-/// Placing it at the end of system blocks guarantees it sits right above messages,
-/// and receives an ephemeral cache breakpoint via `apply_system_cache_control`.
-pub fn inject_terse_directive(payload: &mut AnthropicMessagesPayload) {
-    let has_directive = match &payload.system {
-        Some(StringOrBlocks::Text(s)) => s.contains("<response-style>"),
-        Some(StringOrBlocks::Blocks(blocks)) => blocks.iter().any(|b| b.text.contains("<response-style>")),
-        None => false,
+/// Appends the terse response directive to a user message, migrating cache_control onto it.
+pub fn attach_terse_directive_to_message(msg: &mut AnthropicInputMessage) -> bool {
+    let AnthropicInputMessage::User(um) = msg else {
+        return false;
     };
-    if has_directive {
+
+    let has_marker = match &um.content {
+        StringOrBlocks::Text(s) => s.contains("<response-type>") || s.contains("<response-style>"),
+        StringOrBlocks::Blocks(blocks) => blocks.iter().any(|b| {
+            matches!(b, AnthropicUserContentBlock::Text(t) if t.text.contains("<response-type>") || t.text.contains("<response-style>"))
+        }),
+    };
+    if has_marker {
+        return false;
+    }
+
+    let mut had_cache_control = false;
+    if let StringOrBlocks::Blocks(blocks) = &mut um.content {
+        for b in blocks.iter_mut() {
+            match b {
+                AnthropicUserContentBlock::Text(t) => {
+                    if t.cache_control.take().is_some() {
+                        had_cache_control = true;
+                    }
+                }
+                AnthropicUserContentBlock::ToolResult(tr) => {
+                    if tr.cache_control.take().is_some() {
+                        had_cache_control = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let cache_control = had_cache_control.then(|| {
+        imc_proxy_types::types::anthropic::AnthropicCacheControl {
+            r#type: "ephemeral".to_string(),
+            ..Default::default()
+        }
+    });
+
+    let new_block = AnthropicUserContentBlock::Text(AnthropicTextBlock {
+        r#type: "text".to_string(),
+        text: TERSE_RESPONSE_DIRECTIVE.to_string(),
+        cache_control,
+    });
+
+    match &mut um.content {
+        StringOrBlocks::Blocks(blocks) => blocks.push(new_block),
+        StringOrBlocks::Text(existing) => {
+            let taken = std::mem::take(existing);
+            um.content = StringOrBlocks::Blocks(vec![
+                AnthropicUserContentBlock::Text(AnthropicTextBlock {
+                    r#type: "text".to_string(),
+                    text: taken,
+                    cache_control: None,
+                }),
+                new_block,
+            ]);
+        }
+    }
+    true
+}
+
+/// Injects the terse response directive into the target user message as a distinct block.
+/// Placing it in the last genuine user message provides strong adherence from models,
+/// and receives an ephemeral cache breakpoint via cache_control migration.
+pub fn inject_terse_directive(payload: &mut AnthropicMessagesPayload) {
+    let already_present = payload.messages.iter().any(|msg| match msg {
+        AnthropicInputMessage::User(um) => match &um.content {
+            StringOrBlocks::Text(s) => s.contains("<response-type>") || s.contains("<response-style>"),
+            StringOrBlocks::Blocks(blocks) => blocks.iter().any(|b| {
+                matches!(b, AnthropicUserContentBlock::Text(t) if t.text.contains("<response-type>") || t.text.contains("<response-style>"))
+            }),
+        },
+        _ => false,
+    });
+    if already_present {
         return;
     }
-    match &mut payload.system {
-        Some(StringOrBlocks::Blocks(blocks)) => {
-            blocks.push(AnthropicTextBlock {
-                r#type: "text".to_string(),
-                text: TERSE_RESPONSE_DIRECTIVE.to_string(),
-                cache_control: None,
-            });
-        }
-        Some(StringOrBlocks::Text(s)) => {
-            let mut blocks = vec![AnthropicTextBlock {
-                r#type: "text".to_string(),
-                text: std::mem::take(s),
-                cache_control: None,
-            }];
-            blocks.push(AnthropicTextBlock {
-                r#type: "text".to_string(),
-                text: TERSE_RESPONSE_DIRECTIVE.to_string(),
-                cache_control: None,
-            });
-            payload.system = Some(StringOrBlocks::Blocks(blocks));
+
+    let target_idx = memory::find_last_genuine_user_index(&payload.messages)
+        .or_else(|| memory::find_user_query_message_index(&payload.messages));
+
+    match target_idx {
+        Some(idx) => {
+            attach_terse_directive_to_message(&mut payload.messages[idx]);
         }
         None => {
-            payload.system = Some(StringOrBlocks::Blocks(vec![AnthropicTextBlock {
-                r#type: "text".to_string(),
-                text: TERSE_RESPONSE_DIRECTIVE.to_string(),
-                cache_control: None,
-            }]));
+            payload.messages.push(AnthropicInputMessage::User(AnthropicUserMessage {
+                role: "user".to_string(),
+                content: StringOrBlocks::Blocks(vec![AnthropicUserContentBlock::Text(
+                    AnthropicTextBlock {
+                        r#type: "text".to_string(),
+                        text: TERSE_RESPONSE_DIRECTIVE.to_string(),
+                        cache_control: None,
+                    },
+                )]),
+            }));
         }
     }
 }

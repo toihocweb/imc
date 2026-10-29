@@ -22,6 +22,7 @@ import {
   Sparkles,
   BarChart,
   Trash2,
+  RotateCw,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -46,13 +47,17 @@ export default function Home() {
   const [selectedModel, setSelectedModel] = useState<string>("all");
   const [usagePage, setUsagePage] = useState(1);
   const [usagePageSize, setUsagePageSize] = useState(10);
+  const [refreshingUsage, setRefreshingUsage] = useState(false);
 
   const refreshUsage = async () => {
+    setRefreshingUsage(true);
     try {
       const res = await fetch("/api/usage");
       const data = await res.json();
       if (data && !data.error) setUsage(data);
-    } catch {}
+    } catch {} finally {
+      setRefreshingUsage(false);
+    }
   };
 
   const handleClearUsage = async () => {
@@ -295,16 +300,29 @@ export default function Home() {
               Total prompt tokens, generation tokens, and prompt cache hit rate tracked in IMC root.
             </p>
           </div>
-          {usage && usage.total_requests > 0 && (
+          <div className="flex items-center gap-2 self-start sm:self-auto">
             <Button
               variant="outline"
               size="sm"
-              onClick={handleClearUsage}
-              className="h-8 px-3 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 self-start sm:self-auto cursor-pointer"
+              onClick={refreshUsage}
+              disabled={refreshingUsage}
+              className="h-8 px-2.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+              title="Refresh token usage"
             >
-              <Trash2 className="h-3.5 w-3.5 mr-1" /> Clear Usage Log
+              <RotateCw className={`h-3.5 w-3.5 mr-1.5 ${refreshingUsage ? "animate-spin" : ""}`} />
+              Refresh
             </Button>
-          )}
+            {usage && usage.total_requests > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleClearUsage}
+                className="h-8 px-3 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1" /> Clear Usage Log
+              </Button>
+            )}
+          </div>
         </div>
 
         {/* Usage KPI Grid */}
@@ -377,7 +395,18 @@ export default function Home() {
             <Card className="border-border/80 shadow-xs overflow-hidden">
               <CardHeader className="py-3 px-5 border-b border-border/60 bg-muted/20">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <CardTitle className="text-sm font-semibold">Recent Requests & Breakdown</CardTitle>
+                  <div className="flex items-center gap-2">
+                    <CardTitle className="text-sm font-semibold">Recent Requests & Breakdown</CardTitle>
+                    <button
+                      type="button"
+                      onClick={refreshUsage}
+                      disabled={refreshingUsage}
+                      className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors cursor-pointer"
+                      title="Refresh records"
+                    >
+                      <RotateCw className={`h-3.5 w-3.5 ${refreshingUsage ? "animate-spin" : ""}`} />
+                    </button>
+                  </div>
                   <span className="text-xs font-normal font-mono text-muted-foreground">
                     {filteredRecords.length} of {usage.records.length} records
                   </span>
