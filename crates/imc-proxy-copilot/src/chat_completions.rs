@@ -51,19 +51,56 @@ pub async fn ensure_copilot_token<P: CopilotTokenProvider + ?Sized>(provider: &P
 
 /// Port of `_sanitize_message_content`.
 ///
-/// Guards against `content: null` on messages that are not assistant
-/// tool-call turns. OpenAI/Copilot only accept null content when an assistant
-/// message carries `tool_calls`; otherwise it returns 400 "expected a string,
-/// got null".
+/// Guards against:
+/// 1. `content: null` on messages that are not assistant tool-call turns.
+/// 2. Missing `name` on `role: "tool"` messages, which Google Gemini's protobuf
+///    `FunctionResponse` strictly requires (`REQUIRED_FIELD_MISSING`).
 pub fn sanitize_message_content(body: &mut Value) {
     let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
         return;
     };
 
+    // 1. Collect tool names from assistant tool_calls
+    let mut tool_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for msg in messages.iter() {
+        if let Some(tool_calls) = msg.get("tool_calls").and_then(Value::as_array) {
+            for tc in tool_calls {
+                if let (Some(id), Some(name)) = (
+                    tc.get("id").and_then(Value::as_str),
+                    tc.get("function").and_then(|f| f.get("name")).and_then(Value::as_str),
+                ) {
+                    if !id.is_empty() && !name.is_empty() {
+                        tool_names.insert(id.to_string(), name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
     for msg in messages.iter_mut() {
         let Some(obj) = msg.as_object_mut() else {
             continue;
         };
+
+        // Ensure tool messages have the required 'name' field for Gemini and other backends
+        if obj.get("role").and_then(Value::as_str) == Some("tool") {
+            let has_name = obj.get("name").and_then(Value::as_str).map_or(false, |s| !s.is_empty());
+            if !has_name {
+                let tool_call_id = obj.get("tool_call_id").and_then(Value::as_str).unwrap_or("");
+                let name = tool_names
+                    .get(tool_call_id)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        if !tool_call_id.is_empty() {
+                            tool_call_id.to_string()
+                        } else {
+                            "unknown_function".to_string()
+                        }
+                    });
+                obj.insert("name".to_string(), Value::String(name));
+            }
+        }
+
         if !obj.get("content").map(Value::is_null).unwrap_or(false) {
             continue;
         }
@@ -141,4 +178,42 @@ pub const INITIATOR_USER: &str = "user";
 /// The placeholder written when Python's `content is None` reached the body.
 pub fn empty_content_placeholder() -> &'static str {
     DEFAULT_EMPTY_CONTENT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn sanitize_message_content_populates_missing_tool_name_from_assistant_tool_calls() {
+        let mut body = json!({
+            "messages": [
+                {"role": "user", "content": "run ls"},
+                {"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "call_123", "type": "function", "function": {"name": "Bash", "arguments": "{\"command\":\"ls\"}"}}
+                ]},
+                {"role": "tool", "tool_call_id": "call_123", "content": "file1.txt"}
+            ]
+        });
+
+        sanitize_message_content(&mut body);
+
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs[2]["name"], "Bash");
+    }
+
+    #[test]
+    fn sanitize_message_content_falls_back_when_id_unknown() {
+        let mut body = json!({
+            "messages": [
+                {"role": "tool", "tool_call_id": "call_unknown", "content": "result"}
+            ]
+        });
+
+        sanitize_message_content(&mut body);
+
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["name"], "call_unknown");
+    }
 }

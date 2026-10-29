@@ -90,8 +90,11 @@ pub async fn proxy_chat_completions(
                     }
                     let mut hp_payload = payload.clone();
                     hp_payload.model = crate::hyperspace::resolve_hyperspace_model(&hp_payload.model);
-                    if let Ok(resp) = req.json(&hp_payload).send().await {
-                        return relay(resp, model, wants_stream, "/v1/chat/completions").await;
+                    if let Ok(mut body) = serde_json::to_value(&hp_payload) {
+                        imc_proxy_copilot::chat_completions::sanitize_message_content(&mut body);
+                        if let Ok(resp) = req.json(&body).send().await {
+                            return relay(resp, model, wants_stream, "/v1/chat/completions").await;
+                        }
                     }
                 }
             }

@@ -470,8 +470,8 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
         || model_lower.contains("gpt-6.1")
         || model_lower.contains("gpt-6-");
 
-    if (requires_responses && has_tools) || (decision.responses && has_tools) {
-        log.info(&format!("[Proxy] Model {model} using Responses API (/responses) for tool execution"));
+    if requires_responses || (decision.responses && has_tools) {
+        log.info(&format!("[Proxy] Model {model} using Responses API (/responses)"));
         return responses_response(payload, injection).await;
     }
 
