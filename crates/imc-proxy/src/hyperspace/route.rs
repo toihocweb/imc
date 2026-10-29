@@ -58,7 +58,12 @@ pub fn register_hyperspace_models(model_ids: &[String]) {
 /// Port of `is_hyperspace_model`.
 pub fn is_hyperspace_model(model_id: &str) -> bool {
     let lower = model_id.to_lowercase();
-    if lower.contains("gemini") {
+    if lower.contains("gemini")
+        || lower.contains("sol")
+        || lower.contains("astra")
+        || lower.contains("terra")
+        || lower.contains("luna")
+    {
         return true;
     }
     let suffix = format!("/{lower}");

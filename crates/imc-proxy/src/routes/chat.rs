@@ -107,7 +107,10 @@ pub async fn proxy_chat_completions(
 
 /// Routes served by this module.
 pub fn router() -> Router {
-    Router::new().route("/v1/chat/completions", post(proxy_chat_completions))
+    Router::new()
+        .route("/v1/chat/completions", post(proxy_chat_completions))
+        .route("/v1/v1/chat/completions", post(proxy_chat_completions))
+        .route("/chat/completions", post(proxy_chat_completions))
 }
 
 #[cfg(test)]

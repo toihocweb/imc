@@ -186,10 +186,16 @@ pub fn decide_route(
         }
     }
 
-    let is_gemini = mapped_model.to_lowercase().contains("gemini");
+    let m_lower = mapped_model.to_lowercase();
+    let is_gemini = m_lower.contains("gemini");
+    let is_frontier_reasoning = m_lower.contains("sol")
+        || m_lower.contains("astra")
+        || m_lower.contains("terra")
+        || m_lower.contains("luna");
+
     let hyperspace = explicit_provider == Some("hyperspace")
         || (explicit_provider != Some("copilot")
-            && (is_hyperspace || is_gemini || mapped_model.starts_with("anthropic--")));
+            && (is_hyperspace || is_gemini || is_frontier_reasoning || mapped_model.starts_with("anthropic--")));
     if hyperspace {
         return RouteDecision {
             target: RouteTarget::Hyperspace,

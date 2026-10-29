@@ -472,7 +472,7 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
 
     if requires_responses || (decision.responses && has_tools) {
         log.info(&format!("[Proxy] Model {model} using Responses API (/responses)"));
-        return responses_response(payload, injection).await;
+        return responses_response(payload, injection, decision.hyperspace).await;
     }
 
     let target = match decision.target {
@@ -525,7 +525,7 @@ pub async fn proxy_messages(State(_state): State<()>, headers: HeaderMap, body: 
         }
 
         RouteTarget::CopilotResponses => {
-            return responses_response(payload, injection).await;
+            return responses_response(payload, injection, decision.hyperspace).await;
         }
 
         RouteTarget::CopilotMessages => {
@@ -755,6 +755,7 @@ pub fn chat_completions_to_anthropic(data: &Value, model: &str) -> Value {
 async fn responses_response(
     payload: AnthropicMessagesPayload,
     injection: InjectionOutcome,
+    is_hyperspace_target: bool,
 ) -> Response {
     let log = create_handler_logger("main");
     let model = payload.model.clone();
@@ -762,10 +763,15 @@ async fn responses_response(
     let responses_payload = translate_to_responses(&payload);
 
     let copilot_ok = crate::github::is_copilot_configured();
-    let is_hyperspace = crate::hyperspace::is_hyperspace_model(&model);
+    let is_hyperspace = is_hyperspace_target || crate::hyperspace::is_hyperspace_model(&model);
     let hyperspace_available = !crate::hyperspace::load_hyperspace_config().base_url.is_empty();
 
-    let upstream = if !is_hyperspace && copilot_ok {
+    let upstream = if is_hyperspace && hyperspace_available {
+        match crate::hyperspace::call_hyperspace_responses(&responses_payload).await {
+            Ok(r) => r,
+            Err(e) => return error_response(502, &format!("Hyperspace responses failed: {e:#}")),
+        }
+    } else if !is_hyperspace && copilot_ok {
         match create_responses(&token_provider(), &responses_payload).await {
             Ok(r) => r,
             Err(e) => {
@@ -1038,7 +1044,10 @@ fn log_answer(log: &imc_proxy_types::logger::Logger, injection: &InjectionOutcom
 
 /// Routes served by this module.
 pub fn router() -> Router {
-    Router::new().route("/v1/messages", post(proxy_messages))
+    Router::new()
+        .route("/v1/messages", post(proxy_messages))
+        .route("/v1/v1/messages", post(proxy_messages))
+        .route("/messages", post(proxy_messages))
 }
 
 #[cfg(test)]

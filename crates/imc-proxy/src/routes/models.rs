@@ -29,6 +29,9 @@ fn hyperspace_model_data() -> &'static Mutex<Vec<Value>> {
 
 /// Port of `services/copilot/get_models.py`.
 pub async fn get_models() -> Result<Value, String> {
+    if let Some(cached) = models_cache().lock().ok().and_then(|c| c.clone()) {
+        return Ok(cached);
+    }
     if !crate::github::is_copilot_configured() {
         return Ok(json!({"data": []}));
     }
@@ -55,27 +58,97 @@ pub async fn get_models() -> Result<Value, String> {
             .error(&format!("Failed to fetch models: {status} - {text}"));
         return Ok(json!({"data": []}));
     }
-    serde_json::from_str(&text).map_err(|e| e.to_string())
+    let val: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    if let Ok(mut c) = models_cache().lock() {
+        *c = Some(val.clone());
+    }
+    Ok(val)
 }
 
-/// Port of `fetch_models` — cached list of supported Copilot models.
+/// Port of `fetch_models` — list of supported models across Copilot, Hyperspace, and virtual aliases.
 pub async fn fetch_models() -> axum::response::Response {
-    if let Some(cached) = models_cache().lock().ok().and_then(|c| c.clone()) {
-        return json_response(&cached);
+    let mut models_list: Vec<Value> = Vec::new();
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // 1. Virtual client aliases & standard models
+    let standard_models = [
+        "claude-pro-max",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-7-sonnet",
+        "claude-sonnet-4",
+        "claude-opus-4",
+        "claude-haiku-4.5",
+        "claude-pro-max-opus[1m]",
+        "gpt-4o",
+        "gpt-4.1",
+        "gpt-5",
+        "gpt-6.1-sol",
+        "gemini-3.8-flash",
+    ];
+    for id in standard_models {
+        if seen_ids.insert(id.to_string()) {
+            models_list.push(json!({
+                "id": id,
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "anthropic"
+            }));
+        }
     }
-    match get_models().await {
-        Ok(value) => {
-            if let Ok(mut c) = models_cache().lock() {
-                *c = Some(value.clone());
+
+    // 2. Mapped models from config
+    let config = imc_proxy_types::get_config();
+    if let Some(mappings) = config.model_mappings {
+        for (k, v) in mappings {
+            if seen_ids.insert(k.clone()) {
+                models_list.push(json!({
+                    "id": k,
+                    "object": "model",
+                    "created": 1700000000,
+                    "owned_by": "imc"
+                }));
             }
-            json_response(&value)
-        }
-        Err(e) => {
-            create_handler_logger("main")
-                .warning(&format!("[Models] Failed to fetch Copilot models: {e}"));
-            json_response(&json!({"object": "list", "data": [], "error": e}))
+            let target = v.split_once(':').map(|(_, r)| r).unwrap_or(&v);
+            if seen_ids.insert(target.to_string()) {
+                models_list.push(json!({
+                    "id": target,
+                    "object": "model",
+                    "created": 1700000000,
+                    "owned_by": "imc"
+                }));
+            }
         }
     }
+
+    // 3. Registered Hyperspace models
+    for m in registered_models() {
+        if seen_ids.insert(m.clone()) {
+            models_list.push(json!({
+                "id": m,
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "hyperspace"
+            }));
+        }
+    }
+
+    // 4. Copilot models if available
+    if let Ok(copilot_val) = get_models().await {
+        if let Some(arr) = copilot_val.get("data").and_then(Value::as_array) {
+            for m in arr {
+                if let Some(id) = m.get("id").and_then(Value::as_str) {
+                    if seen_ids.insert(id.to_string()) {
+                        models_list.push(m.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    json_response(&json!({
+        "object": "list",
+        "data": models_list
+    }))
 }
 
 /// Port of `fetch_hyperspace_models` — cached, and registers the ids for routing.
@@ -107,6 +180,8 @@ pub async fn hyperspace_model_ids() -> axum::response::Response {
 pub fn router() -> Router {
     Router::new()
         .route("/v1/models", get(fetch_models))
+        .route("/v1/v1/models", get(fetch_models))
+        .route("/models", get(fetch_models))
         .route("/v1/hyperspace-models", get(fetch_hyperspace_models_route))
 }
 
