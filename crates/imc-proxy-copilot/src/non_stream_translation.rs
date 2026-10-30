@@ -22,9 +22,9 @@ use std::collections::BTreeMap;
 
 use imc_proxy_types::types::anthropic::{
     AnthropicAssistantContentBlock, AnthropicAssistantMessage, AnthropicInputMessage,
-    AnthropicMessagesPayload, AnthropicTextBlock, AnthropicToolChoice, AnthropicToolEntry,
-    AnthropicToolResultContentBlock, AnthropicUserContentBlock, AnthropicUserMessage,
-    StringOrBlocks,
+    AnthropicMessagesPayload, AnthropicSystemMessage, AnthropicTextBlock, AnthropicToolChoice,
+    AnthropicToolEntry, AnthropicToolResultContentBlock, AnthropicUserContentBlock,
+    AnthropicUserMessage, StringOrBlocks,
 };
 use imc_proxy_types::types::chat_completions::{
     ChatCompletionsPayload, ContentPart, ImagePart, ImageUrl, Message, StringOrList, TextPart,
@@ -602,6 +602,28 @@ pub fn translate_tool_choice(tool_choice: Option<&AnthropicToolChoice>) -> Optio
     }
 }
 
+pub fn handle_system_message(message: &AnthropicSystemMessage) -> Vec<Message> {
+    match &message.content {
+        StringOrBlocks::Text(s) => vec![Message {
+            role: "system".to_string(),
+            content: Some(StringOrBlocks::Text(s.clone())),
+            ..Message::default()
+        }],
+        StringOrBlocks::Blocks(blocks) => {
+            let text = blocks
+                .iter()
+                .map(|b| b.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            vec![Message {
+                role: "system".to_string(),
+                content: Some(StringOrBlocks::Text(text)),
+                ..Message::default()
+            }]
+        }
+    }
+}
+
 /// Port of `translate_to_openai` — an Anthropic Messages request translated
 /// into a Chat Completions request body.
 pub fn translate_to_openai(payload: &AnthropicMessagesPayload) -> ChatCompletionsPayload {
@@ -616,6 +638,9 @@ pub fn translate_to_openai(payload: &AnthropicMessagesPayload) -> ChatCompletion
             }
             AnthropicInputMessage::Assistant(m) if m.role == "assistant" => {
                 messages.extend(handle_assistant_message(m));
+            }
+            AnthropicInputMessage::System(m) => {
+                messages.extend(handle_system_message(m));
             }
             _ => {}
         }

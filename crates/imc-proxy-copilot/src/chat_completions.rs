@@ -118,6 +118,55 @@ pub fn sanitize_message_content(body: &mut Value) {
             Value::String(DEFAULT_EMPTY_CONTENT.to_string()),
         );
     }
+
+    // 2. Normalize message ordering and tail:
+    // Google Gemini (and OpenAI backends) reject requests ending with a model/assistant turn:
+    // "Requests ending with a model turn are not supported."
+    // - Separate system messages to the beginning.
+    // - Ensure conversation does not end on an assistant turn (pop empty, append user 'Continue' if non-empty).
+    let mut system_msgs: Vec<Value> = Vec::new();
+    let mut conv_msgs: Vec<Value> = Vec::new();
+    for msg in messages.drain(..) {
+        if msg.get("role").and_then(Value::as_str) == Some("system") {
+            system_msgs.push(msg);
+        } else {
+            conv_msgs.push(msg);
+        }
+    }
+
+    while let Some(last) = conv_msgs.last() {
+        let role = last.get("role").and_then(Value::as_str).unwrap_or("");
+        if role == "assistant" {
+            let has_tools = last
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .map_or(false, |t| !t.is_empty());
+            let content_str = last
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let is_placeholder_or_empty = content_str.is_empty()
+                || content_str == DEFAULT_EMPTY_CONTENT
+                || content_str == "thinking...";
+
+            if !has_tools && is_placeholder_or_empty {
+                conv_msgs.pop();
+                continue;
+            } else {
+                conv_msgs.push(serde_json::json!({
+                    "role": "user",
+                    "content": "Continue"
+                }));
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    messages.extend(system_msgs);
+    messages.extend(conv_msgs);
 }
 
 /// Port of `chat_completions` — build the body exactly as
@@ -215,5 +264,46 @@ mod tests {
 
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs[0]["name"], "call_unknown");
+    }
+
+    #[test]
+    fn sanitize_message_content_prevents_ending_with_assistant_turn() {
+        // Subcase 1: Non-empty assistant turn gets 'Continue' appended
+        let mut body = json!({
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "I am an assistant"}
+            ]
+        });
+        sanitize_message_content(&mut body);
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[2]["role"], "user");
+        assert_eq!(msgs[2]["content"], "Continue");
+
+        // Subcase 2: Empty assistant turn is removed
+        let mut body2 = json!({
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": ""}
+            ]
+        });
+        sanitize_message_content(&mut body2);
+        let msgs2 = body2["messages"].as_array().unwrap();
+        assert_eq!(msgs2.len(), 1);
+        assert_eq!(msgs2[0]["role"], "user");
+
+        // Subcase 3: Trailing system message is moved to front and assistant is followed by user
+        let mut body3 = json!({
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
+                {"role": "system", "content": "environment info"}
+            ]
+        });
+        sanitize_message_content(&mut body3);
+        let msgs3 = body3["messages"].as_array().unwrap();
+        assert_eq!(msgs3[0]["role"], "system");
+        assert_eq!(msgs3.last().unwrap()["role"], "user");
     }
 }
