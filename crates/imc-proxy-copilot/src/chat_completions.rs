@@ -165,6 +165,28 @@ pub fn sanitize_message_content(body: &mut Value) {
         }
     }
 
+    if conv_msgs.is_empty() {
+        conv_msgs.push(serde_json::json!({
+            "role": "user",
+            "content": "Continue"
+        }));
+    } else if let Some(last) = conv_msgs.last_mut() {
+        if last.get("role").and_then(Value::as_str) == Some("user") {
+            let empty = match last.get("content") {
+                None => true,
+                Some(Value::Null) => true,
+                Some(Value::String(s)) => s.trim().is_empty(),
+                Some(Value::Array(a)) => a.is_empty(),
+                _ => false,
+            };
+            if empty {
+                if let Some(o) = last.as_object_mut() {
+                    o.insert("content".to_string(), Value::String("Continue".to_string()));
+                }
+            }
+        }
+    }
+
     messages.extend(system_msgs);
     messages.extend(conv_msgs);
 }
@@ -305,5 +327,15 @@ mod tests {
         let msgs3 = body3["messages"].as_array().unwrap();
         assert_eq!(msgs3[0]["role"], "system");
         assert_eq!(msgs3.last().unwrap()["role"], "user");
+
+        // Subcase 4: Empty user turn gets filled with 'Continue'
+        let mut body4 = json!({
+            "messages": [
+                {"role": "user", "content": "   "}
+            ]
+        });
+        sanitize_message_content(&mut body4);
+        let msgs4 = body4["messages"].as_array().unwrap();
+        assert_eq!(msgs4[0]["content"], "Continue");
     }
 }
