@@ -73,8 +73,7 @@ pub fn is_hyperspace_model(model_id: &str) -> bool {
 }
 
 /// Resolves a requested model name against the Hyperspace registry.
-/// Supports bare model names (e.g. "gemini-3.8-flash-high" -> "cuzem3/gemini-3.8-flash-high")
-/// or aliases (e.g. "gemini", "gemini-flash" -> "gemini-3.8-flash").
+/// Supports bare model names or aliases (e.g. "gemini", "gemini-flash" -> "gemini-3.8-flash").
 pub fn resolve_hyperspace_model(model: &str) -> String {
     let reg = model_registry().read().ok();
     let Some(reg) = reg else {
@@ -88,7 +87,7 @@ pub fn resolve_hyperspace_model(model: &str) -> String {
     let lower = model.to_lowercase();
     let suffix = format!("/{lower}");
 
-    // Look for exact suffix match (e.g. ".../gemini-3.8-flash-high")
+    // Look for exact suffix match
     if let Some(matched) = reg.iter().find(|m| m.to_lowercase().ends_with(&suffix)) {
         return matched.clone();
     }
@@ -253,7 +252,7 @@ mod tests {
         let before = registered_models();
         register_hyperspace_models(&[
             "gemini-3.8-flash".to_string(),
-            "cuzem3/gemini-3.8-flash-high".to_string(),
+            "google/gemini-3.8-flash-high".to_string(),
         ]);
 
         assert!(is_hyperspace_model("gemini"));
@@ -261,7 +260,7 @@ mod tests {
         assert!(is_hyperspace_model("gemini-3.8-flash-high"));
 
         assert_eq!(resolve_hyperspace_model("gemini-3.8-flash"), "gemini-3.8-flash");
-        assert_eq!(resolve_hyperspace_model("gemini-3.8-flash-high"), "cuzem3/gemini-3.8-flash-high");
+        assert_eq!(resolve_hyperspace_model("gemini-3.8-flash-high"), "google/gemini-3.8-flash-high");
         assert_eq!(resolve_hyperspace_model("gemini"), "gemini-3.8-flash");
 
         register_hyperspace_models(&before);

@@ -206,7 +206,7 @@ trace "GET /api/nope"      rc=1, "Symbol ... not found"
   `~/.indexer_config.yaml`, which does not exist here, so its vector table is
   uninitialised. "Python says No results found" is therefore not evidence about
   relevance — check `imc config path` before drawing a parity conclusion from it.
-- The LLM endpoint is configured with `base_url https://api.xah.io/v1` and
+- The LLM endpoint is configured with `base_url http://localhost:6655/litellm/v1` and
   **no** `llm.model`, so the default `gemini-3.1-flash-lite` 404s ("model is not
   available"). `claude-haiku-4.5` works. `imc search` now prints the response body
   and says which model it tried, so this is a five-second diagnosis rather than a
